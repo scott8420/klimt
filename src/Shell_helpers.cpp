@@ -1,0 +1,217 @@
+#include "Shell.hpp"
+#include "Log.hpp"
+
+#include <adwaita.h>
+#include <gtkmm/editable.h>
+#include <gtkmm/textview.h>
+#include <glibmm/main.h>
+#include "core/Composite.hpp"
+
+#include <cmath>
+
+// Shell_helpers.cpp -- HELPERS. Shared sync called from zones, bindings and
+// handlers: the demo document, greying, labels, toasts, jobs.
+
+namespace klimt {
+
+// A demo document so the panels have something to show: LOADED, not a user
+// choice, so it is not a step. Replaced by File > Open when there are pixels.
+void Shell::load_demo() {
+    namespace P = pixel;
+    core::Document::Loading load(m_doc);
+    const int W = 1200, H = 1600;
+    m_doc.set_image({W, H, P::Format{P::Depth::U8, P::Mode::RGB, true}});
+    const auto put = [this](core::Kind kind, const char* name, const std::string& parent, double pos,
+                            core::Blend blend = core::Blend::Normal, int opacity = 100,
+                            std::shared_ptr<const P::TileMap> px = nullptr) {
+        const auto id = m_doc.fresh_id();
+        core::Layer l;
+        l.kind = kind;
+        l.name = name;
+        l.parent = parent;
+        l.pos = pos;
+        l.blend = kind == core::Kind::Group ? core::Blend::PassThrough : blend;
+        l.opacity = opacity;
+        l.pixels = std::move(px);
+        m_doc.put(id, l);
+        return id;
+    };
+    // Pixels for the demo: shapes painted per pixel (a load, not a step).
+    const auto map = [this](const P::Rect& r, std::function<P::Px(int, int, const P::Px&)> f) {
+        return std::make_shared<const P::TileMap>(m_doc.blank().paint(r, std::move(f)));
+    };
+    const auto disc = [](double cx, double cy, double rx, double ry, P::Px c) {
+        return [=](int x, int y, const P::Px& old) {
+            const double dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry;
+            const double d = std::sqrt(dx * dx + dy * dy);
+            const float a = static_cast<float>(std::clamp((1.0 - d) * rx, 0.0, 1.0));   // 1 px soft edge
+            if (a <= 0) return old;
+            P::Px p = c;
+            p.c[3] = std::max(old.c[3], a);
+            return p;
+        };
+    };
+    using core::Kind;
+    const auto bg = put(Kind::Pixel, "Background", "", 1, core::Blend::Normal, 100,
+                        std::make_shared<const P::TileMap>(m_doc.blank().fill({0, 0, W, H}, P::rgba(0.13f, 0.23f, 0.23f))));
+    put(Kind::Pixel, "Vignette", "", 2, core::Blend::Multiply, 40, map({0, 0, W, H}, [=](int x, int y, const P::Px&) {
+        const double dx = (x - W / 2.0) / (W / 2.0), dy = (y - H / 2.0) / (H / 2.0);
+        const double d = std::sqrt(dx * dx + dy * dy);
+        return P::rgba(0, 0, 0, static_cast<float>(std::clamp((d - 0.55) / 0.6, 0.0, 1.0)));
+    }));
+    const auto portrait = put(Kind::Group, "Portrait", "", 3);
+    put(Kind::Pixel, "Skin", portrait, 1, core::Blend::Normal, 100,
+        map({200, 220, 800, 800}, disc(600, 620, 390, 390, P::rgba(0.79f, 0.64f, 0.26f))));
+    {
+        auto face = m_doc.blank().paint({440, 470, 320, 380}, disc(600, 660, 150, 185, P::rgba(0.09f, 0.16f, 0.15f)));
+        face = face.paint({260, 900, 680, 700}, disc(600, 1400, 330, 480, P::rgba(0.09f, 0.16f, 0.15f)));
+        put(Kind::Pixel, "Face", portrait, 2, core::Blend::Normal, 100, std::make_shared<const P::TileMap>(std::move(face)));
+    }
+    put(Kind::Pixel, "Retouch", portrait, 3, core::Blend::SoftLight, 70,
+        map({0, 300, W, 700}, [](int x, int y, const P::Px&) {
+            const double t = std::abs((x - y * 0.6) - 150.0) / 260.0;   // a soft diagonal band
+            return P::rgba(1, 0.95f, 0.85f, static_cast<float>(std::clamp(1.0 - t, 0.0, 1.0) * 0.8));
+        }));
+    put(Kind::Pixel, "Hair", portrait, 4, core::Blend::Normal, 100,
+        map({420, 440, 360, 240}, [](int x, int y, const P::Px& old) {
+            const double dx = x - 600.0, dy = y - 650.0, d = std::sqrt(dx * dx + dy * dy);
+            if (dy > -20 || d < 165 || d > 205) return old;          // an arc over the head
+            return P::rgba(0.55f, 0.40f, 0.16f, 1);
+        }));
+    put(Kind::Pixel, "Title", "", 4, core::Blend::Normal, 100,
+        map({220, 110, 760, 70}, [](int, int, const P::Px&) { return P::rgba(0.94f, 0.87f, 0.66f, 1); }));
+    auto b = *m_doc.get(bg);
+    b.locks = core::lock::All;
+    m_doc.put(bg, b);
+    m_layers.select({portrait}, false);
+}
+
+// The Layers selection moved, or the panel repainted: everything that follows
+// the selection follows it.
+void Shell::on_selection() {
+    m_properties.show(m_layers.selection());
+    update_layer_actions();
+    update_summary();
+}
+
+void Shell::update_layer_actions() {
+    const bool any = m_layers.has_selection();
+    const auto on = [this](const char* name, bool enabled) {
+        if (auto it = m_layer_acts.find(name); it != m_layer_acts.end()) it->second->set_enabled(enabled);
+    };
+    on("layer-duplicate", any);
+    on("layer-group", any);
+    on("layer-ungroup", m_layers.primary_is_group());
+    on("layer-delete", any);
+    on("layer-raise", any);
+    on("layer-lower", any);
+    on("layer-clip", any);
+    on("layer-rename", any);
+}
+
+// Undo / Redo say what they would do, and grey when there is nothing.
+void Shell::update_undo_ui() {
+    if (m_act_undo) m_act_undo->set_enabled(m_journal.can_undo());
+    if (m_act_redo) m_act_redo->set_enabled(m_journal.can_redo());
+    const std::string u = m_journal.undo_label(), r = m_journal.redo_label();
+    m_undo_button.set_tooltip_text(u.empty() ? "Nothing to undo" : "Undo " + u + "  (Ctrl+Z)");
+    m_redo_button.set_tooltip_text(r.empty() ? "Nothing to redo" : "Redo " + r + "  (Ctrl+Shift+Z)");
+    if (m_edit_menu) {
+        m_edit_menu->remove_all();
+        m_edit_menu->append(u.empty() ? "Undo" : "Undo " + u, "win.undo");
+        m_edit_menu->append(r.empty() ? "Redo" : "Redo " + r, "win.redo");
+    }
+}
+
+// The document in a line: the title's subtitle and the status line.
+void Shell::update_summary() {
+    std::size_t layers = 0, groups = 0;
+    for (const auto& id : m_doc.walk()) (m_doc.is_group(id) ? groups : layers)++;
+    std::string s = std::to_string(layers) + (layers == 1 ? " layer" : " layers");
+    if (groups) s += ", " + std::to_string(groups) + (groups == 1 ? " group" : " groups");
+    if (m_title) adw_window_title_set_subtitle(m_title, s.c_str());
+    const auto n = m_layers.selection().size();
+    const auto& im = m_doc.image();
+    const char* mode = im.format.mode == pixel::Mode::RGB ? "RGB" : im.format.mode == pixel::Mode::CMYK ? "CMYK"
+                     : im.format.mode == pixel::Mode::Lab ? "Lab" : "Gray";
+    const char* depth = im.format.depth == pixel::Depth::U8 ? "8-bit" : im.format.depth == pixel::Depth::U16 ? "16-bit"
+                      : "32-bit float";
+    m_status.set_summary(std::to_string(im.width) + " × " + std::to_string(im.height) + " px  ·  " + mode + " " +
+                         depth + "  ·  " + s + (n ? "  ·  " + std::to_string(n) + " selected" : std::string{}));
+}
+
+// A toast. With `offer_undo`, its button is Undo (the step just taken).
+void Shell::toast(const std::string& text, bool offer_undo) {
+    if (!m_toasts) return;
+    AdwToast* t = adw_toast_new(text.c_str());
+    adw_toast_set_timeout(t, offer_undo ? 4 : 2);
+    if (offer_undo) {
+        adw_toast_set_button_label(t, "Undo");
+        adw_toast_set_action_name(t, "win.undo");
+    }
+    adw_toast_overlay_add_toast(m_toasts, t);   // takes the toast
+}
+
+// ── Jobs: submit, follow, land ──────────────────────────────────────────────
+void Shell::start_job(const std::string& label, core::Jobs::Work work) {
+    m_job_ids.push_back(m_jobs.submit(label, std::move(work)));
+    if (auto lg = log::get(log::Area::Shell)) lg->info("job: {}", label);
+    if (!m_job_poll.connected())
+        m_job_poll = Glib::signal_timeout().connect(sigc::mem_fun(*this, &Shell::poll_jobs), 100);
+}
+
+void Shell::on_jobs_wake() {  // the UI thread, woken by a worker
+    const auto landed = m_jobs.pump();
+    if (landed)
+        if (auto lg = log::get(log::Area::Shell)) lg->info("jobs: {} landed", landed);
+    poll_jobs();
+}
+
+bool Shell::poll_jobs() {
+    using S = core::Jobs::State;
+    std::erase_if(m_job_ids, [this](core::Jobs::Id id) {
+        const auto st = m_jobs.state(id);
+        if (st == S::Failed) toast(m_jobs.label(id) + " failed: " + m_jobs.error(id));
+        return st == S::Landed || st == S::Cancelled || st == S::Failed;
+    });
+    if (m_job_ids.empty()) {
+        m_status.hide_job();
+        if (m_job_poll.connected()) m_job_poll.disconnect();
+        return false;
+    }
+    m_status.show_job(m_jobs.label(m_job_ids.front()), m_jobs.progress(m_job_ids.front()));
+    return true;
+}
+
+bool Shell::focus_is_text() const {
+    for (const Gtk::Widget* w = get_focus(); w; w = w->get_parent())
+        if (dynamic_cast<const Gtk::TextView*>(w) || dynamic_cast<const Gtk::Editable*>(w)) return true;
+    return false;
+}
+
+// The document changed: composite it again, on a worker, once per idle.
+// The newest render wins -- one still running is cancelled (its landing is
+// dropped). Its landing only hands the canvas a new picture: not a step.
+void Shell::queue_render() {
+    if (m_render_queued) return;
+    m_render_queued = true;
+    Glib::signal_idle().connect_once([this] {
+        m_render_queued = false;
+        if (m_render) m_jobs.cancel(m_render);
+        const core::Image im = m_doc.image();
+        if (im.width <= 0 || im.height <= 0) return;
+        auto layers = m_doc.snapshot();
+        m_render = m_jobs.submit("Composite", [this, im, layers = std::move(layers)](core::Jobs::Token& t)
+                                                   -> core::Jobs::Landing {
+            auto out = std::make_shared<std::vector<std::uint32_t>>();
+            if (!core::composite_argb(im, layers, *out, [&] { return t.cancelled(); },
+                                      [&](double p) { t.progress(p); }))
+                return [] {};
+            return [this, im, out = std::shared_ptr<const std::vector<std::uint32_t>>(out)] {
+                m_canvas.set_image(im.width, im.height, out);
+            };
+        });
+    });
+}
+
+}  // namespace klimt

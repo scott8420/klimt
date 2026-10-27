@@ -1,0 +1,47 @@
+#include "core/Tools.hpp"
+
+namespace klimt::core {
+
+const std::vector<ToolSpec>& tools() {
+    static const std::vector<ToolSpec> t = {
+        {"move",       "Move",        "klimt-tool-move-symbolic",       'v', 0, {},
+         "Drag a layer's pixels; arrows nudge."},
+        {"select",     "Select",      "klimt-tool-select-symbolic",     'm', 0,
+         {"Rectangle", "Ellipse", "Lasso", "Wand", "Colour Range"},
+         "Select Subject and Refine Edge work on pixels."},
+        {"crop",       "Crop",        "klimt-tool-crop-symbolic",       'c', 0, {"Crop", "Straighten"},
+         "Crop and straighten the canvas."},
+        {"heal",       "Heal",        "klimt-tool-heal-symbolic",       'j', 1, {"Spot", "Healing", "Patch"},
+         "Paint over a blemish; Patch fills a selection."},
+        {"clone",      "Clone Stamp", "klimt-tool-clone-symbolic",      's', 1, {},
+         "Ctrl-click the source, then paint."},
+        {"brush",      "Brush",       "klimt-tool-brush-symbolic",      'b', 2, {},
+         "A modest brush -- painting is Krita's."},
+        {"eraser",     "Eraser",      "klimt-tool-eraser-symbolic",     'e', 2, {},
+         "Erase to transparency (or to the background colour)."},
+        {"gradient",   "Gradient",    "klimt-tool-gradient-symbolic",   'g', 2, {"Linear", "Radial"},
+         "Drag to lay a gradient."},
+        {"text",       "Text",        "klimt-tool-text-symbolic",       't', 2, {},
+         "A live text layer -- rasterize is your choice."},
+        {"eyedropper", "Eyedropper",  "klimt-tool-eyedropper-symbolic", 'i', 2, {"Point", "3 x 3", "5 x 5"},
+         "Click to pick the foreground colour."},
+        {"hand",       "Hand",        "klimt-tool-hand-symbolic",       'h', 3, {},
+         "Drag to pan the view."},
+        {"zoom",       "Zoom",        "klimt-tool-zoom-symbolic",       'z', 3, {"In", "Out"},
+         "Click to zoom; Alt-click zooms out."},
+    };
+    return t;
+}
+
+const ToolSpec* find_tool(const std::string& id) {
+    for (const auto& t : tools()) if (t.id == id) return &t;
+    return nullptr;
+}
+
+const ToolSpec* tool_for_key(char key) {
+    if (key >= 'A' && key <= 'Z') key = static_cast<char>(key - 'A' + 'a');
+    for (const auto& t : tools()) if (t.key == key) return &t;
+    return nullptr;
+}
+
+}  // namespace klimt::core

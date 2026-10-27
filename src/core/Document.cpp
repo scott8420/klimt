@@ -1,0 +1,769 @@
+#include "core/Document.hpp"
+
+#include <algorithm>
+#include <set>
+
+namespace klimt::core {
+
+// ── blend modes ─────────────────────────────────────────────────────────────
+const std::vector<BlendInfo>& blend_modes() {
+    static const std::vector<BlendInfo> t = {
+        {Blend::PassThrough,  "pass-through",  "Pass Through",  0},
+        {Blend::Normal,       "normal",        "Normal",        1},
+        {Blend::Dissolve,     "dissolve",      "Dissolve",      1},
+        {Blend::Darken,       "darken",        "Darken",        2},
+        {Blend::Multiply,     "multiply",      "Multiply",      2},
+        {Blend::ColorBurn,    "color-burn",    "Color Burn",    2},
+        {Blend::LinearBurn,   "linear-burn",   "Linear Burn",   2},
+        {Blend::DarkerColor,  "darker-color",  "Darker Color",  2},
+        {Blend::Lighten,      "lighten",       "Lighten",       3},
+        {Blend::Screen,       "screen",        "Screen",        3},
+        {Blend::ColorDodge,   "color-dodge",   "Color Dodge",   3},
+        {Blend::LinearDodge,  "linear-dodge",  "Linear Dodge (Add)", 3},
+        {Blend::LighterColor, "lighter-color", "Lighter Color", 3},
+        {Blend::Overlay,      "overlay",       "Overlay",       4},
+        {Blend::SoftLight,    "soft-light",    "Soft Light",    4},
+        {Blend::HardLight,    "hard-light",    "Hard Light",    4},
+        {Blend::VividLight,   "vivid-light",   "Vivid Light",   4},
+        {Blend::LinearLight,  "linear-light",  "Linear Light",  4},
+        {Blend::PinLight,     "pin-light",     "Pin Light",     4},
+        {Blend::HardMix,      "hard-mix",      "Hard Mix",      4},
+        {Blend::Difference,   "difference",    "Difference",    5},
+        {Blend::Exclusion,    "exclusion",     "Exclusion",     5},
+        {Blend::Subtract,     "subtract",      "Subtract",      5},
+        {Blend::Divide,       "divide",        "Divide",        5},
+        {Blend::Hue,          "hue",           "Hue",           6},
+        {Blend::Saturation,   "saturation",    "Saturation",    6},
+        {Blend::Color,        "color",         "Color",         6},
+        {Blend::Luminosity,   "luminosity",    "Luminosity",    6},
+    };
+    return t;
+}
+std::string_view blend_key(Blend b) {
+    for (const auto& i : blend_modes()) if (i.mode == b) return i.key;
+    return {};
+}
+std::string_view blend_label(Blend b) {
+    for (const auto& i : blend_modes()) if (i.mode == b) return i.label;
+    return {};
+}
+std::optional<Blend> blend_from_key(std::string_view key) {
+    for (const auto& i : blend_modes()) if (key == i.key) return i.mode;
+    return std::nullopt;
+}
+
+// ── the store ───────────────────────────────────────────────────────────────
+std::optional<Layer> Document::get(const Id& id) const {
+    const auto it = m_items.find(id);
+    if (it == m_items.end()) return std::nullopt;
+    return it->second;
+}
+
+void Document::put(const Id& id, const std::optional<Layer>& v) {
+    if (m_loading == 0 && m_door && !m_door()) ++m_strays;
+    if (v) m_items[id] = *v;
+    else   m_items.erase(id);
+    // A loaded "L<n>" keeps fresh_id() ahead of it.
+    if (v && id.size() > 1 && id[0] == 'L' &&
+        std::all_of(id.begin() + 1, id.end(), [](char c) { return c >= '0' && c <= '9'; }))
+        m_next = std::max(m_next, std::stoi(id.substr(1)) + 1);
+    if (m_changed) m_changed();
+}
+
+void Document::set_image(const Image& im) {
+    if (m_loading == 0) ++m_strays;   // not a user choice: only a load sets it
+    m_image = im;
+    if (m_changed) m_changed();
+}
+
+std::vector<Document::Id> Document::children(const Id& parent) const {
+    std::vector<Id> out;
+    for (const auto& [id, l] : m_items) if (l.parent == parent) out.push_back(id);
+    std::stable_sort(out.begin(), out.end(), [this](const Id& a, const Id& b) {
+        return m_items.at(a).pos < m_items.at(b).pos;
+    });
+    return out;
+}
+
+std::vector<Document::Id> Document::panel(const Id& parent) const {
+    auto out = children(parent);
+    std::reverse(out.begin(), out.end());
+    return out;
+}
+
+std::vector<Document::Id> Document::walk() const {
+    std::vector<Id> out;
+    std::function<void(const Id&)> go = [&](const Id& p) {
+        for (const auto& id : panel(p)) {
+            out.push_back(id);
+            if (m_items.at(id).kind == Kind::Group) go(id);
+        }
+    };
+    go({});
+    return out;
+}
+
+std::vector<Document::Id> Document::subtree(const Id& id) const {
+    std::vector<Id> out;
+    if (!m_items.count(id)) return out;
+    std::function<void(const Id&)> go = [&](const Id& p) {
+        out.push_back(p);
+        for (const auto& c : panel(p)) go(c);
+    };
+    go(id);
+    return out;
+}
+
+bool Document::is_group(const Id& id) const {
+    const auto it = m_items.find(id);
+    return it != m_items.end() && it->second.kind == Kind::Group;
+}
+
+bool Document::within(const Id& id, const Id& ancestor) const {
+    Id at = id;
+    for (std::size_t guard = 0; guard <= m_items.size() && !at.empty(); ++guard) {
+        if (at == ancestor) return true;
+        const auto it = m_items.find(at);
+        if (it == m_items.end()) return false;
+        at = it->second.parent;
+    }
+    return false;
+}
+
+int Document::depth(const Id& id) const {
+    int n = 0;
+    auto it = m_items.find(id);
+    while (it != m_items.end() && !it->second.parent.empty() && n <= static_cast<int>(m_items.size())) {
+        ++n;
+        it = m_items.find(it->second.parent);
+    }
+    return n;
+}
+
+bool Document::locked_all(const Id& id) const {
+    Id at = id;
+    for (std::size_t guard = 0; guard <= m_items.size() && !at.empty(); ++guard) {
+        const auto it = m_items.find(at);
+        if (it == m_items.end()) return false;
+        if (it->second.locks & lock::All) return true;
+        at = it->second.parent;
+    }
+    return false;
+}
+
+bool Document::shown(const Id& id) const {
+    Id at = id;
+    for (std::size_t guard = 0; guard <= m_items.size() && !at.empty(); ++guard) {
+        const auto it = m_items.find(at);
+        if (it == m_items.end() || !it->second.visible) return false;
+        at = it->second.parent;
+    }
+    return true;
+}
+
+Document::Id Document::clip_base(const Id& id) const {
+    const auto me = get(id);
+    if (!me || !me->clipped) return {};
+    const auto sibs = children(me->parent);   // bottom first
+    auto it = std::find(sibs.begin(), sibs.end(), id);
+    while (it != sibs.begin()) {
+        --it;
+        if (!m_items.at(*it).clipped) return *it;
+    }
+    return {};
+}
+
+Document::Id Document::fresh_id() { return "L" + std::to_string(m_next++); }
+
+std::string Document::check() const {
+    std::map<Id, std::set<double>> places;
+    for (const auto& [id, l] : m_items) {
+        if (!l.parent.empty()) {
+            const auto p = m_items.find(l.parent);
+            if (p == m_items.end()) return id + ": parent " + l.parent + " is missing";
+            if (p->second.kind != Kind::Group) return id + ": parent " + l.parent + " is not a group";
+        }
+        // No cycles: walking up must reach the top within count() steps.
+        Id at = l.parent;
+        std::size_t n = 0;
+        while (!at.empty()) {
+            if (++n > m_items.size() || at == id) return id + ": is inside itself";
+            at = m_items.at(at).parent;
+        }
+        if (!places[l.parent].insert(l.pos).second) return id + ": shares its place with a sibling";
+        if (l.opacity < 0 || l.opacity > 100) return id + ": opacity out of range";
+        if (l.fill < 0 || l.fill > 100) return id + ": fill out of range";
+        if (l.locks & ~lock::Mask) return id + ": unknown lock bits";
+        if (l.blend == Blend::PassThrough && l.kind != Kind::Group) return id + ": Pass Through on a layer";
+        if (l.pixels) {
+            if (l.kind == Kind::Group) return id + ": a group with pixels";
+            if (!(l.pixels->format() == m_image.format) || l.pixels->width() != m_image.width ||
+                l.pixels->height() != m_image.height)
+                return id + ": pixels not at the image's size and format";
+        }
+    }
+    return {};
+}
+
+// ── the verbs ───────────────────────────────────────────────────────────────
+namespace layers {
+
+namespace {
+// A step's plan: the records it writes, each to its new value (nullopt: gone),
+// in the order given (parents before children).
+using Plan = std::vector<std::pair<Id, std::optional<Layer>>>;
+
+std::string quoted(const Document& d, const Id& id) {
+    const auto v = d.get(id);
+    return "“" + (v && !v->name.empty() ? v->name : std::string("Untitled")) + "”";
+}
+
+// One door for every plan: the ids go in up front (a created id's BEFORE is
+// simply absent), the writes happen inside run().
+bool apply(DocJournal& j, Document& d, const std::string& label, const Plan& plan,
+           const std::string& merge_key = {}) {
+    if (plan.empty()) return false;
+    std::vector<Id> ids;
+    ids.reserve(plan.size());
+    for (const auto& [id, v] : plan) ids.push_back(id);
+    return j.run(label, ids, [&] { for (const auto& [id, v] : plan) d.put(id, v); }, merge_key);
+}
+
+// Renumber a parent's children to the panel order given (top first): pos n..1.
+// Each record's new value is taken from `next` if the plan already holds it.
+void place(const Document& d, std::map<Id, Layer>& next, const Id& parent, const std::vector<Id>& panel_order) {
+    const auto n = panel_order.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        const Id& id = panel_order[i];
+        Layer l = next.count(id) ? next[id] : *d.get(id);
+        l.parent = parent;
+        l.pos    = static_cast<double>(n - i);
+        next[id] = l;
+    }
+}
+
+// The plan from a map of new values: only records that change, parents first
+// (by depth in the NEW tree, then walk order for a stable step).
+Plan diff(const Document& d, const std::map<Id, Layer>& next, const std::vector<Id>& gone = {}) {
+    Plan plan;
+    std::vector<std::pair<int, Id>> order;
+    for (const auto& [id, l] : next) {
+        const auto old = d.get(id);
+        if (old && *old == l) continue;
+        int depth = 0;
+        for (Id at = l.parent; !at.empty() && depth < 1000; ++depth) {
+            const auto it = next.find(at);
+            at = it != next.end() ? it->second.parent : (d.get(at) ? d.get(at)->parent : Id{});
+        }
+        order.emplace_back(depth, id);
+    }
+    std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (const auto& [depth, id] : order) plan.emplace_back(id, next.at(id));
+    for (const auto& id : gone) plan.emplace_back(id, std::nullopt);
+    return plan;
+}
+
+// A selection made ready to act on: existing ids, no duplicates, none whose
+// group is also in it (it rides along), in walk (panel) order.
+std::vector<Id> tops(const Document& d, const std::vector<Id>& ids) {
+    std::vector<Id> out;
+    for (const auto& id : d.walk()) {
+        if (std::find(ids.begin(), ids.end(), id) == ids.end()) continue;
+        bool inside_another = false;
+        for (const auto& other : ids)
+            if (other != id && d.get(other) && d.within(id, other)) { inside_another = true; break; }
+        if (!inside_another) out.push_back(id);
+    }
+    return out;
+}
+
+std::string count_label(const std::string& verb, const Document& d, const std::vector<Id>& ids) {
+    if (ids.size() == 1) return verb + " " + quoted(d, ids[0]);
+    return verb + " " + std::to_string(ids.size()) + " Layers";
+}
+
+Id add_kind(DocJournal& j, Document& d, Kind kind, const std::string& name, const Id& above) {
+    Id parent;
+    std::size_t at = 0;   // panel index in parent
+    if (const auto a = d.get(above)) {
+        if (a->kind == Kind::Group) { parent = above; at = 0; }
+        else {
+            parent = a->parent;
+            const auto sibs = d.panel(parent);
+            at = static_cast<std::size_t>(std::find(sibs.begin(), sibs.end(), above) - sibs.begin());
+        }
+    }
+    const Id made = d.fresh_id();
+    Layer l;
+    l.kind  = kind;
+    l.name  = name;
+    l.blend = kind == Kind::Group ? Blend::PassThrough : Blend::Normal;
+    std::map<Id, Layer> next{{made, l}};
+    auto sibs = d.panel(parent);
+    sibs.insert(sibs.begin() + static_cast<long>(at), made);
+    place(d, next, parent, sibs);
+    const std::string label = kind == Kind::Group ? "New Group" : "New Layer";
+    return apply(j, d, label + " " + "“" + name + "”", diff(d, next)) ? made : Id{};
+}
+
+// Set one field on one layer through the door.
+template <class F>
+bool edit(DocJournal& j, Document& d, const Id& id, const std::string& label, F&& f,
+          const std::string& merge_key = {}) {
+    auto v = d.get(id);
+    if (!v) return false;
+    f(*v);
+    return apply(j, d, label, {{id, *v}}, merge_key);
+}
+}  // namespace
+
+Id add_layer(DocJournal& j, Document& d, const std::string& name, const Id& above) {
+    return add_kind(j, d, Kind::Pixel, name, above);
+}
+Id add_group(DocJournal& j, Document& d, const std::string& name, const Id& above) {
+    return add_kind(j, d, Kind::Group, name, above);
+}
+
+Id group(DocJournal& j, Document& d, const std::vector<Id>& ids, const std::string& name) {
+    const auto sel = tops(d, ids);
+    if (sel.empty()) return {};
+    const Id parent = d.get(sel[0])->parent;
+    // Where the group goes: the first selected row's place among the siblings
+    // that stay.
+    std::vector<Id> stay;
+    std::size_t at = 0;
+    for (const auto& id : d.panel(parent)) {
+        if (id == sel[0]) at = stay.size();
+        if (std::find(sel.begin(), sel.end(), id) == sel.end()) stay.push_back(id);
+    }
+    const Id made = d.fresh_id();
+    Layer g;
+    g.kind  = Kind::Group;
+    g.name  = name;
+    g.blend = Blend::PassThrough;
+    std::map<Id, Layer> next{{made, g}};
+    stay.insert(stay.begin() + static_cast<long>(at), made);
+    place(d, next, parent, stay);
+    place(d, next, made, sel);
+    // A clip that crossed into the group from outside is released (Photoshop
+    // does the same): the base it clipped to stayed behind.
+    for (const auto& id : sel) {
+        const Id base = d.clip_base(id);
+        if (next[id].clipped && std::find(sel.begin(), sel.end(), base) == sel.end())
+            next[id].clipped = false;
+    }
+    return apply(j, d, "Group Layers", diff(d, next)) ? made : Id{};
+}
+
+bool ungroup(DocJournal& j, Document& d, const Id& group) {
+    const auto g = d.get(group);
+    if (!g || g->kind != Kind::Group) return false;
+    std::vector<Id> sibs;
+    for (const auto& id : d.panel(g->parent)) {
+        if (id == group) for (const auto& c : d.panel(group)) sibs.push_back(c);
+        else sibs.push_back(id);
+    }
+    std::map<Id, Layer> next;
+    place(d, next, g->parent, sibs);
+    return apply(j, d, "Ungroup " + quoted(d, group), diff(d, next, {group}));
+}
+
+bool remove(DocJournal& j, Document& d, const std::vector<Id>& ids) {
+    const auto sel = tops(d, ids);
+    if (sel.empty()) return false;
+    std::vector<Id> gone;
+    for (const auto& id : sel) for (const auto& s : d.subtree(id)) gone.push_back(s);
+    if (gone.size() >= d.count()) return false;   // never an empty document
+    // Children before their groups in the step, so undo (backwards) puts the
+    // group back first.
+    std::reverse(gone.begin(), gone.end());
+    Plan plan;
+    for (const auto& id : gone) plan.emplace_back(id, std::nullopt);
+    return apply(j, d, count_label("Delete", d, sel), plan);
+}
+
+std::vector<Id> duplicate(DocJournal& j, Document& d, const std::vector<Id>& ids) {
+    const auto sel = tops(d, ids);
+    if (sel.empty()) return {};
+    std::map<Id, Layer> next;
+    std::map<Id, Id> copy_of;   // original -> copy (roots and descendants)
+    std::vector<Id> roots;
+    for (const auto& id : sel) {
+        for (const auto& s : d.subtree(id)) {
+            const Id c = d.fresh_id();
+            copy_of[s] = c;
+            Layer l = *d.get(s);
+            if (s == id) l.name += " copy";
+            else         l.parent = copy_of.at(l.parent);
+            next[c] = l;
+        }
+        roots.push_back(copy_of.at(id));
+    }
+    // Each root copy goes just above its original, in the original's group.
+    std::set<Id> parents;
+    for (const auto& id : sel) parents.insert(d.get(id)->parent);
+    for (const auto& p : parents) {
+        std::vector<Id> sibs;
+        for (const auto& id : d.panel(p)) {
+            if (std::find(sel.begin(), sel.end(), id) != sel.end()) sibs.push_back(copy_of.at(id));
+            sibs.push_back(id);
+        }
+        place(d, next, p, sibs);
+    }
+    if (!apply(j, d, count_label("Duplicate", d, sel), diff(d, next))) return {};
+    return roots;
+}
+
+namespace {
+// The drop's plan, or nothing if it's refused. move() writes it; can_move()
+// only asks -- the panel asks on every pointer motion to show or refuse a drop.
+std::optional<std::map<Id, Layer>> plan_move(const Document& d, const std::vector<Id>& ids,
+                                             const Id& target, Where where) {
+    const auto sel = tops(d, ids);
+    const auto t = d.get(target);
+    if (sel.empty() || !t) return std::nullopt;
+    if (where == Where::Inside && t->kind != Kind::Group) return std::nullopt;
+    const Id parent = where == Where::Inside ? target : t->parent;
+    for (const auto& id : sel) {
+        if (id == target) return std::nullopt;                            // onto itself
+        if (!parent.empty() && d.within(parent, id)) return std::nullopt; // into its own contents
+    }
+    std::vector<Id> sibs;
+    for (const auto& id : d.panel(parent))
+        if (std::find(sel.begin(), sel.end(), id) == sel.end()) sibs.push_back(id);
+    std::size_t at = 0;
+    if (where != Where::Inside) {
+        at = static_cast<std::size_t>(std::find(sibs.begin(), sibs.end(), target) - sibs.begin());
+        if (where == Where::Below) ++at;
+    }
+    sibs.insert(sibs.begin() + static_cast<long>(at), sel.begin(), sel.end());
+    std::map<Id, Layer> next;
+    place(d, next, parent, sibs);
+    return next;
+}
+}  // namespace
+
+bool can_move(const Document& d, const std::vector<Id>& ids, const Id& target, Where where) {
+    const auto next = plan_move(d, ids, target, where);
+    return next && !diff(d, *next).empty();
+}
+
+bool move(DocJournal& j, Document& d, const std::vector<Id>& ids, const Id& target, Where where) {
+    const auto next = plan_move(d, ids, target, where);
+    if (!next) return false;
+    return apply(j, d, count_label("Move", d, tops(d, ids)), diff(d, *next));
+}
+
+namespace {
+bool step(DocJournal& j, Document& d, const Id& id, int dir, const std::string& verb) {
+    const auto l = d.get(id);
+    if (!l) return false;
+    auto sibs = d.panel(l->parent);
+    const auto i = std::find(sibs.begin(), sibs.end(), id) - sibs.begin();
+    const auto k = i + dir;
+    if (k < 0 || k >= static_cast<long>(sibs.size())) return false;
+    std::swap(sibs[static_cast<std::size_t>(i)], sibs[static_cast<std::size_t>(k)]);
+    std::map<Id, Layer> next;
+    place(d, next, l->parent, sibs);
+    return apply(j, d, verb + " " + quoted(d, id), diff(d, next));
+}
+}  // namespace
+
+bool arrange(DocJournal& j, Document& d, const Id& parent, const std::vector<Id>& order,
+             const std::string& label) {
+    if (!parent.empty() && !d.is_group(parent)) return false;
+    auto now = d.panel(parent), want = order;
+    std::sort(now.begin(), now.end());
+    std::sort(want.begin(), want.end());
+    if (now != want) return false;   // not exactly its contents: it changed
+    std::map<Id, Layer> next;
+    place(d, next, parent, order);
+    return apply(j, d, label, diff(d, next));
+}
+
+bool natural_less(const std::string& a, const std::string& b) {
+    std::size_t i = 0, k = 0;
+    const auto digit = [](char c) { return c >= '0' && c <= '9'; };
+    const auto lower = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; };
+    while (i < a.size() && k < b.size()) {
+        if (digit(a[i]) && digit(b[k])) {
+            std::size_t i2 = i, k2 = k;
+            while (i2 < a.size() && a[i2] == '0') ++i2;   // leading zeros don't count
+            while (k2 < b.size() && b[k2] == '0') ++k2;
+            std::size_t ie = i2, ke = k2;
+            while (ie < a.size() && digit(a[ie])) ++ie;
+            while (ke < b.size() && digit(b[ke])) ++ke;
+            if (ie - i2 != ke - k2) return ie - i2 < ke - k2;   // fewer digits: smaller
+            for (std::size_t n = 0; n < ie - i2; ++n)
+                if (a[i2 + n] != b[k2 + n]) return a[i2 + n] < b[k2 + n];
+            i = ie;
+            k = ke;
+            continue;
+        }
+        const char x = lower(a[i]), y = lower(b[k]);
+        if (x != y) return x < y;
+        ++i;
+        ++k;
+    }
+    if (i < a.size() || k < b.size()) return k < b.size();   // a prefix comes first
+    return a < b;   // equal ignoring case and zeros: a stable, total tie-break
+}
+
+std::vector<Id> sorted_by_name(std::vector<Named> rows) {
+    std::stable_sort(rows.begin(), rows.end(),
+                     [](const Named& x, const Named& y) { return natural_less(x.name, y.name); });
+    std::vector<Id> out;
+    for (const auto& r : rows) out.push_back(r.id);
+    return out;
+}
+
+bool raise(DocJournal& j, Document& d, const Id& id) { return step(j, d, id, -1, "Bring Forward"); }
+bool lower(DocJournal& j, Document& d, const Id& id) { return step(j, d, id, +1, "Send Backward"); }
+
+bool rename(DocJournal& j, Document& d, const Id& id, const std::string& name) {
+    return edit(j, d, id, "Rename " + quoted(d, id), [&](Layer& l) { l.name = name; });
+}
+
+bool set_visible(DocJournal& j, Document& d, const Id& id, bool visible) {
+    return edit(j, d, id, (visible ? "Show " : "Hide ") + quoted(d, id),
+                [&](Layer& l) { l.visible = visible; });
+}
+
+bool set_blend(DocJournal& j, Document& d, const Id& id, Blend mode) {
+    const auto l = d.get(id);
+    if (!l || d.locked_all(id)) return false;
+    if (mode == Blend::PassThrough && l->kind != Kind::Group) return false;
+    return edit(j, d, id, "Blend Mode of " + quoted(d, id), [&](Layer& v) { v.blend = mode; });
+}
+
+bool set_clipped(DocJournal& j, Document& d, const Id& id, bool clipped) {
+    if (d.locked_all(id)) return false;
+    return edit(j, d, id, (clipped ? "Clip " : "Release Clip ") + quoted(d, id),
+                [&](Layer& l) { l.clipped = clipped; });
+}
+
+bool set_locks(DocJournal& j, Document& d, const Id& id, std::uint8_t locks) {
+    return edit(j, d, id, ((locks & lock::Mask) ? "Lock " : "Unlock ") + quoted(d, id),
+                [&](Layer& l) { l.locks = locks & lock::Mask; });
+}
+
+bool set_opacity(DocJournal& j, Document& d, const Id& id, int percent) {
+    if (d.locked_all(id)) return false;
+    return edit(j, d, id, "Opacity of " + quoted(d, id),
+                [&](Layer& l) { l.opacity = std::clamp(percent, 0, 100); }, "opacity:" + id);
+}
+
+bool set_fill(DocJournal& j, Document& d, const Id& id, int percent) {
+    if (d.locked_all(id)) return false;
+    return edit(j, d, id, "Fill of " + quoted(d, id),
+                [&](Layer& l) { l.fill = std::clamp(percent, 0, 100); }, "fill:" + id);
+}
+
+void opacity_begin(DocJournal& j, Document& d, const Id& id) {
+    if (d.get(id) && !d.locked_all(id)) j.begin("Opacity of " + quoted(d, id), {id});
+}
+
+void opacity_to(DocJournal& j, Document& d, const Id& id, int percent) {
+    if (!j.in_gesture()) return;   // the drag was refused at begin
+    auto v = d.get(id);
+    if (!v || v->opacity == std::clamp(percent, 0, 100)) return;
+    v->opacity = std::clamp(percent, 0, 100);
+    j.run("Opacity", {id}, [&] { d.put(id, *v); });   // inside the gesture: just writes
+}
+
+bool opacity_end(DocJournal& j) { return j.commit(); }
+
+// ── many at once ────────────────────────────────────────────────────────────
+namespace {
+// The selection's layers this edit may touch (existing, in walk order, and
+// passing `ok`), the label ("Opacity of “A”" / "Opacity of 3 Layers") and
+// the merge key ("opacity:L3,L5").
+struct Many { std::vector<Id> ids; std::string label, key; };
+template <class Ok>
+Many many(const Document& d, const std::vector<Id>& sel, const std::string& verb, const std::string& key, Ok ok) {
+    Many m;
+    for (const auto& id : d.walk())
+        if (std::find(sel.begin(), sel.end(), id) != sel.end() && ok(id)) m.ids.push_back(id);
+    if (m.ids.empty()) return m;
+    m.label = m.ids.size() == 1 ? verb + " " + quoted(d, m.ids[0])
+                                : verb + " " + std::to_string(m.ids.size()) + " Layers";
+    m.key = key;
+    for (const auto& id : m.ids) m.key += (m.key.back() == ':' ? "" : ",") + id;
+    return m;
+}
+template <class F>
+bool edit_many(DocJournal& j, Document& d, const Many& m, F&& f, bool merge) {
+    if (m.ids.empty()) return false;
+    Plan plan;
+    for (const auto& id : m.ids) {
+        Layer l = *d.get(id);
+        f(l);
+        plan.emplace_back(id, l);
+    }
+    return apply(j, d, m.label, plan, merge ? m.key : std::string{});
+}
+}  // namespace
+
+bool set_blend(DocJournal& j, Document& d, const std::vector<Id>& ids, Blend mode) {
+    const auto m = many(d, ids, "Blend Mode of", "blend:", [&](const Id& id) {
+        return !d.locked_all(id) && (mode != Blend::PassThrough || d.is_group(id));
+    });
+    return edit_many(j, d, m, [&](Layer& l) { l.blend = mode; }, false);
+}
+
+bool set_locks(DocJournal& j, Document& d, const std::vector<Id>& ids, std::uint8_t locks) {
+    const auto m = many(d, ids, (locks & lock::Mask) ? "Lock" : "Unlock", "locks:", [](const Id&) { return true; });
+    return edit_many(j, d, m, [&](Layer& l) { l.locks = locks & lock::Mask; }, false);
+}
+
+bool set_opacity(DocJournal& j, Document& d, const std::vector<Id>& ids, int percent) {
+    const auto m = many(d, ids, "Opacity of", "opacity:", [&](const Id& id) { return !d.locked_all(id); });
+    return edit_many(j, d, m, [&](Layer& l) { l.opacity = std::clamp(percent, 0, 100); }, true);
+}
+
+bool set_fill(DocJournal& j, Document& d, const std::vector<Id>& ids, int percent) {
+    const auto m = many(d, ids, "Fill of", "fill:", [&](const Id& id) { return !d.locked_all(id); });
+    return edit_many(j, d, m, [&](Layer& l) { l.fill = std::clamp(percent, 0, 100); }, true);
+}
+
+void opacity_begin(DocJournal& j, Document& d, const std::vector<Id>& ids) {
+    const auto m = many(d, ids, "Opacity of", "opacity:", [&](const Id& id) { return !d.locked_all(id); });
+    if (!m.ids.empty()) j.begin(m.label, m.ids);
+}
+
+void opacity_to(DocJournal& j, Document& d, const std::vector<Id>& ids, int percent) {
+    if (!j.in_gesture()) return;   // the drag was refused at begin
+    const auto m = many(d, ids, "Opacity", "opacity:", [&](const Id& id) { return !d.locked_all(id); });
+    Plan plan;
+    for (const auto& id : m.ids) {
+        Layer l = *d.get(id);
+        if (l.opacity == std::clamp(percent, 0, 100)) continue;
+        l.opacity = std::clamp(percent, 0, 100);
+        plan.emplace_back(id, l);
+    }
+    if (!plan.empty()) apply(j, d, "Opacity", plan);   // inside the gesture: just writes
+}
+
+// ── pixels ──────────────────────────────────────────────────────────────────
+namespace {
+bool pixels_writable(const Document& d, const Id& id) {
+    const auto l = d.get(id);
+    return l && l->kind == Kind::Pixel && !d.locked_all(id) && !(l->locks & lock::Pixels);
+}
+
+bool write_pixels(DocJournal& j, Document& d, const Id& id, const std::string& label,
+                  const std::function<pixel::TileMap(const pixel::TileMap&)>& edit) {
+    if (!pixels_writable(d, id)) return false;
+    Layer l = *d.get(id);
+    const pixel::TileMap before = l.pixels ? *l.pixels : d.blank();
+    pixel::TileMap after = edit(before);
+    // Nothing changed: the edit handed back a map sharing every tile.
+    bool same = true;
+    for (int r = 0; r < after.rows() && same; ++r)
+        for (int c = 0; c < after.cols() && same; ++c) same = after.same_tile(before, c, r);
+    if (same) return false;
+    l.pixels = after.tile_count() ? std::make_shared<const pixel::TileMap>(std::move(after)) : nullptr;
+    return apply(j, d, label, {{id, l}});
+}
+}  // namespace
+
+bool fill(DocJournal& j, Document& d, const Id& id, const pixel::Rect& r, const pixel::Px& colour) {
+    const auto l = d.get(id);
+    if (!l) return false;
+    const pixel::Format f = d.image().format;
+    const std::size_t a = static_cast<std::size_t>(f.channels() - 1);
+    if (l->locks & lock::Alpha) {
+        // Lock transparent pixels: colour only where there is something.
+        return write_pixels(j, d, id, "Fill " + quoted(d, id), [&](const pixel::TileMap& m) {
+            return m.paint(r, [&](int, int, const pixel::Px& old) {
+                if (!f.alpha || old.c[a] <= 0.f) return old;
+                pixel::Px p = colour;
+                p.c[a] = old.c[a];
+                return p;
+            });
+        });
+    }
+    return write_pixels(j, d, id, "Fill " + quoted(d, id),
+                        [&](const pixel::TileMap& m) { return m.fill(r, colour); });
+}
+
+bool clear(DocJournal& j, Document& d, const Id& id, const pixel::Rect& r) {
+    const auto l = d.get(id);
+    if (!l || (l->locks & lock::Alpha)) return false;   // clearing IS changing alpha
+    return write_pixels(j, d, id, "Clear " + quoted(d, id),
+                        [&](const pixel::TileMap& m) { return m.fill(r, pixel::transparent()); });
+}
+
+Id neighbour(const Document& d, const Id& id) {
+    const auto l = d.get(id);
+    if (!l) return {};
+    const auto sibs = d.panel(l->parent);
+    const auto it = std::find(sibs.begin(), sibs.end(), id);
+    if (it + 1 != sibs.end()) return *(it + 1);
+    if (it != sibs.begin()) return *(it - 1);
+    return l->parent;
+}
+
+void load_fixture(Document& d) {
+    Document::Loading load(d);
+    d.set_image({600, 400, pixel::Format{pixel::Depth::U8, pixel::Mode::RGB, true}});
+    const auto add = [&](const Id& id, Kind k, const char* name, const Id& parent, double pos) {
+        Layer l;
+        l.kind = k;
+        l.name = name;
+        l.parent = parent;
+        l.pos = pos;
+        l.blend = k == Kind::Group ? Blend::PassThrough : Blend::Normal;
+        d.put(id, l);
+    };
+    add("L1", Kind::Pixel, "Background", "", 1);
+    add("L2", Kind::Group, "Group", "", 2);
+    add("L3", Kind::Pixel, "B", "L2", 1);
+    add("L4", Kind::Pixel, "A", "L2", 2);
+    add("L5", Kind::Pixel, "Top", "", 3);
+    // Background painted white, "A" a red square (pixels for the gate's
+    // pixel verbs to find).
+    auto bg = *d.get("L1");
+    bg.pixels = std::make_shared<const pixel::TileMap>(d.blank().fill({0, 0, 600, 400}, pixel::rgba(1, 1, 1, 1)));
+    d.put("L1", bg);
+    auto a = *d.get("L4");
+    a.pixels = std::make_shared<const pixel::TileMap>(d.blank().fill({100, 100, 200, 150}, pixel::rgba(1, 0, 0, 1)));
+    d.put("L4", a);
+}
+
+const std::vector<Verb>& verbs() {
+    static const std::vector<Verb> table = {
+        {"add_layer",     [](DocJournal& j, Document& d) { add_layer(j, d, "New", "L4"); }},
+        {"add_group",     [](DocJournal& j, Document& d) { add_group(j, d, "Set", "L5"); }},
+        {"group",         [](DocJournal& j, Document& d) { group(j, d, {"L5", "L1"}); }},
+        {"ungroup",       [](DocJournal& j, Document& d) { ungroup(j, d, "L2"); }},
+        {"remove",        [](DocJournal& j, Document& d) { remove(j, d, {"L2"}); }},
+        {"duplicate",     [](DocJournal& j, Document& d) { duplicate(j, d, {"L2", "L1"}); }},
+        {"move",          [](DocJournal& j, Document& d) { move(j, d, {"L5", "L1"}, "L3", Where::Above); }},
+        {"move_inside",   [](DocJournal& j, Document& d) { move(j, d, {"L1"}, "L2", Where::Inside); }},
+        {"raise",         [](DocJournal& j, Document& d) { raise(j, d, "L3"); }},
+        {"lower",         [](DocJournal& j, Document& d) { lower(j, d, "L5"); }},
+        {"arrange",       [](DocJournal& j, Document& d) { arrange(j, d, "L2", {"L3", "L4"}, "Sort"); }},
+        {"rename",        [](DocJournal& j, Document& d) { rename(j, d, "L4", "Sky"); }},
+        {"set_visible",   [](DocJournal& j, Document& d) { set_visible(j, d, "L2", false); }},
+        {"set_blend",     [](DocJournal& j, Document& d) { set_blend(j, d, "L4", Blend::Multiply); }},
+        {"set_clipped",   [](DocJournal& j, Document& d) { set_clipped(j, d, "L4", true); }},
+        {"set_locks",     [](DocJournal& j, Document& d) { set_locks(j, d, "L1", lock::All); }},
+        {"set_opacity",   [](DocJournal& j, Document& d) { set_opacity(j, d, "L5", 40); }},
+        {"set_fill",      [](DocJournal& j, Document& d) { set_fill(j, d, "L5", 60); }},
+        {"opacity_many",  [](DocJournal& j, Document& d) { set_opacity(j, d, std::vector<Id>{"L5", "L4", "L1"}, 25); }},
+        {"blend_many",    [](DocJournal& j, Document& d) { set_blend(j, d, std::vector<Id>{"L3", "L4"}, Blend::Screen); }},
+        {"locks_many",    [](DocJournal& j, Document& d) { set_locks(j, d, std::vector<Id>{"L1", "L2"}, lock::Position); }},
+        {"opacity_drag_many", [](DocJournal& j, Document& d) {
+             opacity_begin(j, d, std::vector<Id>{"L3", "L4"}); opacity_to(j, d, std::vector<Id>{"L3", "L4"}, 50);
+             opacity_to(j, d, std::vector<Id>{"L3", "L4"}, 10); opacity_end(j); }},
+        {"fill",          [](DocJournal& j, Document& d) { fill(j, d, "L3", {10, 10, 300, 300}, pixel::rgba(0, 0, 1, 1)); }},
+        {"clear",         [](DocJournal& j, Document& d) { clear(j, d, "L4", {150, 150, 50, 50}); }},
+        {"opacity_drag",  [](DocJournal& j, Document& d) {
+             opacity_begin(j, d, "L4"); opacity_to(j, d, "L4", 80); opacity_to(j, d, "L4", 35); opacity_end(j); }},
+    };
+    return table;
+}
+
+}  // namespace layers
+}  // namespace klimt::core

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- Klimt: a square spiral over a mosaic of tiles: pattern against flat
+       field. currentColor throughout so GTK's symbolic pipeline recolours it
+       to the theme foreground. -->
+  <g fill="currentColor">
+    <rect x="1" y="1" width="4" height="4" rx="0.6"/>
+    <rect x="1" y="6" width="4" height="4" rx="0.6" opacity="0.55"/>
+    <rect x="1" y="11" width="4" height="4" rx="0.6"/>
+    <path d="M7 1h8v14H7v-2h6V3H9v8h2V5h2v8H7z" fill-rule="evenodd"/>
+  </g>
+</svg>
