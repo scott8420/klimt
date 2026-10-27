@@ -209,6 +209,7 @@ void Shell::update_select_actions() {
     const bool any = m_doc.selection() != nullptr;
     if (auto it = m_layer_acts.find("deselect"); it != m_layer_acts.end()) it->second->set_enabled(any);
     if (auto it = m_layer_acts.find("select-feather"); it != m_layer_acts.end()) it->second->set_enabled(any);
+    if (auto it = m_layer_acts.find("crop-selection"); it != m_layer_acts.end()) it->second->set_enabled(any);
 }
 
 }  // namespace klimt

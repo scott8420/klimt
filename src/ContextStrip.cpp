@@ -108,6 +108,27 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
         spin("Size", 1, 2500, o.size, "px", "The brush's diameter  ([ and ] change it)", &BrushOpts::size);
         spin("Hardness", 0, 100, o.hardness, "%", "100: a hard edge; 0: soft all the way in", &BrushOpts::hardness);
         spin("Opacity", 1, 100, o.opacity, "%", "The stroke's strength -- crossing itself doesn't build past it", &BrushOpts::opacity);
+        // s009 m3: what a pen's pressure drives (a mouse has none: always full).
+        auto pl = Gtk::make_managed<Gtk::Label>("Pressure");
+        pl->add_css_class("dim-label");
+        append(*pl);
+        auto group = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL);
+        group->add_css_class("linked");
+        const auto toggle = [this, group, id = t.id](const char* label, const char* tip, bool on, bool BrushOpts::*field) {
+            auto b = Gtk::make_managed<Gtk::ToggleButton>(label);
+            b->set_active(on);
+            b->set_tooltip_text(tip);
+            b->signal_toggled().connect([this, b, id, field] {
+                auto o = brush(id);
+                o.*field = b->get_active();
+                m_brush[id] = o;
+                m_brush_signal.emit();
+            });
+            group->append(*b);
+        };
+        toggle("Size", "A pen's pressure sets the size (light: thin)", o.pressure_size, &BrushOpts::pressure_size);
+        toggle("Opacity", "A pen's pressure sets the strength (light: faint)", o.pressure_opacity, &BrushOpts::pressure_opacity);
+        append(*group);
     }
 
     // s008 m3: the Magic Wand's options, when it's the select variant.

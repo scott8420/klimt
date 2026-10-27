@@ -5,16 +5,33 @@
 #include <gtkmm/eventcontrollerscroll.h>
 #include <gtkmm/gestureclick.h>
 #include <gtkmm/gesturedrag.h>
+#include <gdkmm/event.h>
+#include <gdkmm/device.h>
+#include <gdkmm/devicetool.h>
 #include <glibmm/main.h>
 #include <pangomm/layout.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 
 namespace klimt {
 
 namespace {
+// s009 m3: the pen's pressure in the event being handled -- read from a PEN
+// only (a tablet's stylus or eraser); anything else is 1. A mouse can carry a
+// pressure axis that reads 0 (X11's test pointer does: under Xvfb every stroke
+// came out a hairline), so the axis alone is not trusted. Clamped to 0..1.
+double pressure_of(const Glib::RefPtr<Gtk::GestureDrag>& g) {
+    const auto ev = g->get_current_event();
+    if (!ev) return 1;
+    const auto dev = ev->get_device();
+    const bool pen = (dev && dev->get_source() == Gdk::InputSource::PEN) || ev->get_device_tool();
+    double p = 1;
+    if (!pen || !ev->get_axis(Gdk::AxisUse::PRESSURE, p)) return 1;
+    return std::clamp(p, 0.0, 1.0);
+}
 // The zoom steps zoom_in / zoom_out walk (Photoshop's, roughly).
 constexpr double kSteps[] = {1.0 / 64, 1.0 / 48, 1.0 / 32, 1.0 / 24, 1.0 / 16, 1.0 / 12, 1.0 / 8, 1.0 / 6,
                              0.25, 1.0 / 3, 0.5, 2.0 / 3, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64};
@@ -45,8 +62,9 @@ CanvasView::CanvasView() {
     // A click takes the keyboard; the Zoom tool zooms where it clicks.
     auto click = Gtk::GestureClick::create();
     click->set_button(GDK_BUTTON_PRIMARY);
-    click->signal_pressed().connect([this, click](int, double x, double y) {
+    click->signal_pressed().connect([this, click](int n, double x, double y) {
         grab_focus();
+        if (m_tool == "crop" && n == 2 && m_crop && crop_hit(x, y) == -1) { commit_crop(); return; }
         if (m_tool == "eyedropper" && !m_space && m_iw > 0) {
             const bool alt = (click->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
             const int ix = static_cast<int>(std::floor(to_image_x(x))), iy = static_cast<int>(std::floor(to_image_y(y)));
@@ -70,12 +88,25 @@ CanvasView::CanvasView() {
         drag->set_button(button);
         drag->signal_drag_begin().connect([this, button, drag](double x, double y) {
             m_panning = button == GDK_BUTTON_MIDDLE || m_space || m_tool == "hand";
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "crop" && m_iw > 0) {
+                m_press_x = x;
+                m_press_y = y;
+                crop_press(x, y);
+                return;
+            }
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "move" && m_iw > 0) {
+                m_moving = true;
+                m_press_x = x;
+                m_press_y = y;
+                m_move_signal.emit(MoveAt::Begin, 0, 0);
+                return;
+            }
             if (!m_panning && button == GDK_BUTTON_PRIMARY && painting() && m_iw > 0) {
                 const bool shift = (drag->get_current_event_state() & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{};
                 m_stroking = true;
                 m_press_x = x;
                 m_press_y = y;
-                m_stroke_signal.emit(StrokeAt::Begin, {to_image_x(x), to_image_y(y)}, shift);
+                m_stroke_signal.emit(StrokeAt::Begin, {to_image_x(x), to_image_y(y)}, shift, pressure_of(drag));
                 return;
             }
             if (!m_panning && button == GDK_BUTTON_PRIMARY && selecting() && m_iw > 0) {
@@ -99,11 +130,31 @@ CanvasView::CanvasView() {
             m_pan_cy = m_cy;
             update_cursor();
         });
-        drag->signal_drag_update().connect([this, drag](double dx, double dy) {
+        // The offset in whole image pixels; Shift keeps one axis (the larger).
+        const auto offset = [this, drag](double dx, double dy, int& ox, int& oy) {
+            double ix = dx / m_zoom, iy = dy / m_zoom;
+            if ((drag->get_current_event_state() & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{}) {
+                if (std::abs(ix) >= std::abs(iy)) iy = 0; else ix = 0;
+            }
+            ox = static_cast<int>(std::lround(ix));
+            oy = static_cast<int>(std::lround(iy));
+        };
+        drag->signal_drag_update().connect([this, drag, offset](double dx, double dy) {
+            if (m_moving) {
+                int ox = 0, oy = 0;
+                offset(dx, dy, ox, oy);
+                m_move_signal.emit(MoveAt::Move, ox, oy);
+                return;
+            }
+            if (m_crop_mode != CropMode::None) {
+                const bool shift = (drag->get_current_event_state() & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{};
+                crop_drag(m_press_x + dx, m_press_y + dy, shift);
+                return;
+            }
             if (m_stroking) {
                 m_px = m_press_x + dx;
                 m_py = m_press_y + dy;
-                m_stroke_signal.emit(StrokeAt::Move, {to_image_x(m_px), to_image_y(m_py)}, false);
+                m_stroke_signal.emit(StrokeAt::Move, {to_image_x(m_px), to_image_y(m_py)}, false, pressure_of(drag));
                 queue_draw();
                 return;
             }
@@ -137,10 +188,18 @@ CanvasView::CanvasView() {
             clamp_centre();
             queue_draw();
         });
-        drag->signal_drag_end().connect([this](double dx, double dy) {
+        drag->signal_drag_end().connect([this, offset, drag](double dx, double dy) {
+            if (m_moving) {
+                m_moving = false;
+                int ox = 0, oy = 0;
+                offset(dx, dy, ox, oy);
+                m_move_signal.emit(MoveAt::End, ox, oy);
+                return;
+            }
+            if (m_crop_mode != CropMode::None) { crop_release(); return; }
             if (m_stroking) {
                 m_stroking = false;
-                m_stroke_signal.emit(StrokeAt::End, {to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)}, false);
+                m_stroke_signal.emit(StrokeAt::End, {to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)}, false, pressure_of(drag));
                 return;
             }
             if (m_rubber) {
@@ -319,6 +378,8 @@ void CanvasView::update_cursor() {
     if (m_panning) set_cursor("grabbing");
     else if (m_space || m_tool == "hand") set_cursor("grab");
     else if (m_tool == "zoom") set_cursor("zoom-in");
+    else if (m_tool == "move") set_cursor("move");
+    else if (m_tool == "crop") set_cursor("crosshair");
     else if (selecting() || m_tool == "eyedropper" || painting()) set_cursor("crosshair");
     else set_cursor("");
 }
@@ -393,6 +454,137 @@ void CanvasView::draw_rubber(const Cairo::RefPtr<Cairo::Context>& cr) {
     cr->restore();
 }
 
+// ── s009 m2: the crop box ─────────────────────────────────────────────────────
+namespace {
+constexpr double kGrab = 8;   // screen px: how near an edge counts as on it
+}
+
+int CanvasView::crop_hit(double sx, double sy) const {
+    if (!m_crop) return 0;
+    const double x0 = to_screen_x(m_cx0), x1 = to_screen_x(m_cx1), y0 = to_screen_y(m_cy0), y1 = to_screen_y(m_cy1);
+    if (sx < x0 - kGrab || sx > x1 + kGrab || sy < y0 - kGrab || sy > y1 + kGrab) return 0;
+    int e = 0;
+    if (std::abs(sx - x0) <= kGrab) e |= 1;
+    else if (std::abs(sx - x1) <= kGrab) e |= 2;
+    if (std::abs(sy - y0) <= kGrab) e |= 4;
+    else if (std::abs(sy - y1) <= kGrab) e |= 8;
+    if (e) return e;
+    return (sx > x0 && sx < x1 && sy > y0 && sy < y1) ? -1 : 0;
+}
+
+void CanvasView::crop_press(double sx, double sy) {
+    const int hit = crop_hit(sx, sy);
+    m_crop_from[0] = m_cx0; m_crop_from[1] = m_cy0; m_crop_from[2] = m_cx1; m_crop_from[3] = m_cy1;
+    if (hit == -1) { m_crop_mode = CropMode::Move; return; }
+    if (hit > 0) { m_crop_mode = CropMode::Resize; m_crop_edges = hit; return; }
+    m_crop_mode = CropMode::New;
+    m_crop = true;
+    m_cx0 = m_cx1 = std::round(to_image_x(sx));
+    m_cy0 = m_cy1 = std::round(to_image_y(sy));
+    m_crop_from[0] = m_cx0; m_crop_from[1] = m_cy0;
+    queue_draw();
+}
+
+void CanvasView::crop_drag(double sx, double sy, bool shift) {
+    const double ix = std::round(to_image_x(sx)), iy = std::round(to_image_y(sy));
+    const double dx = std::round((sx - m_press_x) / m_zoom), dy = std::round((sy - m_press_y) / m_zoom);
+    if (m_crop_mode == CropMode::New) {
+        double x1 = ix, y1 = iy;
+        if (shift) {
+            const double side = std::max(std::abs(x1 - m_crop_from[0]), std::abs(y1 - m_crop_from[1]));
+            x1 = m_crop_from[0] + (x1 < m_crop_from[0] ? -side : side);
+            y1 = m_crop_from[1] + (y1 < m_crop_from[1] ? -side : side);
+        }
+        m_cx0 = m_crop_from[0]; m_cy0 = m_crop_from[1]; m_cx1 = x1; m_cy1 = y1;
+    } else if (m_crop_mode == CropMode::Move) {
+        m_cx0 = m_crop_from[0] + dx; m_cy0 = m_crop_from[1] + dy;
+        m_cx1 = m_crop_from[2] + dx; m_cy1 = m_crop_from[3] + dy;
+    } else if (m_crop_mode == CropMode::Resize) {
+        m_cx0 = m_crop_from[0]; m_cy0 = m_crop_from[1]; m_cx1 = m_crop_from[2]; m_cy1 = m_crop_from[3];
+        if (m_crop_edges & 1) m_cx0 = std::min(m_crop_from[0] + dx, m_cx1 - 1);
+        if (m_crop_edges & 2) m_cx1 = std::max(m_crop_from[2] + dx, m_cx0 + 1);
+        if (m_crop_edges & 4) m_cy0 = std::min(m_crop_from[1] + dy, m_cy1 - 1);
+        if (m_crop_edges & 8) m_cy1 = std::max(m_crop_from[3] + dy, m_cy0 + 1);
+    }
+    queue_draw();
+}
+
+void CanvasView::crop_release() {
+    if (m_crop_mode == CropMode::New) {
+        if (m_cx1 < m_cx0) std::swap(m_cx0, m_cx1);
+        if (m_cy1 < m_cy0) std::swap(m_cy0, m_cy1);
+        // A click, not a box: no box (it was a click to clear one).
+        if ((m_cx1 - m_cx0) * m_zoom < 3 || (m_cy1 - m_cy0) * m_zoom < 3) m_crop = false;
+    }
+    m_crop_mode = CropMode::None;
+    queue_draw();
+}
+
+void CanvasView::set_crop(double x0, double y0, double x1, double y1) {
+    m_crop = true;
+    m_cx0 = std::min(x0, x1); m_cx1 = std::max(x0, x1);
+    m_cy0 = std::min(y0, y1); m_cy1 = std::max(y0, y1);
+    queue_draw();
+}
+
+bool CanvasView::commit_crop() {
+    if (!m_crop || m_cx1 - m_cx0 < 1 || m_cy1 - m_cy0 < 1) return false;
+    const core::select::Pt a{m_cx0, m_cy0}, b{m_cx1, m_cy1};
+    m_crop = false;
+    queue_draw();
+    m_crop_signal.emit(a, b);
+    return true;
+}
+
+void CanvasView::draw_crop(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+    if (!m_crop) return;
+    const double x0 = std::round(to_screen_x(std::min(m_cx0, m_cx1))), x1 = std::round(to_screen_x(std::max(m_cx0, m_cx1)));
+    const double y0 = std::round(to_screen_y(std::min(m_cy0, m_cy1))), y1 = std::round(to_screen_y(std::max(m_cy0, m_cy1)));
+    cr->save();
+    // What goes: dimmed (the whole view minus the box).
+    cr->set_fill_rule(Cairo::Context::FillRule::EVEN_ODD);
+    cr->rectangle(0, 0, w, h);
+    cr->rectangle(x0, y0, x1 - x0, y1 - y0);
+    cr->set_source_rgba(0, 0, 0, 0.55);
+    cr->fill();
+    // The thirds, faint; the box, crisp.
+    cr->set_line_width(1);
+    cr->set_source_rgba(1, 1, 1, 0.35);
+    for (int i = 1; i <= 2; ++i) {
+        const double gx = std::round(x0 + (x1 - x0) * i / 3) + 0.5, gy = std::round(y0 + (y1 - y0) * i / 3) + 0.5;
+        cr->move_to(gx, y0); cr->line_to(gx, y1);
+        cr->move_to(x0, gy); cr->line_to(x1, gy);
+    }
+    cr->stroke();
+    cr->rectangle(x0 + 0.5, y0 + 0.5, x1 - x0 - 1, y1 - y0 - 1);
+    cr->set_source_rgb(1, 1, 1);
+    cr->stroke();
+    // Handles at the corners and the middles of the edges.
+    const double mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+    for (const auto& [hx, hy] : {std::pair{x0, y0}, std::pair{mx, y0}, std::pair{x1, y0}, std::pair{x0, my},
+                                 std::pair{x1, my}, std::pair{x0, y1}, std::pair{mx, y1}, std::pair{x1, y1}}) {
+        cr->rectangle(std::round(hx) - 3.5, std::round(hy) - 3.5, 7, 7);
+        cr->set_source_rgb(1, 1, 1);
+        cr->fill_preserve();
+        cr->set_source_rgb(0.1, 0.1, 0.1);
+        cr->stroke();
+    }
+    // The size, above the box (inside it when the box is at the top).
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%d × %d px", static_cast<int>(std::abs(m_cx1 - m_cx0)), static_cast<int>(std::abs(m_cy1 - m_cy0)));
+    auto layout = create_pango_layout(buf);
+    int tw = 0, th = 0;
+    layout->get_pixel_size(tw, th);
+    const double ty = y0 - th - 8 >= 0 ? y0 - th - 8 : y0 + 6;
+    cr->set_source_rgba(0, 0, 0, 0.7);
+    cr->rectangle(x0, ty - 2, tw + 12, th + 4);
+    cr->fill();
+    cr->set_source_rgb(1, 1, 1);
+    cr->move_to(x0 + 6, ty);
+    layout->show_in_cairo_context(cr);
+    cr->restore();
+}
+
 // ── drawing ─────────────────────────────────────────────────────────────────
 void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     if (w != m_vw || h != m_vh) layout(w, h);
@@ -400,7 +592,17 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     const double g = m_dark ? 0.22 : 0.62;
     cr->set_source_rgb(g, g, g);
     cr->paint();
-    if (m_iw <= 0 || m_ih <= 0) return;
+    if (m_iw <= 0 || m_ih <= 0) {
+        // s009: no image yet -- say how to get one.
+        auto layout = create_pango_layout("No image\nFile > New (Ctrl+N)  ·  Open (Ctrl+O)");
+        layout->set_alignment(Pango::Alignment::CENTER);
+        int tw = 0, th = 0;
+        layout->get_pixel_size(tw, th);
+        cr->set_source_rgba(m_dark ? 1 : 0, m_dark ? 1 : 0, m_dark ? 1 : 0, 0.45);
+        cr->move_to((w - tw) / 2.0, (h - th) / 2.0);
+        layout->show_in_cairo_context(cr);
+        return;
+    }
 
     // The sheet on screen, snapped to device pixels.
     const double x0 = std::round(to_screen_x(0)), y0 = std::round(to_screen_y(0));
@@ -459,6 +661,7 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
         }
     draw_ants(cr, w, h);
     draw_rubber(cr);
+    draw_crop(cr, w, h);
     // s008 m4: the brush's outline at the pointer (its real size on screen).
     if (painting() && m_px >= 0 && !m_space) {
         const double r = std::max(1.0, m_brush / 2 * m_zoom);

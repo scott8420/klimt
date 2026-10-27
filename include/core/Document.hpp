@@ -66,6 +66,8 @@ constexpr std::uint8_t All      = 8;
 constexpr std::uint8_t Mask     = 15;
 }  // namespace lock
 
+struct Image;
+
 struct Layer {
     Kind          kind    = Kind::Pixel;
     std::string   name;
@@ -83,13 +85,16 @@ struct Layer {
     // POINTERS: a step's two pictures differ exactly when the pixels changed,
     // and they cost only the tiles the edit touched (docs/pixels.md 6).
     std::shared_ptr<const pixel::TileMap> pixels;
+    // s009: only on the "@image" record -- the image's size, format and
+    // resolution, shared and compared by pointer like the pixels.
+    std::shared_ptr<const Image> image;
     bool operator==(const Layer&) const = default;
 };
 
 // The image every layer's pixels share: its size and format. Set when a
-// document is made or opened (a load -- not a step). Canvas size / mode /
-// depth changes will need it in the journal; until those verbs exist it is
-// fixed for the document's life.
+// document is made or opened (a load -- not a step). s009: it is a record of
+// the store too, under kImageId, so Crop / Image Size / Canvas Size are steps
+// like any other (core/Canvas.hpp).
 struct Image {
     int           width = 0, height = 0;
     pixel::Format format;
@@ -108,6 +113,10 @@ struct Image {
 // undoes like any step, with no second journal (Scott, s007 -> s008, answer
 // 2). docs/selection.md.
 inline constexpr const char* kSelectionId = "@selection";
+// s009: THE IMAGE (size, format, resolution) under this reserved id: a Layer
+// whose `image` carries it. Apart from the tree like the selection; it can be
+// replaced, never removed.
+inline constexpr const char* kImageId = "@image";
 
 class Document {
 public:
@@ -121,6 +130,7 @@ public:
     // ── reading the tree ────────────────────────────────────────────────────
     std::size_t     count() const { return m_items.size(); }
     const Image&    image() const { return m_image; }
+    std::shared_ptr<const Image> image_ptr() const { return m_image_ptr; }
     void            set_image(const Image& im);   // only under Loading (a new / opened document)
     // An empty tile map at the image's size and format (a layer's first paint).
     pixel::TileMap  blank() const { return pixel::TileMap(m_image.format, m_image.width, m_image.height); }
@@ -174,6 +184,7 @@ private:
     std::map<Id, Layer>    m_items;
     std::optional<Layer>   m_selection;    // kSelectionId's record (s008)
     Image                  m_image;
+    std::shared_ptr<const Image> m_image_ptr = std::make_shared<const Image>();   // kImageId's value (s009)
     int                    m_next = 1;
     int                    m_strays = 0;
     int                    m_loading = 0;

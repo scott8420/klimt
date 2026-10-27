@@ -53,7 +53,10 @@ public:
     bool   fitting() const { return m_fit; }
     // The tile the view's centre is on, for ordering work (visible first).
     void   view_centre(double& x, double& y) const { x = m_cx; y = m_cy; }
-    void set_tool(const std::string& id, int variant = 0) { m_tool = id; m_variant = variant; update_cursor(); queue_draw(); }
+    void set_tool(const std::string& id, int variant = 0) {
+        if (id != "crop") m_crop = false;   // s009: the box belongs to the Crop tool
+        m_tool = id; m_variant = variant; update_cursor(); queue_draw();
+    }
 
     // ── s008: the selection on the canvas ──────────────────────────────────
     // The marching ants: the selection's outline (image coords), animated
@@ -72,8 +75,22 @@ public:
     // s008 m4: a Brush / Eraser stroke: Begin (with Shift: a straight line
     // from where the last stroke ended), Move, End. Image coords.
     enum class StrokeAt { Begin, Move, End };
-    sigc::signal<void(StrokeAt, core::select::Pt, bool)>& signal_stroke() { return m_stroke_signal; }
+    // s009 m3: the last argument is the pen's pressure, 0..1 (a mouse: 1).
+    sigc::signal<void(StrokeAt, core::select::Pt, bool, double)>& signal_stroke() { return m_stroke_signal; }
     void set_brush_size(double px) { m_brush = px; queue_draw(); }   // the outline at the pointer
+    // s009 m1: the Move tool's drag: Begin, Move, End, each with the offset
+    // from the press in WHOLE image pixels (Shift: along one axis only).
+    enum class MoveAt { Begin, Move, End };
+    sigc::signal<void(MoveAt, int, int)>& signal_move() { return m_move_signal; }
+    // s009 m2: the Crop tool's box. A drag draws it; dragging inside moves
+    // it, near an edge or corner resizes it (Shift: square). Enter or a
+    // double-click inside commits -> signal_crop (whole image pixels, may
+    // reach past the canvas); Escape or another tool clears it.
+    sigc::signal<void(core::select::Pt, core::select::Pt)>& signal_crop() { return m_crop_signal; }
+    bool has_crop() const { return m_crop; }
+    void clear_crop() { m_crop = false; m_crop_mode = CropMode::None; queue_draw(); }
+    void set_crop(double x0, double y0, double x1, double y1);   // e.g. Crop to Selection's preview
+    bool commit_crop();                                          // Enter: true if there was a box
     // s008 m3: the Eyedropper clicked at an image point; `background`: Alt.
     sigc::signal<void(int, int, bool)>& signal_pick() { return m_pick_signal; }
     // Told the zoom whenever it changes: 0.37 -> "37%".
@@ -131,8 +148,23 @@ private:
     double            m_press_x = 0, m_press_y = 0;    // screen
     sigc::signal<void(const Shape&)> m_shape_signal;
     sigc::signal<void(int, int, bool)> m_pick_signal;
-    sigc::signal<void(StrokeAt, core::select::Pt, bool)> m_stroke_signal;
+    sigc::signal<void(StrokeAt, core::select::Pt, bool, double)> m_stroke_signal;
     bool   m_stroking = false;
+    bool   m_moving = false;                           // s009: a Move drag in progress
+    // s009 m2: the crop box (image coords, x0 < x1, y0 < y1 once let go).
+    enum class CropMode { None, New, Move, Resize };
+    bool     m_crop = false;
+    double   m_cx0 = 0, m_cy0 = 0, m_cx1 = 0, m_cy1 = 0;
+    double   m_crop_from[4] = {0, 0, 0, 0};             // the box at the press
+    CropMode m_crop_mode = CropMode::None;
+    int      m_crop_edges = 0;                          // 1 left, 2 right, 4 top, 8 bottom
+    void     crop_press(double sx, double sy);
+    void     crop_drag(double sx, double sy, bool shift);
+    void     crop_release();
+    void     draw_crop(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
+    int      crop_hit(double sx, double sy) const;      // edges under the pointer; -1 inside; 0 outside
+    sigc::signal<void(core::select::Pt, core::select::Pt)> m_crop_signal;
+    sigc::signal<void(MoveAt, int, int)> m_move_signal;
     double m_brush = 30;
 };
 

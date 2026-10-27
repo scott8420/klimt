@@ -5,12 +5,12 @@ namespace klimt::core {
 const std::vector<ToolSpec>& tools() {
     static const std::vector<ToolSpec> t = {
         {"move",       "Move",        "klimt-tool-move-symbolic",       'v', 0, {},
-         "Drag a layer's pixels; arrows nudge."},
+         "Drag to move the selected layers; with a selection, just its pixels. Arrows nudge (Shift: 10 px)."},
         {"select",     "Select",      "klimt-tool-select-symbolic",     'm', 0,
          {"Rectangle", "Ellipse", "Lasso", "Wand", "Colour Range"},
          "Drag to select (the Wand: click). Shift adds, Alt subtracts, both intersect; a click deselects."},
         {"crop",       "Crop",        "klimt-tool-crop-symbolic",       'c', 0, {"Crop", "Straighten"},
-         "Crop and straighten the canvas."},
+         "Drag a box; drag inside it to move it, its edges to size it (Shift: square). Enter or double-click crops; Esc drops it."},
         {"heal",       "Heal",        "klimt-tool-heal-symbolic",       'j', 1, {"Spot", "Healing", "Patch"},
          "Paint over a blemish; Patch fills a selection."},
         {"clone",      "Clone Stamp", "klimt-tool-clone-symbolic",      's', 1, {},

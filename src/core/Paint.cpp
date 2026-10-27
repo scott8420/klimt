@@ -34,12 +34,41 @@ std::vector<select::Pt> dabs_along(select::Pt from, select::Pt to, double spacin
     return out;
 }
 
-float dab_alpha(double d, const Brush& b) {
+std::vector<Dab> dabs_along(const Dab& from, const Dab& to, const Brush& b, double& carry) {
+    std::vector<Dab> out;
+    const double dx = to.x - from.x, dy = to.y - from.y, len = std::hypot(dx, dy);
+    // The spacing at the lighter end: a pressure-thinned stroke stays solid.
+    const double sp = std::max(0.5, 2 * dab_radius(b, std::min(from.p, to.p)) * 0.25);
+    double at = sp - carry;
+    if (at < 0) at = 0;
+    while (at <= len) {
+        const double t = len > 0 ? at / len : 0;
+        out.push_back({from.x + dx * t, from.y + dy * t, static_cast<float>(from.p + (to.p - from.p) * t)});
+        at += sp;
+        if (len == 0) break;
+    }
+    carry = len - (at - sp);
+    return out;
+}
+
+double dab_radius(const Brush& b, float p) {
     const double r = std::max(0.5, b.size / 2);
+    if (!b.pressure_size) return r;
+    return std::max(0.5, r * std::clamp(static_cast<double>(p), static_cast<double>(kMinPressure), 1.0));
+}
+
+float dab_strength(const Brush& b, float p) {
+    return b.pressure_opacity ? std::clamp(p, 0.f, 1.f) : 1.f;
+}
+
+float dab_alpha(double d, const Brush& b) { return dab_alpha(d, std::max(0.5, b.size / 2), b.hardness); }
+
+float dab_alpha(double d, double r, double hardness) {
+    r = std::max(0.5, r);
     if (d >= r + 0.5) return 0.f;
     // The hard core, then a smooth falloff to the rim; the rim itself is
     // anti-aliased over one pixel.
-    const double core = std::clamp(b.hardness, 0.0, 1.0) * r;
+    const double core = std::clamp(hardness, 0.0, 1.0) * r;
     double a = 1;
     if (d > core) {
         const double t = std::clamp((d - core) / std::max(1e-6, r - core), 0.0, 1.0);
@@ -51,10 +80,17 @@ float dab_alpha(double d, const Brush& b) {
 
 pixel::TileMap new_coverage(int w, int h) { return pixel::TileMap(kCov, w, h); }
 
-pixel::TileMap add_dabs(const pixel::TileMap& cov, const Brush& b, const std::vector<select::Pt>& dabs, TileSet& touched) {
+pixel::TileMap add_dabs(const pixel::TileMap& cov, const Brush& b, const std::vector<select::Pt>& pts, TileSet& touched) {
+    std::vector<Dab> dabs;
+    dabs.reserve(pts.size());
+    for (const auto& p : pts) dabs.push_back({p.x, p.y, 1.f});
+    return add_pen_dabs(cov, b, dabs, touched);
+}
+
+pixel::TileMap add_pen_dabs(const pixel::TileMap& cov, const Brush& b, const std::vector<Dab>& dabs, TileSet& touched) {
     if (dabs.empty()) return cov;
     const int w = cov.width(), h = cov.height();
-    const double r = std::max(0.5, b.size / 2) + 1;
+    const double r = std::max(0.5, b.size / 2) + 1;   // the largest a dab can be (pressure only shrinks it)
     // Group the work per tile: each touched tile is copied once.
     std::vector<pixel::TileMap::TileRef> grid(static_cast<std::size_t>(cov.cols()) * static_cast<std::size_t>(cov.rows()));
     for (int row = 0; row < cov.rows(); ++row)
@@ -72,13 +108,15 @@ pixel::TileMap add_dabs(const pixel::TileMap& cov, const Brush& b, const std::ve
             for (std::size_t i = 0; i < kPx; ++i) buf[i] = cov_at(slot.get(), i);
             bool changed = false;
             for (const auto& p : dabs) {
-                const int x0 = std::max(cell.x, static_cast<int>(std::floor(p.x - r)));
-                const int x1 = std::min(cell.x + cell.w, static_cast<int>(std::ceil(p.x + r)));
-                const int y0 = std::max(cell.y, static_cast<int>(std::floor(p.y - r)));
-                const int y1 = std::min(cell.y + cell.h, static_cast<int>(std::ceil(p.y + r)));
+                const double pr = dab_radius(b, p.p), reach = pr + 1;
+                const float strength = dab_strength(b, p.p);
+                const int x0 = std::max(cell.x, static_cast<int>(std::floor(p.x - reach)));
+                const int x1 = std::min(cell.x + cell.w, static_cast<int>(std::ceil(p.x + reach)));
+                const int y0 = std::max(cell.y, static_cast<int>(std::floor(p.y - reach)));
+                const int y1 = std::min(cell.y + cell.h, static_cast<int>(std::ceil(p.y + reach)));
                 for (int y = y0; y < y1; ++y)
                     for (int x = x0; x < x1; ++x) {
-                        const float a = dab_alpha(std::hypot(x + 0.5 - p.x, y + 0.5 - p.y), b);
+                        const float a = dab_alpha(std::hypot(x + 0.5 - p.x, y + 0.5 - p.y), pr, b.hardness) * strength;
                         float& c = buf[static_cast<std::size_t>(y - cell.y) * kTile + static_cast<std::size_t>(x - cell.x)];
                         if (a > c) { c = a; changed = true; }
                     }
@@ -157,6 +195,12 @@ std::string refusal(const Document& d, const Document::Id& id, const Brush& b) {
 }
 
 bool stroke(DocJournal& j, Document& d, const Document::Id& id, const std::vector<select::Pt>& path, Brush b) {
+    std::vector<Dab> dabs;
+    for (const auto& p : path) dabs.push_back({p.x, p.y, 1.f});
+    return stroke_pen(j, d, id, dabs, b);
+}
+
+bool stroke_pen(DocJournal& j, Document& d, const Document::Id& id, const std::vector<Dab>& path, Brush b) {
     if (path.empty() || !refusal(d, id, b).empty()) return false;
     const auto l0 = *d.get(id);
     b.alpha_lock = (l0.locks & lock::Alpha) != 0;
@@ -164,11 +208,11 @@ bool stroke(DocJournal& j, Document& d, const Document::Id& id, const std::vecto
     pixel::TileMap cov = new_coverage(original.width(), original.height());
     pixel::TileMap cur = original;
     j.begin(b.erase ? "Eraser" : "Brush Stroke", {id});
-    double carry = b.spacing();
+    double carry = 1e9;   // the first dab lands at the first point
     for (std::size_t i = 0; i < path.size(); ++i) {
-        const auto dabs = dabs_along(path[i == 0 ? 0 : i - 1], path[i], b.spacing(), carry);
+        const auto dabs = dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, carry);
         TileSet touched = tiles_of(d.image());
-        cov = add_dabs(cov, b, dabs, touched);
+        cov = add_pen_dabs(cov, b, dabs, touched);
         cur = apply(original, cur, cov, d.selection(), b, touched);
         Layer l = *d.get(id);
         l.pixels = cur.tile_count() ? std::make_shared<const pixel::TileMap>(cur) : nullptr;

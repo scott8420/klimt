@@ -54,6 +54,11 @@ const std::vector<Command>& commands() {
             {"Deselect", "Select", "win.deselect", "", "none clear drop", ""},
             {"Inverse", "Select", "win.select-invert", "", "invert flip opposite", ""},
             {"Feather", "Select", "win.select-feather", "", "soften blur edge radius", ""},
+            {"Open Demo", "Help", "win.open-demo", "", "sample example portrait", ""},
+            // s009 m2: the Image menu.
+            {"Image Size", "Image", "win.image-size", "", "resize resample scale resolution dpi pixels", ""},
+            {"Canvas Size", "Image", "win.canvas-size", "", "extend border expand trim anchor", ""},
+            {"Crop to Selection", "Image", "win.crop-selection", "", "trim cut bounds", ""},
             {"Redo", "Edit", "win.redo", "", "again forward", "Ctrl+Shift+Z"},
             {"New Layer", "Layer", "win.layer-new", "", "add create", ""},
             {"New Group", "Layer", "win.layer-new-group", "", "folder set add", ""},

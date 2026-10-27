@@ -99,6 +99,10 @@ void Shell::update_layer_actions() {
     const auto on = [this](const char* name, bool enabled) {
         if (auto it = m_layer_acts.find(name); it != m_layer_acts.end()) it->second->set_enabled(enabled);
     };
+    // s009: with no image, the verbs that need one grey.
+    const bool img = has_image();
+    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "select-all"})
+        on(a, img);
     on("layer-duplicate", any);
     on("layer-group", any);
     on("layer-ungroup", m_layers.primary_is_group());
@@ -125,6 +129,11 @@ void Shell::update_undo_ui() {
 
 // The document in a line: the title's subtitle and the status line.
 void Shell::update_summary() {
+    if (!has_image()) {   // s009: launched with nothing open yet
+        if (m_title) adw_window_title_set_subtitle(m_title, "");
+        m_status.set_summary("No image  ·  New (Ctrl+N), Open (Ctrl+O), or Open Demo in the main menu");
+        return;
+    }
     std::size_t layers = 0, groups = 0;
     for (const auto& id : m_doc.walk()) (m_doc.is_group(id) ? groups : layers)++;
     std::string s = std::to_string(layers) + (layers == 1 ? " layer" : " layers");

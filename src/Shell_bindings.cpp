@@ -18,9 +18,11 @@ void Shell::bind_actions() {  // bindings
     // s007: the file verbs (Shell_files.cpp).
     add_action("new",     sigc::mem_fun(*this, &Shell::on_new));
     add_action("open",    sigc::mem_fun(*this, &Shell::on_open));
-    add_action("save",    sigc::mem_fun(*this, &Shell::on_save));
-    add_action("save-as", sigc::mem_fun(*this, &Shell::on_save_as));
-    add_action("export",  sigc::mem_fun(*this, &Shell::on_export));
+    // s009: held so they grey while there is no image.
+    m_layer_acts["save"]    = add_action("save",    sigc::mem_fun(*this, &Shell::on_save));
+    m_layer_acts["save-as"] = add_action("save-as", sigc::mem_fun(*this, &Shell::on_save_as));
+    m_layer_acts["export"]  = add_action("export",  sigc::mem_fun(*this, &Shell::on_export));
+    add_action("open-demo", sigc::mem_fun(*this, &Shell::open_demo));   // s009: Help > Open Demo
     // s007 m4: the view (view state: not steps).
     add_action("zoom-in",     [this] { m_canvas.zoom_in(); });
     add_action("zoom-out",    [this] { m_canvas.zoom_out(); });
@@ -36,6 +38,12 @@ void Shell::bind_actions() {  // bindings
     m_canvas.signal_shape().connect(sigc::mem_fun(*this, &Shell::on_shape));
     m_canvas.signal_pick().connect(sigc::mem_fun(*this, &Shell::on_pick));
     m_canvas.signal_stroke().connect(sigc::mem_fun(*this, &Shell::on_stroke));
+    m_canvas.signal_move().connect(sigc::mem_fun(*this, &Shell::on_move));   // s009
+    m_canvas.signal_crop().connect(sigc::mem_fun(*this, &Shell::on_crop_box));
+    // s009 m2: the Image menu (Shell_canvas.cpp).
+    m_layer_acts["image-size"]  = add_action("image-size", sigc::mem_fun(*this, &Shell::on_image_size));
+    m_layer_acts["canvas-size"] = add_action("canvas-size", sigc::mem_fun(*this, &Shell::on_canvas_size));
+    m_layer_acts["crop-selection"] = add_action("crop-selection", sigc::mem_fun(*this, &Shell::on_crop_selection));
     m_strip.signal_brush_changed().connect([this] { m_canvas.set_brush_size(m_strip.brush(m_rail.tool()).size); });
     m_layer_acts["select-feather"] = add_action("select-feather", sigc::mem_fun(*this, &Shell::on_feather));
     m_strip.signal_variant().connect([this](const std::string& id, int v) {
@@ -96,8 +104,10 @@ void Shell::bind_actions() {  // bindings
     m_journal.set_on_change([this] { update_undo_ui(); m_history.repaint(); update_title(); });
     m_history.set_on_go(sigc::mem_fun(*this, &Shell::on_history_go));
     m_layers.set_on_change([this] { on_selection(); });
-    load_demo();
-    m_saved_mark = m_journal.mark();   // the demo is "as loaded": nothing to save
+    // s009 (Scott, s008 -> s009, answer 3): Klimt starts with NO image -- the
+    // New dialog comes up (App::on_activate -> start()); the demo is under
+    // Help > Open Demo.
+    m_saved_mark = m_journal.mark();
     update_title();
 
     // ── the window's own keys ───────────────────────────────────────────────
@@ -168,6 +178,33 @@ void Shell::bind_actions() {  // bindings
         return true;
     }, false);
     m_canvas.add_controller(tab);
+
+    // s009: the arrows nudge with the Move tool (1 px; Shift: 10) -- CAPTURE
+    // on the canvas, before GTK moves the keyboard focus with them.
+    auto arrows = Gtk::EventControllerKey::create();
+    arrows->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+    arrows->signal_key_pressed().connect([this](guint keyval, guint, Gdk::ModifierType state) {
+        // s009 m2: the Crop tool's box -- Enter crops, Escape drops it.
+        if (m_rail.tool() == "crop" && m_canvas.has_crop()) {
+            if (keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) { m_canvas.commit_crop(); return true; }
+            if (keyval == GDK_KEY_Escape) { m_canvas.clear_crop(); return true; }
+        }
+        if (m_rail.tool() != "move") return false;
+        const auto mods = state & (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK | Gdk::ModifierType::ALT_MASK);
+        if (mods != Gdk::ModifierType{} && mods != Gdk::ModifierType::SHIFT_MASK) return false;
+        const int step = mods == Gdk::ModifierType::SHIFT_MASK ? 10 : 1;
+        int dx = 0, dy = 0;
+        switch (keyval) {
+            case GDK_KEY_Left:  case GDK_KEY_KP_Left:  dx = -step; break;
+            case GDK_KEY_Right: case GDK_KEY_KP_Right: dx = step;  break;
+            case GDK_KEY_Up:    case GDK_KEY_KP_Up:    dy = -step; break;
+            case GDK_KEY_Down:  case GDK_KEY_KP_Down:  dy = step;  break;
+            default: return false;
+        }
+        on_nudge(dx, dy);
+        return true;
+    }, false);
+    m_canvas.add_controller(arrows);
 
     update_undo_ui();
     update_layer_actions();

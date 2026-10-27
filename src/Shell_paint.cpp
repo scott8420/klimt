@@ -17,7 +17,8 @@ namespace klimt {
 
 namespace Pa = core::paint;
 
-void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt p, bool shift) {
+void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, double pressure) {
+    const Pa::Dab p{pt.x, pt.y, static_cast<float>(pressure)};
     using A = CanvasView::StrokeAt;
     if (at == A::Begin) {
         if (m_stroke.active) return;
@@ -28,6 +29,8 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt p, bool shift) {
         b.hardness = o.hardness / 100.0;
         b.opacity = o.opacity / 100.0;
         b.erase = erase;
+        b.pressure_size = o.pressure_size;        // s009 m3: the pen
+        b.pressure_opacity = o.pressure_opacity;
         const auto fmt = m_doc.image().format;
         const auto fg = m_rail.foreground(), bg = m_rail.background();
         b.colour = core::from_srgb(fmt, fg.r, fg.g, fg.b);
@@ -47,12 +50,12 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt p, bool shift) {
         m_stroke.current = m_stroke.original;
         m_stroke.cov = std::make_shared<const pixel::TileMap>(Pa::new_coverage(m_doc.image().width, m_doc.image().height));
         m_stroke.mask = m_doc.selection_ptr();
-        m_stroke.carry = b.spacing();
+        m_stroke.carry = 1e9;   // the first dab lands at the press
         m_journal.begin(erase ? "Eraser" : "Brush Stroke", {id});
         // Shift-click: a straight line from where the last stroke ended.
         const bool line = shift && m_stroke_last_valid && m_stroke_last_id == id;
-        const core::select::Pt from = line ? m_stroke_last : p;
-        const auto dabs = Pa::dabs_along(from, p, b.spacing(), m_stroke.carry);
+        const Pa::Dab from = line ? Pa::Dab{m_stroke_last.x, m_stroke_last.y, p.p} : p;
+        const auto dabs = Pa::dabs_along(from, p, b, m_stroke.carry);
         m_stroke.pending.insert(m_stroke.pending.end(), dabs.begin(), dabs.end());
         m_stroke.last = p;
         paint_pump();
@@ -60,7 +63,7 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt p, bool shift) {
     }
     if (!m_stroke.active) return;
     if (at == A::Move) {
-        const auto dabs = Pa::dabs_along(m_stroke.last, p, m_stroke.brush.spacing(), m_stroke.carry);
+        const auto dabs = Pa::dabs_along(m_stroke.last, p, m_stroke.brush, m_stroke.carry);
         m_stroke.pending.insert(m_stroke.pending.end(), dabs.begin(), dabs.end());
         m_stroke.last = p;
         paint_pump();
@@ -77,7 +80,7 @@ void Shell::paint_pump() {
         if (!m_stroke.ending) return;
         // The stroke is done: the gesture becomes ONE step.
         if (m_journal.in_gesture()) m_journal.commit();
-        m_stroke_last = m_stroke.last;
+        m_stroke_last = {m_stroke.last.x, m_stroke.last.y};
         m_stroke_last_id = m_stroke.id;
         m_stroke_last_valid = true;
         m_stroke = {};
@@ -90,7 +93,7 @@ void Shell::paint_pump() {
                                            current = m_stroke.current, cov = m_stroke.cov, mask = m_stroke.mask,
                                            b = m_stroke.brush](core::Jobs::Token&) -> core::Jobs::Landing {
         core::TileSet touched = core::tiles_of(im);
-        auto cov2 = std::make_shared<const pixel::TileMap>(Pa::add_dabs(*cov, b, dabs, touched));
+        auto cov2 = std::make_shared<const pixel::TileMap>(Pa::add_pen_dabs(*cov, b, dabs, touched));
         auto cur2 = std::make_shared<const pixel::TileMap>(Pa::apply(*original, *current, *cov2, mask.get(), b, touched));
         return [this, cov2, cur2] {
             m_stroke.job = 0;

@@ -1,6 +1,8 @@
 #include "core/Document.hpp"
 #include "core/Selection.hpp"   // s008: the verb table carries the selection verbs
 #include "core/Paint.hpp"       // s008 m4: and the brush
+#include "core/Move.hpp"        // s009 m1: and the Move tool
+#include "core/Canvas.hpp"      // s009 m2: Crop, Canvas Size, Image Size
 
 #include <algorithm>
 #include <set>
@@ -57,6 +59,12 @@ std::optional<Blend> blend_from_key(std::string_view key) {
 // ── the store ───────────────────────────────────────────────────────────────
 std::optional<Layer> Document::get(const Id& id) const {
     if (id == kSelectionId) return m_selection;
+    if (id == kImageId) {   // s009: the image, as a record
+        Layer v;
+        v.name = "Image";
+        v.image = m_image_ptr;
+        return v;
+    }
     const auto it = m_items.find(id);
     if (it == m_items.end()) return std::nullopt;
     return it->second;
@@ -66,6 +74,14 @@ void Document::put(const Id& id, const std::optional<Layer>& v) {
     if (m_loading == 0 && m_door && !m_door()) ++m_strays;
     if (id == kSelectionId) {   // s008: the selection, apart from the tree
         m_selection = v;
+        if (m_changed) m_changed();
+        return;
+    }
+    if (id == kImageId) {       // s009: the image -- replaced, never removed
+        if (v && v->image) {
+            m_image_ptr = v->image;
+            m_image = *v->image;
+        }
         if (m_changed) m_changed();
         return;
     }
@@ -81,6 +97,7 @@ void Document::put(const Id& id, const std::optional<Layer>& v) {
 void Document::set_image(const Image& im) {
     if (m_loading == 0) ++m_strays;   // not a user choice: only a load sets it
     m_image = im;
+    m_image_ptr = std::make_shared<const Image>(im);
     if (m_changed) m_changed();
 }
 
@@ -184,6 +201,7 @@ Document::Id Document::clip_base(const Id& id) const {
 void Document::replace(const Image& im, std::map<Id, Layer> layers, int next) {
     if (m_loading == 0) ++m_strays;   // not a user choice: only a load replaces
     m_image = im;
+    m_image_ptr = std::make_shared<const Image>(im);
     m_items = std::move(layers);
     m_selection.reset();   // a new document starts with nothing selected
     m_next = std::max(1, next);
@@ -223,6 +241,8 @@ std::string Document::check() const {
                 return id + ": pixels not at the image's size and format";
         }
     }
+    // s009: the image record is the image.
+    if (!m_image_ptr || !(*m_image_ptr == m_image)) return std::string("the image record is not the image");
     // s008: the selection's mask is at the image's size, in the mask format,
     // and holds no tile that is all unselected (that tile is absent).
     if (const auto* m = selection()) {
@@ -831,6 +851,27 @@ const std::vector<Verb>& verbs() {
         {"eraser",        [](DocJournal& j, Document& d) {
              paint::Brush b; b.size = 30; b.erase = true;
              paint::stroke(j, d, "L4", {{100, 120}, {300, 230}}, b); }},
+        // s009 m3: a pen stroke, light to heavy.
+        {"brush_pen",     [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 50; b.pressure_opacity = true; b.colour = pixel::rgba(0, 0, 1, 1);
+             paint::stroke_pen(j, d, "L5", {{40, 300, 0.1f}, {300, 200, 0.6f}, {560, 100, 1.f}}, b); }},
+        // s009 m1: the Move tool -- a layer, a group's contents, a lifted selection.
+        {"move_layer",    [](DocJournal& j, Document& d) { move::by(j, d, {"L4"}, 37, -20, pixel::rgba(1, 1, 1, 1)); }},
+        {"move_group",    [](DocJournal& j, Document& d) { move::by(j, d, {"L2"}, -300, 5, pixel::rgba(1, 1, 1, 1)); }},
+        {"move_selection", [](DocJournal& j, Document& d) { move::by(j, d, {"L4"}, 120, 60, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        // s009 m2: the canvas -- the image itself is a record, so these are steps.
+        {"crop",          [](DocJournal& j, Document& d) { canvas::crop(j, d, {50, 40, 400, 300}, pixel::rgba(1, 1, 1, 1)); }},
+        {"crop_selected", [](DocJournal& j, Document& d) { canvas::crop(j, d, {150, 120, 100, 80}, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        {"canvas_size",   [](DocJournal& j, Document& d) { canvas::canvas_size(j, d, 800, 300, 1, 2, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_selection(d, {10, 10, 100, 100}); }},
+        {"image_size",    [](DocJournal& j, Document& d) { canvas::image_size(j, d, 300, 200, 144); },
+             [](Document& d) { load_selection(d, {10, 10, 100, 100}); }},
+        {"resolution",    [](DocJournal& j, Document& d) { canvas::image_size(j, d, 600, 400, 300); }},
+        {"move_nudge",    [](DocJournal& j, Document& d) {
+             move::by(j, d, {"L4"}, 1, 0, pixel::rgba(1, 1, 1, 1), "nudge");
+             move::by(j, d, {"L4"}, 0, 10, pixel::rgba(1, 1, 1, 1), "nudge"); }},
     };
     return table;
 }

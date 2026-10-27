@@ -5,6 +5,8 @@
 #include "core/File.hpp"       // s007: documents in and out of files
 #include "core/Composite.hpp"  // s007: dirty tiles
 #include "core/Paint.hpp"      // s008: the brush
+#include "core/Move.hpp"       // s009: the Move tool
+#include "core/Canvas.hpp"     // s009: Crop, Image / Canvas Size
 #include "CanvasView.hpp"
 #include "ContextStrip.hpp"
 #include "EdgeTab.hpp"
@@ -60,6 +62,8 @@ typedef struct _AdwWindowTitle AdwWindowTitle;
 //   Files    -- New, Open, Save, Export, unsaved.        src/Shell_files.cpp (s007)
 //   Select   -- shapes, the Select menu, Fill / Delete.  src/Shell_select.cpp (s008)
 //   Paint    -- the Brush / Eraser stroke pipeline.      src/Shell_paint.cpp (s008)
+//   Move     -- the Move tool's drag, the arrow nudges.  src/Shell_move.cpp (s009)
+//   Canvas   -- Crop, Image Size, Canvas Size (jobs).    src/Shell_canvas.cpp (s009)
 //   Glue     -- the ctor + build_ui().                   src/Shell.cpp
 //
 // Finding things
@@ -76,6 +80,7 @@ class CommandPalette;
 class NewDialog;
 class NumberDialog;
 class ShortcutsDialog;
+class SizeDialog;
 
 class Shell : public Gtk::ApplicationWindow {
 public:
@@ -84,6 +89,7 @@ public:
 
     void build_ui();                             // category: glue
     void open_path(const std::string& path);     // category: files: open a file (the command line, Open)
+    void start();                                // category: files: launched with no file -- the New dialog (s009)
 
 private:
     // ── zones ──────────────────────────────────────────────────────────────
@@ -137,11 +143,27 @@ private:
     void update_select_actions();                // category: select: grey Deselect when nothing is
 
     // ── paint (s008 m4) ────────────────────────────────────────────────────
-    void on_stroke(CanvasView::StrokeAt at, core::select::Pt p, bool shift);   // category: paint: the canvas's stroke
+    void on_stroke(CanvasView::StrokeAt at, core::select::Pt p, bool shift, double pressure);   // category: paint: the canvas's stroke
     void paint_pump();                           // category: paint: one job at a time; commit at the end
+
+    // ── move (s009 m1) ─────────────────────────────────────────────────────
+    void on_move(CanvasView::MoveAt at, int dx, int dy);   // category: move: the Move tool's drag
+    void on_nudge(int dx, int dy);               // category: move: the arrow keys with the Move tool
+    void move_pump();                            // category: move: one job at a time; commit at the end
+    pixel::Px background_px() const;             // category: move: the background colour, the document's format
+
+    // ── canvas (s009 m2) ───────────────────────────────────────────────────
+    using CanvasPlan = std::function<std::optional<core::canvas::Reshape>(const core::canvas::Before&, core::Jobs::Token&)>;
+    void run_canvas_job(const std::string& label, CanvasPlan plan);   // category: canvas: plan on a worker, land as one step
+    void on_crop_box(core::select::Pt a, core::select::Pt b);          // category: canvas: the Crop tool's box, committed
+    void on_crop_selection();                    // category: canvas: Image > Crop to Selection
+    void on_image_size();                        // category: canvas: Image > Image Size (the dialog)
+    void on_canvas_size();                       // category: canvas: Image > Canvas Size (the dialog)
 
     // ── helpers ────────────────────────────────────────────────────────────
     void load_demo();                             // category: helper: a demo document, LOADED (not undoable)
+    void open_demo();                             // category: files: Help > Open Demo (asks about unsaved changes)
+    bool has_image() const { return m_doc.image().width > 0 && m_doc.image().height > 0; }
     void on_selection();                          // category: helper: the Layers selection moved -> Properties, actions, status
     void update_layer_actions();                  // category: helper: grey the layer verbs by the selection
     void update_undo_ui();                        // category: helper: Undo / Redo say what they would do
@@ -199,10 +221,11 @@ private:
     std::unique_ptr<CommandPalette>  m_palette;   // same lifetime stone as About
     std::unique_ptr<NewDialog>       m_new;       // s007: same again
     std::unique_ptr<NumberDialog>    m_feather;   // s008
+    std::unique_ptr<SizeDialog>      m_image_size, m_canvas_size;   // s009
 
     // ── the file (s007) ────────────────────────────────────────────────────
     std::string        m_path;                 // the .klimt this document saves to; "" = never saved
-    std::string        m_name = "Demo";        // what the title says ("photo.png", "Untitled")
+    std::string        m_name = "No Image";    // what the title says ("photo.png", "Untitled"); s009: none at start
     std::string        m_folder;               // where the last chooser was (view state)
     std::uint64_t      m_saved_mark = 0;       // m_journal.mark() when it last matched a file
     core::Jobs::Id     m_file_job = 0;         // the open / save / export in flight
@@ -213,8 +236,8 @@ private:
         core::Document::Id  id;
         core::paint::Brush  brush;
         std::shared_ptr<const pixel::TileMap> original, current, cov, mask;
-        std::vector<core::select::Pt> pending;      // dabs not yet painted
-        core::select::Pt    last;
+        std::vector<core::paint::Dab> pending;      // dabs not yet painted
+        core::paint::Dab    last;
         double              carry = 0;
         core::Jobs::Id      job = 0;
     };
@@ -222,6 +245,24 @@ private:
     core::select::Pt   m_stroke_last;              // Shift-click draws from here
     core::Document::Id m_stroke_last_id;
     bool               m_stroke_last_valid = false;
+
+    // ── the move in progress (s009 m1): a drag (a gesture) or a nudge ───────
+    struct Move {
+        bool                active = false, ending = false, gesture = false;
+        std::shared_ptr<const core::move::Plan> plan;
+        int                 want_x = 0, want_y = 0;   // the offset asked for
+        int                 done_x = 0, done_y = 0;   // the offset the layers hold
+        core::Jobs::Id      job = 0;
+    };
+    Move               m_move;
+    struct Nudges {                                    // a run of arrow presses
+        std::shared_ptr<const core::move::Plan> plan;
+        std::vector<core::Document::Id> sel;
+        std::map<core::Document::Id, std::shared_ptr<const pixel::TileMap>> landed;
+        std::shared_ptr<const pixel::TileMap> mask;
+        int x = 0, y = 0;
+    };
+    Nudges             m_nudge;
 
     // ── the ants (s008) ────────────────────────────────────────────────────
     std::shared_ptr<const pixel::TileMap> m_ants_for;   // the mask the canvas's ants are of

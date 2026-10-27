@@ -97,6 +97,9 @@ void selftest_files(const std::function<void(const std::string&, bool, const std
 void selftest_dirty(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_select(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_paint(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_move(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_canvas(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_pen(const std::function<void(const std::string&, bool, const std::string&)>& check);
 
 int main() {
     std::cout << "klimt_selftest -- undo, layers, jobs, recents, textmap, shortcuts\n";
@@ -303,6 +306,8 @@ int main() {
             for (const auto& id : d.walk()) out.emplace_back(id, *d.get(id));
             // s008: the selection is a record too (apart from the tree).
             out.emplace_back(core::kSelectionId, d.get(core::kSelectionId).value_or(Layer{}));
+            // s009: and so is the image (Crop, Canvas / Image Size).
+            out.emplace_back(core::kImageId, *d.get(core::kImageId));
             return out;
         };
         // The panel, flat: "Top,Group[A,B],Background" -- a group's contents in [].
@@ -1193,6 +1198,9 @@ int main() {
     selftest_dirty([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_select([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_paint([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_move([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_canvas([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_pen([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
 
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";

@@ -1,4 +1,5 @@
 #include "Shell.hpp"
+#include <glibmm/main.h>
 #include "NewDialog.hpp"
 #include "Log.hpp"
 
@@ -128,6 +129,35 @@ bool Shell::on_close_request() {
 }
 
 // ── New ─────────────────────────────────────────────────────────────────────
+// s009: launched without a file: the New dialog, once the window is up.
+void Shell::start() {
+    if (has_image()) return;
+    Glib::signal_idle().connect_once([this] { if (!has_image()) on_new(); });
+}
+
+// s009: Help > Open Demo -- the demo document in place of this one.
+void Shell::open_demo() {
+    if (file_job_busy()) return;
+    ask_unsaved("opening the demo", [this] {
+        {
+            core::Document::Loading load(m_doc);
+            m_doc.replace({}, {}, 1);
+        }
+        m_layers.forget_view();
+        load_demo();
+        m_journal.clear();
+        m_saved_mark = m_journal.mark();
+        m_path.clear();
+        m_name = "Demo";
+        m_canvas.set_document(m_doc.image().width, m_doc.image().height);
+        m_dirty = {};
+        m_canvas.fit();
+        update_title();
+        update_summary();
+        update_layer_actions();
+    });
+}
+
 void Shell::on_new() {
     if (file_job_busy()) return;
     ask_unsaved("making a new image", [this] {
@@ -189,12 +219,14 @@ void Shell::open_path(const std::string& path) {
 
 // ── Save ────────────────────────────────────────────────────────────────────
 void Shell::on_save() {
+    if (!has_image()) { toast("No image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     if (m_path.empty()) { on_save_as(); return; }
     if (file_job_busy()) return;
     save_to(m_path);
 }
 
 void Shell::on_save_as() {
+    if (!has_image()) { toast("No image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     if (file_job_busy()) return;
     auto dlg = Gtk::FileDialog::create();
     dlg->set_title("Save As");
@@ -246,6 +278,7 @@ void Shell::save_to(const std::string& path, std::function<void()> then) {
 
 // ── Export ──────────────────────────────────────────────────────────────────
 void Shell::on_export() {
+    if (!has_image()) { toast("No image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     if (file_job_busy()) return;
     auto dlg = Gtk::FileDialog::create();
     dlg->set_title("Export");

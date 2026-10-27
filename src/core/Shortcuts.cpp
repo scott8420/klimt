@@ -139,6 +139,11 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"General", "win.quit",          {"<Ctrl>q"}, "", "Quit"},
 
         // ── Layer (s003) ──────────────────────────────────────────────────────
+        // ── Image (s009 m2) -- the Crop tool's keys.
+        {"Image", "win.image-size",  {"<Ctrl><Alt>i"}, "", "Image Size"},
+        {"Image", "win.canvas-size", {"<Ctrl><Alt>c"}, "", "Canvas Size"},
+        {"Image", "", {}, "Crop tool: Enter  /  double-click", "Crop to the box"},
+        {"Image", "", {}, "Crop tool: Escape", "Drop the box"},
         {"Layer", "win.layer-new",       {"<Ctrl><Shift>n"}, "", "New layer above the selection"},
         {"Layer", "win.layer-duplicate", {"<Ctrl>j"}, "", "Duplicate the selection"},
         {"Layer", "win.layer-group",     {"<Ctrl>g"}, "", "Group the selection"},
@@ -165,7 +170,10 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Drag a layer (or the selection)",
          "Move it -- the line shows above / below; a lit group takes it inside"},
     };
-    // ── Paint (s008 m4) -- after Mouse, A-Z.
+    // ── Move (s009 m1) -- after Mouse, A-Z.
+    reg.push_back({"Move", "", {}, "Move tool: drag  /  Shift+drag", "Move the selected layers -- with a selection, just its pixels / along one axis"});
+    reg.push_back({"Move", "", {}, "Arrows  /  Shift+Arrows", "Move tool: nudge 1 px / 10 px"});
+    // ── Paint (s008 m4) -- after Move, A-Z.
     reg.push_back({"Paint", "", {}, "[  /  ]", "Brush / Eraser smaller / bigger"});
     reg.push_back({"Paint", "", {}, "X  /  D", "Swap the colours / black and white"});
     // ── Select (s008) -- between Mouse and Tools, A-Z.

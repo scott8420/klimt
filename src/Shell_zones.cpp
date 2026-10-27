@@ -248,6 +248,11 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     sel->append("Deselect", "win.deselect");
     sel->append("Inverse", "win.select-invert");
     sel->append("Feather…", "win.select-feather");
+    // s009 m2: the Image menu.
+    auto image = Gio::Menu::create();
+    image->append("Image Size…", "win.image-size");
+    image->append("Canvas Size…", "win.canvas-size");
+    image->append("Crop to Selection", "win.crop-selection");
     auto view = Gio::Menu::create();
     view->append("Zoom In", "win.zoom-in");
     view->append("Zoom Out", "win.zoom-out");
@@ -255,6 +260,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     view->append("Actual Size (100%)", "win.zoom-actual");
     view->append("Hide / Show Panels", "win.toggle-panels");
     auto sub = Gio::Menu::create();
+    sub->append_submenu("Image", image);
     sub->append_submenu("Layer", layer);
     sub->append_submenu("Select", sel);
     sub->append_submenu("View", view);
@@ -269,6 +275,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
 
     auto app = Gio::Menu::create();
     app->append("Find a Command", "win.command-palette");
+    app->append("Open Demo", "win.open-demo");   // s009: the demo no longer opens at launch
     app->append("Keyboard Shortcuts", "win.shortcuts");
     app->append("About Klimt", "win.about");
     app->append("Quit", "win.quit");

@@ -22,7 +22,10 @@ public:
     struct Wand { int tolerance = 32; bool contiguous = true; bool all_layers = false; };
     const Wand& wand() const { return m_wand; }
     // s008 m4: the Brush's and the Eraser's own options (each remembers).
-    struct BrushOpts { int size = 30; int hardness = 80; int opacity = 100; };
+    struct BrushOpts {
+        int size = 30; int hardness = 80; int opacity = 100;
+        bool pressure_size = true, pressure_opacity = false;   // s009 m3: what the pen's pressure drives
+    };
     BrushOpts brush(const std::string& tool) const;
     void set_brush_size(const std::string& tool, int size);   // [ and ] -- the strip follows
     sigc::signal<void()>& signal_brush_changed() { return m_brush_signal; }

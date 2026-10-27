@@ -47,7 +47,9 @@ void App::on_startup() {
 }
 
 void App::on_activate() {
-    ensure_shell()->present();
+    Shell* shell = ensure_shell();
+    shell->present();
+    shell->start();   // s009: no file given -- the New dialog
 }
 
 void App::on_open(const type_vec_files& files, const Glib::ustring&) {
