@@ -8,6 +8,7 @@
 #include <bit>
 #include <cstdio>
 #include <cstring>
+#include <tuple>
 #include <filesystem>
 #include <unordered_map>
 
@@ -151,7 +152,10 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
 
         const json& layers = doc.at("layers");
         std::size_t total = 0, done = 0;
-        for (const auto& l : layers) if (l.contains("tiles")) total += l.at("tiles").size();
+        for (const auto& l : layers) {
+            if (l.contains("tiles")) total += l.at("tiles").size();
+            if (l.contains("outside")) total += l.at("outside").size();
+        }
         for (const auto& l : layers) {
             const std::string id = l.at("id").get<std::string>();
             if (!good_id(id) || c.layers.count(id)) { error = "a damaged Klimt file (layer id \"" + id + "\")"; return std::nullopt; }
@@ -171,13 +175,24 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             if (!blend) { error = "a blend mode this Klimt doesn't know"; return std::nullopt; }
             L.blend = *blend;
             L.clipped = l.value("clipped", false);
-            if (l.contains("tiles") && L.kind == Kind::Pixel) {
+            if ((l.contains("tiles") || l.contains("outside")) && L.kind == Kind::Pixel) {
                 std::vector<P::TileMap::TileRef> grid(static_cast<std::size_t>(cols) * static_cast<std::size_t>(rows));
-                for (const auto& t : l.at("tiles")) {
+                P::TileMap::Outside outside;   // s010: the pixels beyond the image
+                const json none = json::array();
+                const json& in_list = l.contains("tiles") ? l.at("tiles") : none;
+                const json& out_list = l.contains("outside") ? l.at("outside") : none;
+                for (int pass = 0; pass < 2; ++pass)
+                for (const auto& t : pass == 0 ? in_list : out_list) {
                     if (p.stop()) { error = "cancelled"; return std::nullopt; }
                     const int col = t.at(0).get<int>(), row = t.at(1).get<int>();
                     const std::string ref = t.at(2).get<std::string>();
-                    if (col < 0 || row < 0 || col >= cols || row >= rows) { error = "a damaged Klimt file (a tile outside the image)"; return std::nullopt; }
+                    if (pass == 0 && (col < 0 || row < 0 || col >= cols || row >= rows)) { error = "a damaged Klimt file (a tile outside the image)"; return std::nullopt; }
+                    // An outside cell is one the image doesn't wholly cover, within reach.
+                    if (pass == 1 && (std::abs(col) > 1'200'000 || std::abs(row) > 1'200'000 ||
+                                      (col >= 0 && row >= 0 && (col + 1) * P::kTile <= c.image.width && (row + 1) * P::kTile <= c.image.height))) {
+                        error = "a damaged Klimt file (an outside tile inside the image)";
+                        return std::nullopt;
+                    }
                     P::TileMap::TileRef tile;
                     if (ref.rfind("u:", 0) == 0) {
                         auto px = unhex(ref.substr(2));
@@ -199,11 +214,13 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                         tile = P::Tile::from_bytes(f, std::move(bytes));
                         loaded[ref] = tile;
                     }
-                    grid[static_cast<std::size_t>(row) * static_cast<std::size_t>(cols) + static_cast<std::size_t>(col)] = tile;
+                    if (pass == 0) grid[static_cast<std::size_t>(row) * static_cast<std::size_t>(cols) + static_cast<std::size_t>(col)] = tile;
+                    else if (tile) outside[{col, row}] = tile;
                     ++done;
                     if (total && (done & 15) == 0) p.at(static_cast<double>(done) / static_cast<double>(total));
                 }
-                L.pixels = std::make_shared<const P::TileMap>(P::TileMap::from_tiles(f, c.image.width, c.image.height, std::move(grid)));
+                L.pixels = std::make_shared<const P::TileMap>(
+                    P::TileMap::from_tiles(f, c.image.width, c.image.height, std::move(grid)).with_outside(std::move(outside)));
             }
             c.layers[id] = std::move(L);
         }
@@ -286,14 +303,18 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
                   {"clipped", L.clipped}};
         if (L.pixels && L.kind == Kind::Pixel) {
             json tiles = json::array();
+            json outside = json::array();   // s010: the pixels beyond the image
+            std::vector<std::tuple<int, int, P::TileMap::TileRef, bool>> all;
             for (int row = 0; row < L.pixels->rows(); ++row)
-                for (int col = 0; col < L.pixels->cols(); ++col) {
-                    const auto t = L.pixels->tile(col, row);
-                    if (!t) continue;
+                for (int col = 0; col < L.pixels->cols(); ++col)
+                    if (auto t = L.pixels->tile(col, row)) all.emplace_back(col, row, t, false);
+            for (const auto& [cell, t] : L.pixels->outside_tiles()) all.emplace_back(cell.first, cell.second, t, true);
+            for (const auto& [col, row, t, out] : all) {
+                    json& list = out ? outside : tiles;
                     if (t->is_uniform()) {
                         std::vector<std::uint8_t> px(t->data(), t->data() + t->bytes());
                         to_little(f, px.data(), px.size());
-                        tiles.push_back({col, row, "u:" + hex(px.data(), px.size())});
+                        list.push_back({col, row, "u:" + hex(px.data(), px.size())});
                         continue;
                     }
                     auto it = named.find(t.get());
@@ -308,9 +329,10 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
                         if (!add(name, data, t->bytes(), ZIP_CM_DEFLATE, 1)) { error = zip_strerror(z); return false; }
                         it = named.emplace(t.get(), name).first;
                     }
-                    tiles.push_back({col, row, it->second});
+                    list.push_back({col, row, it->second});
                 }
             l["tiles"] = std::move(tiles);
+            if (!outside.empty()) l["outside"] = std::move(outside);
         }
         layers.push_back(std::move(l));
     }

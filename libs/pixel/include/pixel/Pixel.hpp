@@ -16,7 +16,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace klimt::pixel {
@@ -113,9 +115,21 @@ struct Rect {
 // IMMUTABLE and cheap to copy (the grid is shared until an edit). Absent
 // tiles are fully transparent. Every edit returns a NEW map that shares
 // each tile it didn't touch.
+//
+// s010 -- PIXELS BEYOND THE IMAGE. A layer may hold pixels outside the
+// width x height rectangle (what a move pushed off the canvas; what a crop
+// kept). They live in OUTSIDE tiles, sparse, keyed by the cell (col, row) on
+// the same 256 grid anchored at the image's (0, 0) -- col / row may be
+// negative, or the image's own edge cells (for the part of an edge cell past
+// the image). An outside tile's pixels INSIDE the image mean nothing; a grid
+// tile's pixels outside it mean nothing. Everything that works on the image
+// (the compositor, painting, selections) reads the grid as before; edits
+// made with fill / paint / with_tile / with_grid keep the outside tiles.
 class TileMap {
 public:
     using TileRef = std::shared_ptr<const Tile>;
+    using Cell    = std::pair<int, int>;               // (col, row)
+    using Outside = std::map<Cell, TileRef>;
     TileMap() = default;
     TileMap(const Format& f, int width, int height);
 
@@ -126,9 +140,21 @@ public:
     int rows() const { return (m_h + kTile - 1) / kTile; }
 
     TileRef tile(int col, int row) const;  // nullptr: transparent
-    Px get(int x, int y) const;            // outside or absent: transparent
-    std::size_t tile_count() const;        // tiles actually held
+    // Any pixel: inside the image from the grid, outside it from the
+    // outside tiles (s010). Absent: transparent.
+    Px get(int x, int y) const;
+    std::size_t tile_count() const;        // tiles actually held (grid + outside)
     std::size_t bytes() const;             // memory the held tiles use
+
+    // s010 -- the pixels beyond the image.
+    TileRef outside(int col, int row) const;           // nullptr: none there
+    const Outside& outside_tiles() const;               // every outside tile held
+    bool has_outside() const { return m_over && !m_over->empty(); }
+    TileMap with_outside(Outside o) const;              // the same grid, these outside tiles (nullptrs dropped)
+    TileMap without_outside() const { return with_outside({}); }
+    // The same map (size, format, outside tiles) with its grid replaced --
+    // what an edit that rebuilt the image's tiles lands through.
+    TileMap with_grid(std::vector<TileRef> grid) const;
 
     TileMap with_tile(int col, int row, TileRef t) const;
     // s007 -- a map from its whole grid at once (cols * rows, row-major; a
@@ -157,6 +183,10 @@ private:
     Format m_format;
     int    m_w = 0, m_h = 0;
     std::shared_ptr<const std::vector<TileRef>> m_grid;   // cols * rows
+    std::shared_ptr<const Outside>              m_over;   // s010: nullptr = none
 };
+
+// Floor division for cells: the cell holding pixel coordinate v (v may be negative).
+inline int cell_of(int v) { return v >= 0 ? v / kTile : -((-v + kTile - 1) / kTile); }
 
 }  // namespace klimt::pixel

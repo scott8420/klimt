@@ -157,6 +157,7 @@ private:
     void run_canvas_job(const std::string& label, CanvasPlan plan);   // category: canvas: plan on a worker, land as one step
     void on_crop_box(core::select::Pt a, core::select::Pt b);          // category: canvas: the Crop tool's box, committed
     void on_crop_selection();                    // category: canvas: Image > Crop to Selection
+    void on_reveal_all();                        // category: canvas: Image > Reveal All (s010)
     void on_image_size();                        // category: canvas: Image > Image Size (the dialog)
     void on_canvas_size();                       // category: canvas: Image > Canvas Size (the dialog)
 

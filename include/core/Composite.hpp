@@ -71,6 +71,10 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
 // One tile of the composite for the screen: Cairo ARGB32 (premultiplied,
 // native-endian), `w` x `h` = the tile's part inside the image (an edge
 // tile is smaller), rows of w.
+// s010 m4: a tile's picture at half size -- each output pixel the mean of a
+// 2 x 2 block (Cairo's ARGB32 is premultiplied, so a plain mean is right).
+// w x h in, ceil(w / 2) x ceil(h / 2) out. The canvas's mip levels.
+void argb_half(const std::vector<std::uint32_t>& in, int w, int h, std::vector<std::uint32_t>& out, int& ow, int& oh);
 void composite_tile_argb(const Image& im, const Layers& layers, int col, int row,
                          std::vector<std::uint32_t>& out, int& w, int& h);
 

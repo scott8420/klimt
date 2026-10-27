@@ -60,8 +60,17 @@ void selftest_move(const Check& check) {
                 }
         }
         check("move: shifted copies every pixel to (x+dx, y+dy), across seams", ok, "");
+        // s010: slid wholly off, the image holds nothing -- the pixels wait beyond it.
         const auto gone = M::shifted(m, 700, 0, P::transparent());
-        check("move: slid wholly off, nothing is held", gone.tile_count() == 0, std::to_string(gone.tile_count()));
+        bool none_in = true;
+        for (int r = 0; r < gone.rows(); ++r) for (int c = 0; c < gone.cols(); ++c) if (gone.tile(c, r)) none_in = false;
+        check("move: slid wholly off, nothing inside the image", none_in, "");
+        check("move: ...but the pixels are kept beyond it", gone.has_outside() && gone.get(700 + 37, 11) == m.get(37, 11), "");
+        const auto back = M::shifted(gone, -700, 0, P::transparent());
+        bool same = !back.has_outside();
+        for (int y = 0; y < 520 && same; y += 3)
+            for (int x = 0; x < 700 && same; x += 5) same = back.get(x, y) == m.get(x, y);
+        check("move: slid back, every pixel is home and nothing waits outside", same, "");
         const auto uni = M::shifted(P::TileMap(f, 768, 512).fill({0, 0, 768, 512}, P::rgba(0, 1, 0, 1)), 256, 0, P::transparent());
         check("move: a whole tile of one colour stays uniform", uni.tile(2, 1) && uni.tile(2, 1)->is_uniform() && !uni.tile(0, 0), "");
         const P::Format nf{P::Depth::U8, P::Mode::RGB, false};

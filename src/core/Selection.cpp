@@ -537,7 +537,7 @@ TileMap through(const TileMap& layer, const TileMap* mask,
             // colour is a uniform tile.
             slot = collapsed(wr.freeze());
         }
-    return TileMap::from_tiles(f, layer.width(), layer.height(), std::move(grid));
+    return layer.with_grid(std::move(grid));   // s010: keeps the pixels beyond the image
 }
 }  // namespace
 

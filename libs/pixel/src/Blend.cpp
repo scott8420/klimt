@@ -10,6 +10,10 @@ namespace {
 float clamp01(float v) { return std::clamp(v, 0.f, 1.f); }
 
 // ── separable B(cb, cs), straight colours ───────────────────────────────────
+// s010 m3: a template, so each mode's loop is compiled with its own formula
+// (the switch out of the per-pixel loop); sep() keeps the runtime form.
+template <Blend m>
+inline float sep_t(float b, float s);
 float sep(Blend m, float b, float s) {
     switch (m) {
         case Blend::Multiply:    return b * s;
@@ -38,6 +42,28 @@ float sep(Blend m, float b, float s) {
         case Blend::PinLight:    return s <= 0.5f ? std::min(b, 2 * s) : std::max(b, 2 * s - 1);
         case Blend::HardMix:     return b + s >= 1 ? 1.f : 0.f;
         default:                 return s;   // Normal, Dissolve
+    }
+}
+
+template <Blend m>
+inline float sep_t(float b, float s) { return sep(m, b, s); }   // m is a constant: the switch folds away
+
+// One separable mode over a span, the general formula (as blend_span's).
+template <Blend m>
+void sep_span(const float* src, float* dst, int n, float opacity) {
+    for (int i = 0; i < n; ++i) {
+        const float* s = src + 4 * i;
+        float* d = dst + 4 * i;
+        const float as = s[3] * opacity;
+        if (as <= 0) continue;
+        const float ab = d[3];
+        const float inv_s = 1.f / s[3];
+        const float inv_b = ab > 0 ? 1.f / ab : 0.f;
+        for (int c = 0; c < 3; ++c) {
+            const float cs = s[c] * inv_s, cb = d[c] * inv_b;
+            d[c] = cs * as * (1 - ab) + cb * ab * (1 - as) + as * ab * sep_t<m>(cb, cs);
+        }
+        d[3] = as + ab * (1 - as);
     }
 }
 
@@ -77,6 +103,31 @@ float dither(int x, int y) {
 void blend_span(Blend mode, const float* src, float* dst, int n, float opacity, int x0, int y) {
     opacity = clamp01(opacity);
     if (opacity <= 0) return;
+    // s010 m3: Normal is source-over, premultiplied -- the same formula as
+    // below with B(cb, cs) = cs, without the divide and multiply back.
+    if (mode == Blend::Normal) {
+        for (int i = 0; i < n; ++i) {
+            const float* s = src + 4 * i;
+            const float as = s[3] * opacity;
+            if (as <= 0) continue;
+            float* d = dst + 4 * i;
+            const float k = 1 - as;
+            d[0] = s[0] * opacity + d[0] * k;
+            d[1] = s[1] * opacity + d[1] * k;
+            d[2] = s[2] * opacity + d[2] * k;
+            d[3] = as + d[3] * k;
+        }
+        return;
+    }
+    switch (mode) {   // the separable modes: a loop each
+#define KLIMT_SEP(M) case Blend::M: sep_span<Blend::M>(src, dst, n, opacity); return;
+        KLIMT_SEP(Multiply) KLIMT_SEP(Screen) KLIMT_SEP(Overlay) KLIMT_SEP(Darken) KLIMT_SEP(Lighten)
+        KLIMT_SEP(ColorDodge) KLIMT_SEP(ColorBurn) KLIMT_SEP(HardLight) KLIMT_SEP(SoftLight) KLIMT_SEP(Difference)
+        KLIMT_SEP(Exclusion) KLIMT_SEP(LinearBurn) KLIMT_SEP(LinearDodge) KLIMT_SEP(Subtract) KLIMT_SEP(Divide)
+        KLIMT_SEP(VividLight) KLIMT_SEP(LinearLight) KLIMT_SEP(PinLight) KLIMT_SEP(HardMix)
+#undef KLIMT_SEP
+        default: break;
+    }
     for (int i = 0; i < n; ++i) {
         const float* s = src + 4 * i;
         float* d = dst + 4 * i;

@@ -1,6 +1,7 @@
 // klimt_selftest -- the canvas (s009 m2): reframed maps, the resampler, and
 // Crop / Canvas Size / Image Size as steps (the image a record of the store).
 #include "core/Canvas.hpp"
+#include "core/Composite.hpp"
 #include "core/Document.hpp"
 #include "core/Selection.hpp"
 
@@ -93,6 +94,20 @@ void selftest_canvas(const Check& check) {
         check("canvas: a cancelled resample is nothing", cancelled, "");
         check("canvas: anchors", C::anchor_offset(100, 300, 0) == 0 && C::anchor_offset(100, 300, 1) == 100 &&
                                  C::anchor_offset(100, 300, 2) == 200 && C::anchor_offset(300, 100, 1) == -100, "");
+    }
+
+    {
+        // s010 m4: the canvas's mips -- a 2 x 2 mean of premultiplied ARGB.
+        std::vector<std::uint32_t> in = {0xff000000u, 0xffffffffu, 0x00000000u, 0x80800000u,
+                                         0xff000000u, 0xffffffffu, 0x00000000u, 0x80800000u,
+                                         0xff102030u, 0xff102030u, 0xff102030u, 0x00000000u};   // 4 x 3
+        std::vector<std::uint32_t> out;
+        int ow = 0, oh = 0;
+        core::argb_half(in, 4, 3, out, ow, oh);
+        check("canvas: a mip is half the size, rounded up", ow == 2 && oh == 2 && out.size() == 4, "");
+        check("canvas: each mip pixel is its block's mean", out.size() == 4 && out[0] == 0xff808080u && out[1] == 0x40400000u &&
+                                                           out[2] == 0xff102030u && (out[3] >> 24) == 0x80u,
+              out.size() == 4 ? std::to_string(out[1]) : "");
     }
 
     std::cout << "\n-- canvas: Crop (s009) --\n";

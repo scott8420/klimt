@@ -181,7 +181,7 @@ pixel::TileMap apply(const pixel::TileMap& original, const pixel::TileMap& curre
                 t = pixel::Tile::from_bytes(f, std::vector<std::uint8_t>(t->data(), t->data() + t->bytes()));
             slot = t;
         }
-    return pixel::TileMap::from_tiles(f, current.width(), current.height(), std::move(grid));
+    return current.with_grid(std::move(grid));   // s010: keeps the pixels beyond the image
 }
 
 std::string refusal(const Document& d, const Document::Id& id, const Brush& b) {

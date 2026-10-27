@@ -21,6 +21,8 @@ public:
     // s008 m3: the Magic Wand's options (view state, remembered).
     struct Wand { int tolerance = 32; bool contiguous = true; bool all_layers = false; };
     const Wand& wand() const { return m_wand; }
+    // s010: the Crop tool's "Delete cropped pixels" (off: they're kept beyond the image).
+    bool crop_deletes() const { return m_crop_delete; }
     // s008 m4: the Brush's and the Eraser's own options (each remembers).
     struct BrushOpts {
         int size = 30; int hardness = 80; int opacity = 100;
@@ -35,6 +37,7 @@ public:
 private:
     std::map<std::string, int> m_variant;
     Wand m_wand;
+    bool m_crop_delete = false;
     std::map<std::string, BrushOpts> m_brush;
     std::string m_shown;                                      // the tool the strip shows
     sigc::signal<void()> m_brush_signal;

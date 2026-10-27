@@ -287,18 +287,25 @@ void CanvasView::set_tiles(const std::vector<Tile>& tiles) {
         Held& h = m_grid[static_cast<std::size_t>(t.row) * static_cast<std::size_t>(m_cols) + static_cast<std::size_t>(t.col)];
         // Cairo's own memory, the tile's rows copied in (its stride may be
         // wider than w * 4).
-        auto surf = Cairo::ImageSurface::create(Cairo::Surface::Format::ARGB32, t.w, t.h);
-        surf->flush();
-        unsigned char* dst = surf->get_data();
-        const int stride = surf->get_stride();
-        for (int y = 0; y < t.h; ++y)
-            std::memcpy(dst + static_cast<std::size_t>(y) * static_cast<std::size_t>(stride),
-                        t.argb->data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(t.w),
-                        static_cast<std::size_t>(t.w) * 4);
-        surf->mark_dirty();
+        const auto surface_of = [](const std::vector<std::uint32_t>& px, int w, int hh) {
+            auto surf = Cairo::ImageSurface::create(Cairo::Surface::Format::ARGB32, w, hh);
+            surf->flush();
+            unsigned char* dst = surf->get_data();
+            const int stride = surf->get_stride();
+            for (int y = 0; y < hh; ++y)
+                std::memcpy(dst + static_cast<std::size_t>(y) * static_cast<std::size_t>(stride),
+                            px.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(w),
+                            static_cast<std::size_t>(w) * 4);
+            surf->mark_dirty();
+            return surf;
+        };
         h.w = t.w;
         h.h = t.h;
-        h.surface = std::move(surf);
+        h.surface = surface_of(*t.argb, t.w, t.h);
+        h.mips.clear();
+        for (const auto& m : t.mips)
+            if (m.argb && m.w > 0 && m.h > 0 && m.argb->size() >= static_cast<std::size_t>(m.w) * static_cast<std::size_t>(m.h))
+                h.mips.push_back(surface_of(*m.argb, m.w, m.h));
     }
     queue_draw();
 }
@@ -640,6 +647,9 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     const int r0 = std::max(0, static_cast<int>(std::floor(((vy0 - y0) / m_zoom) / kTile)));
     const int r1 = std::min(m_rows - 1, static_cast<int>(std::floor(((vy1 - y0) / m_zoom) / kTile)));
     const auto filter = m_zoom < 1 ? Cairo::SurfacePattern::Filter::GOOD : Cairo::SurfacePattern::Filter::NEAREST;
+    // s010 m4: which mip: 1/2^level >= zoom (level 0: the tile itself).
+    int level = 0;
+    while (level < kMips && std::ldexp(1.0, -(level + 1)) >= m_zoom - 1e-9) ++level;
     for (int row = r0; row <= r1; ++row)
         for (int col = c0; col <= c1; ++col) {
             const Held& t = m_grid[static_cast<std::size_t>(row) * static_cast<std::size_t>(m_cols) + static_cast<std::size_t>(col)];
@@ -647,12 +657,21 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
             const double tx0 = std::round(to_screen_x(col * kTile)), ty0 = std::round(to_screen_y(row * kTile));
             const double tx1 = std::round(to_screen_x(col * kTile + t.w)), ty1 = std::round(to_screen_y(row * kTile + t.h));
             if (tx1 <= tx0 || ty1 <= ty0) continue;
+            // s010 m4: zoomed out, the mip nearest above the zoom (never
+            // scaled down more than 2x), not the whole tile.
+            Cairo::RefPtr<Cairo::ImageSurface> src = t.surface;
+            int sw = t.w, sh = t.h;
+            if (level > 0 && !t.mips.empty()) {
+                src = t.mips[static_cast<std::size_t>(std::min<int>(level, static_cast<int>(t.mips.size())) - 1)];
+                sw = src->get_width();
+                sh = src->get_height();
+            }
             cr->save();
             cr->rectangle(tx0, ty0, tx1 - tx0, ty1 - ty0);
             cr->clip();
             cr->translate(tx0, ty0);
-            cr->scale((tx1 - tx0) / t.w, (ty1 - ty0) / t.h);
-            auto pat = Cairo::SurfacePattern::create(t.surface);
+            cr->scale((tx1 - tx0) / sw, (ty1 - ty0) / sh);
+            auto pat = Cairo::SurfacePattern::create(src);
             pat->set_filter(filter);
             pat->set_extend(Cairo::Pattern::Extend::PAD);   // the edge pixel, not transparency, at the seam
             cr->set_source(pat);

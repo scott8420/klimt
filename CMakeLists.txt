@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s009")
+set(KLIMT_BUILD "s010")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -106,6 +106,18 @@ add_library(klimt_core STATIC
 )
 target_include_directories(klimt_core PUBLIC include)
 target_link_libraries(klimt_core PUBLIC klimt_pixel klimt_formats)
+
+# s010 m3: the PIXEL HOT PATHS are optimised in every build type -- a Debug
+# build composited ~4x slower than Release, and Debug is what build.sh makes.
+# The UI and the rest of the core stay -O0 (debuggable). KLIMT_FAST_PIXELS=OFF
+# to step through these too.
+option(KLIMT_FAST_PIXELS "Optimise the pixel hot paths even in Debug" ON)
+if(KLIMT_FAST_PIXELS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(klimt_pixel PRIVATE -O2)
+    set_source_files_properties(src/core/Composite.cpp src/core/Paint.cpp src/core/Canvas.cpp
+                                src/core/Move.cpp src/core/Selection.cpp
+                                PROPERTIES COMPILE_OPTIONS "-O2")
+endif()
 # s007: libzip writes and reads the .klimt container (Fedora: libzip-devel).
 pkg_check_modules(LIBZIP REQUIRED IMPORTED_TARGET libzip>=1.6)
 target_link_libraries(klimt_core PRIVATE PkgConfig::LIBZIP)
@@ -113,8 +125,12 @@ target_link_libraries(klimt_core PRIVATE PkgConfig::LIBZIP)
 # of the pump, no consumer inherits the include (CANON: surprise-free build).
 target_include_directories(klimt_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
+# ── s010: the compositor's speed, headless (./build/klimt_bench [8|16|32]) ──────
+add_executable(klimt_bench src/bench.cpp)
+target_link_libraries(klimt_bench PRIVATE klimt_core Threads::Threads)
+
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp)
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads)
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

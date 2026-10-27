@@ -868,6 +868,16 @@ const std::vector<Verb>& verbs() {
              [](Document& d) { load_selection(d, {10, 10, 100, 100}); }},
         {"image_size",    [](DocJournal& j, Document& d) { canvas::image_size(j, d, 300, 200, 144); },
              [](Document& d) { load_selection(d, {10, 10, 100, 100}); }},
+        // s010: pixels beyond the image -- kept by a crop, given back by Reveal All.
+        {"crop_delete",   [](DocJournal& j, Document& d) { canvas::crop(j, d, {200, 0, 400, 400}, pixel::rgba(1, 1, 1, 1), true); }},
+        {"reveal_all",    [](DocJournal& j, Document& d) { canvas::reveal_all(j, d); },
+             [](Document& d) {
+                 Document::Loading load(d);
+                 auto l = *d.get("L4");
+                 l.pixels = std::make_shared<const pixel::TileMap>(
+                     canvas::reframed(*l.pixels, 600, 400, -250, 0, pixel::transparent()));   // the square half off the left
+                 d.put("L4", l);
+             }},
         {"resolution",    [](DocJournal& j, Document& d) { canvas::image_size(j, d, 600, 400, 300); }},
         {"move_nudge",    [](DocJournal& j, Document& d) {
              move::by(j, d, {"L4"}, 1, 0, pixel::rgba(1, 1, 1, 1), "nudge");

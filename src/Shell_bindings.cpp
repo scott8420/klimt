@@ -43,6 +43,7 @@ void Shell::bind_actions() {  // bindings
     // s009 m2: the Image menu (Shell_canvas.cpp).
     m_layer_acts["image-size"]  = add_action("image-size", sigc::mem_fun(*this, &Shell::on_image_size));
     m_layer_acts["canvas-size"] = add_action("canvas-size", sigc::mem_fun(*this, &Shell::on_canvas_size));
+    m_layer_acts["reveal-all"] = add_action("reveal-all", sigc::mem_fun(*this, &Shell::on_reveal_all));
     m_layer_acts["crop-selection"] = add_action("crop-selection", sigc::mem_fun(*this, &Shell::on_crop_selection));
     m_strip.signal_brush_changed().connect([this] { m_canvas.set_brush_size(m_strip.brush(m_rail.tool()).size); });
     m_layer_acts["select-feather"] = add_action("select-feather", sigc::mem_fun(*this, &Shell::on_feather));

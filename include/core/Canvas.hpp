@@ -28,9 +28,13 @@ using Id = Document::Id;
 using MapPtr = std::shared_ptr<const pixel::TileMap>;
 
 // `src` on a w x h canvas, its (0, 0) at (ox, oy): pixel (x, y) of the result
-// is src(x - ox, y - oy); where that is outside src, `fill`. Bytes copied, not
-// decoded; a whole tile of one value stays uniform.
-pixel::TileMap reframed(const pixel::TileMap& src, int w, int h, int ox, int oy, const pixel::Px& fill);
+// is src(x - ox, y - oy) -- src's pixels beyond its image included (s010);
+// where src holds nothing there, `fill` (transparent outside an image with
+// alpha). With keep_outside, whatever lands beyond the new image is KEPT as
+// outside tiles; without, it is gone (a mask; "Delete Cropped Pixels").
+// Bytes copied, not decoded; a whole tile of one value stays uniform.
+pixel::TileMap reframed(const pixel::TileMap& src, int w, int h, int ox, int oy, const pixel::Px& fill,
+                        bool keep_outside = true);
 
 // How Image Size resamples. Smooth: bicubic (Mitchell), area-correct when it
 // shrinks; Nearest: hard pixels (pixel art, masks you want hard).
@@ -41,6 +45,15 @@ const char* filter_name(Filter f);
 std::optional<pixel::TileMap> resampled(const pixel::TileMap& src, int w, int h, Filter f,
                                         const std::function<bool()>& cancelled = {},
                                         const std::function<void(double)>& progress = {});
+
+// s010: a LAYER resampled -- its pixels beyond the image too, scaled with
+// it and kept beyond the new image.
+std::optional<pixel::TileMap> resampled_layer(const pixel::TileMap& src, int w, int h, Filter f,
+                                              const std::function<bool()>& cancelled = {},
+                                              const std::function<void(double)>& progress = {});
+// s010: the exact bounds of everything a layer holds that isn't transparent,
+// in image pixels (may reach past the image either way). Empty: nothing.
+pixel::Rect content_bounds(const pixel::TileMap& m);
 
 // Where Canvas Size keeps the old image: 0 left / top, 1 centre, 2 right / bottom.
 int anchor_offset(int old_size, int new_size, int anchor);
@@ -60,7 +73,9 @@ struct Reshape {
     MapPtr                       mask;     // nullptr: nothing selected after
 };
 // Crop to `r` (image pixels; may reach past the canvas -- that adds canvas).
-std::optional<Reshape> crop_plan(const Before& b, const pixel::Rect& r, const pixel::Px& background);
+// s010: what falls outside is KEPT beyond the new image unless delete_cropped.
+std::optional<Reshape> crop_plan(const Before& b, const pixel::Rect& r, const pixel::Px& background,
+                                 bool delete_cropped = false);
 // A w x h canvas, the old image placed by the anchors (0..2 each).
 std::optional<Reshape> canvas_plan(const Before& b, int w, int h, int anchor_x, int anchor_y, const pixel::Px& background);
 // Resample to w x h at `dpi` (w, h the same: only the resolution changes).
@@ -71,6 +86,11 @@ std::optional<Reshape> size_plan(const Before& b, int w, int h, double dpi, Filt
 // Selection's rectangle. Empty Rect when nothing is selected.
 pixel::Rect bounds(const pixel::TileMap& mask);
 
+// s010: Image > Reveal All -- the canvas grows to show every pixel the
+// layers hold beyond it (nullopt: nothing is beyond). The selection stays on
+// its pixels.
+std::optional<Reshape> reveal_plan(const Before& b);
+
 // Is this a size we'll make? "" yes, else why not.
 std::string size_refusal(int w, int h);
 
@@ -79,8 +99,9 @@ std::string size_refusal(int w, int h);
 bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, const std::string& label);
 
 // ── the verbs, synchronous ──────────────────────────────────────────────────
-bool crop(DocJournal& j, Document& d, const pixel::Rect& r, const pixel::Px& background);
+bool crop(DocJournal& j, Document& d, const pixel::Rect& r, const pixel::Px& background, bool delete_cropped = false);
 bool canvas_size(DocJournal& j, Document& d, int w, int h, int anchor_x, int anchor_y, const pixel::Px& background);
 bool image_size(DocJournal& j, Document& d, int w, int h, double dpi, Filter f = Filter::Smooth);
+bool reveal_all(DocJournal& j, Document& d);
 
 }  // namespace klimt::core::canvas

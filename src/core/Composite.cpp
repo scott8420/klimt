@@ -59,19 +59,27 @@ struct Walker {
     // UNMANAGED conversion (gray -> g,g,g; CMYK -> (1-c)(1-k) ...; Lab D50 ->
     // sRGB) until libs/tint brings profiles. Honest enough to see an opened
     // file; not proofing.
+    // s010 m3: a scratch buffer per thread for the tile's own channels.
     bool pixels_of(const Layer& l, std::vector<float>& out) const {
         if (!l.pixels) return false;
         const auto t = l.pixels->tile(col, row);
         if (!t) return false;
-        std::vector<float> raw;
-        t->premultiplied(raw);
         const pixel::Format f = l.pixels->format();
         const int n = f.channels();
-        out.assign(kPx * 4, 0.f);
+        // A uniform tile of nothing shows nothing.
+        if (t->is_uniform() && f.alpha && t->get(0, 0).c[static_cast<std::size_t>(n - 1)] <= 0.f) return false;
+        if (f.mode == pixel::Mode::RGB && f.alpha) {   // already the compositor's layout
+            t->premultiplied(out);
+            return true;
+        }
+        thread_local std::vector<float> raw;
+        t->premultiplied(raw);
+        out.resize(kPx * 4);
         for (std::size_t i = 0; i < kPx; ++i) {
             const float* s = raw.data() + i * static_cast<std::size_t>(n);
             float* d = out.data() + i * 4;
             const float a = f.alpha ? s[n - 1] : 1.f;
+            d[0] = d[1] = d[2] = 0.f;
             d[3] = a;
             switch (f.mode) {
                 case pixel::Mode::RGB:  d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; break;
@@ -133,12 +141,29 @@ struct Walker {
                 }
                 continue;
             }
-            std::vector<float> src;
+            // s010 m3: one opaque colour at full strength, Normal, unclipped:
+            // it simply IS what's below from here up.
+            if (l.blend == pixel::Blend::Normal && !l.clipped && l.opacity >= 100 && l.fill >= 100 && l.pixels &&
+                l.pixels->format().mode == pixel::Mode::RGB) {
+                const auto t = l.pixels->tile(col, row);
+                if (t && t->is_uniform()) {
+                    const pixel::Px p = t->get(0, 0);
+                    const pixel::Format f = l.pixels->format();
+                    if (!f.alpha || p.c[3] >= 1.f) {
+                        const float v[4] = {p.c[0], p.c[1], p.c[2], 1.f};
+                        for (std::size_t i = 0; i < kPx; ++i) std::copy(v, v + 4, dst.data() + i * 4);
+                        continue;
+                    }
+                }
+            }
+            // Reused, not allocated (a megabyte a layer a tile, before s010).
+            thread_local std::vector<float> src_buf;
+            std::vector<float>& src = src_buf;
             if (!pixels_of(l, src)) continue;
             if (l.clipped) {
                 if (const Layer* base = clip_base(id)) {
                     if (!base->visible) continue;
-                    std::vector<float> mask;
+                    thread_local std::vector<float> mask;
                     if (!pixels_of(*base, mask)) continue;   // nothing to show through
                     for (std::size_t i = 0; i < kPx; ++i)
                         for (int c = 0; c < 4; ++c) src[i * 4 + static_cast<std::size_t>(c)] *= mask[i * 4 + 3];
@@ -207,6 +232,28 @@ void composite_tile_argb(const Image& im, const Layers& layers, int col, int row
         for (int x = 0; x < w; ++x)
             out[static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] =
                 argb(tile.data() + (static_cast<std::size_t>(y) * kTile + static_cast<std::size_t>(x)) * 4);
+}
+
+void argb_half(const std::vector<std::uint32_t>& in, int w, int h, std::vector<std::uint32_t>& out, int& ow, int& oh) {
+    ow = (w + 1) / 2;
+    oh = (h + 1) / 2;
+    out.resize(static_cast<std::size_t>(ow) * static_cast<std::size_t>(oh));
+    for (int y = 0; y < oh; ++y)
+        for (int x = 0; x < ow; ++x) {
+            std::uint32_t sum[4] = {0, 0, 0, 0};
+            int n = 0;
+            for (int dy = 0; dy < 2; ++dy)
+                for (int dx = 0; dx < 2; ++dx) {
+                    const int sx = 2 * x + dx, sy = 2 * y + dy;
+                    if (sx >= w || sy >= h) continue;
+                    const std::uint32_t p = in[static_cast<std::size_t>(sy) * static_cast<std::size_t>(w) + static_cast<std::size_t>(sx)];
+                    for (int c = 0; c < 4; ++c) sum[c] += (p >> (8 * c)) & 0xffu;
+                    ++n;
+                }
+            std::uint32_t q = 0;
+            for (int c = 0; c < 4; ++c) q |= ((sum[c] + static_cast<std::uint32_t>(n) / 2) / static_cast<std::uint32_t>(n)) << (8 * c);
+            out[static_cast<std::size_t>(y) * static_cast<std::size_t>(ow) + static_cast<std::size_t>(x)] = q;
+        }
 }
 
 // ── dirty tiles ─────────────────────────────────────────────────────────────

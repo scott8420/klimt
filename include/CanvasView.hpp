@@ -40,7 +40,12 @@ public:
     struct Tile {
         int col = 0, row = 0, w = 0, h = 0;                       // w x h: the part inside the image
         std::shared_ptr<const std::vector<std::uint32_t>> argb;   // Cairo ARGB32, rows of w
+        // s010 m4: the same picture at 1/2, 1/4, ... (each its own w x h):
+        // drawn when zoomed out, instead of scaling the whole tile down.
+        struct Mip { int w = 0, h = 0; std::shared_ptr<const std::vector<std::uint32_t>> argb; };
+        std::vector<Mip> mips;
     };
+    static constexpr int kMips = 5;                               // down to 1/32 (8 px a tile)
     void set_tiles(const std::vector<Tile>& tiles);
     int  tiles_shown() const;                                     // tiles holding a picture
 
@@ -122,6 +127,7 @@ private:
     struct Held {
         int w = 0, h = 0;
         Cairo::RefPtr<Cairo::ImageSurface> surface;
+        std::vector<Cairo::RefPtr<Cairo::ImageSurface>> mips;   // s010 m4: 1/2, 1/4, ...
     };
     std::vector<Held> m_grid;                            // cols * rows
     Cairo::RefPtr<Cairo::ImageSurface> m_checker;        // the transparency pattern, one cell pair

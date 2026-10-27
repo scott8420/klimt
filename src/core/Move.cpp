@@ -112,7 +112,7 @@ std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function
         r.mask = p.mask;
         return r;
     }
-    auto moved_mask = shifted(*p.mask, dx, dy, pixel::transparent());
+    auto moved_mask = canvas::reframed(*p.mask, p.width, p.height, dx, dy, pixel::transparent(), false);   // a mask keeps nothing beyond
     const bool any = !select::empty(moved_mask);
     r.mask = any ? std::make_shared<const pixel::TileMap>(moved_mask) : nullptr;
     // Where the lifted pixels land: the selection's extent, slid, on the canvas.

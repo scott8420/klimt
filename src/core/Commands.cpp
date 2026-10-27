@@ -59,6 +59,7 @@ const std::vector<Command>& commands() {
             {"Image Size", "Image", "win.image-size", "", "resize resample scale resolution dpi pixels", ""},
             {"Canvas Size", "Image", "win.canvas-size", "", "extend border expand trim anchor", ""},
             {"Crop to Selection", "Image", "win.crop-selection", "", "trim cut bounds", ""},
+            {"Reveal All", "Image", "win.reveal-all", "", "show hidden outside beyond canvas expand", ""},
             {"Redo", "Edit", "win.redo", "", "again forward", "Ctrl+Shift+Z"},
             {"New Layer", "Layer", "win.layer-new", "", "add create", ""},
             {"New Group", "Layer", "win.layer-new-group", "", "folder set add", ""},

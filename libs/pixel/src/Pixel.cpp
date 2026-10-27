@@ -1,5 +1,7 @@
 #include "pixel/Pixel.hpp"
 
+#include <array>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -115,23 +117,47 @@ Px Tile::get(int x, int y) const {
     return decode(m_format, m_data.data() + (static_cast<std::size_t>(y) * kTile + static_cast<std::size_t>(x)) * bpp);
 }
 
+// s010 m3: straight from the stored bytes -- no per-pixel Px, a table for
+// 8-bit -- the compositor's hot path (it was ~half of a tile's time).
 void Tile::premultiplied(std::vector<float>& out) const {
     const int n = m_format.channels();
-    out.resize(static_cast<std::size_t>(kTile) * kTile * static_cast<std::size_t>(n));
-    const auto put = [&](std::size_t i, const Px& p) {
-        const float a = m_format.alpha ? p.c[static_cast<std::size_t>(n - 1)] : 1.f;
-        const int colours = m_format.colour_channels();
-        for (int k = 0; k < colours; ++k) out[i * static_cast<std::size_t>(n) + static_cast<std::size_t>(k)] = p.c[static_cast<std::size_t>(k)] * a;
-        if (m_format.alpha) out[i * static_cast<std::size_t>(n) + static_cast<std::size_t>(n - 1)] = a;
+    const auto nn = static_cast<std::size_t>(n);
+    const std::size_t px = static_cast<std::size_t>(kTile) * kTile;
+    out.resize(px * nn);
+    const bool alpha = m_format.alpha;
+    const int colours = m_format.colour_channels();
+    static const auto u8 = [] {
+        std::array<float, 256> t{};
+        for (int i = 0; i < 256; ++i) t[static_cast<std::size_t>(i)] = static_cast<float>(i) / 255.f;
+        return t;
+    }();
+    // One pixel's straight channels, read from its stored bytes.
+    const auto read = [&](const std::uint8_t* in, float* v) {
+        switch (m_format.depth) {
+            case Depth::U8:  for (int k = 0; k < n; ++k) v[k] = u8[in[k]]; break;
+            case Depth::U16: for (int k = 0; k < n; ++k) { std::uint16_t q; std::memcpy(&q, in + 2 * k, 2); v[k] = q / 65535.f; } break;
+            case Depth::F32: std::memcpy(v, in, nn * 4); break;
+        }
+    };
+    const auto premul = [&](float* v) {
+        if (!alpha) return;
+        const float a = v[n - 1];
+        for (int k = 0; k < colours; ++k) v[k] *= a;
     };
     if (m_uniform) {
-        const Px p = get(0, 0);
-        for (std::size_t i = 0; i < static_cast<std::size_t>(kTile) * kTile; ++i) put(i, p);
+        float v[kMaxChannels];
+        read(m_data.data(), v);
+        premul(v);
+        for (std::size_t i = 0; i < px; ++i) std::memcpy(out.data() + i * nn, v, nn * sizeof(float));
         return;
     }
-    for (int y = 0; y < kTile; ++y)
-        for (int x = 0; x < kTile; ++x)
-            put(static_cast<std::size_t>(y) * kTile + static_cast<std::size_t>(x), get(x, y));
+    const auto bpp = static_cast<std::size_t>(m_format.bytes_per_pixel());
+    const std::uint8_t* in = m_data.data();
+    float* o = out.data();
+    for (std::size_t i = 0; i < px; ++i, in += bpp, o += nn) {
+        read(in, o);
+        premul(o);
+    }
 }
 
 // ── TileWriter ──────────────────────────────────────────────────────────────
@@ -228,20 +254,51 @@ TileMap::TileRef TileMap::tile(int col, int row) const {
 }
 
 Px TileMap::get(int x, int y) const {
-    if (x < 0 || y < 0 || x >= m_w || y >= m_h) return transparent();
+    if (x < 0 || y < 0 || x >= m_w || y >= m_h) {
+        if (!has_outside()) return transparent();
+        const int c = cell_of(x), r = cell_of(y);
+        const auto t = outside(c, r);
+        return t ? t->get(x - c * kTile, y - r * kTile) : transparent();
+    }
     const auto t = tile(x / kTile, y / kTile);
     return t ? t->get(x % kTile, y % kTile) : transparent();
 }
 
 std::size_t TileMap::tile_count() const {
-    if (!m_grid) return 0;
-    return static_cast<std::size_t>(std::count_if(m_grid->begin(), m_grid->end(), [](const TileRef& t) { return t != nullptr; }));
+    std::size_t n = m_over ? m_over->size() : 0;
+    if (!m_grid) return n;
+    return n + static_cast<std::size_t>(std::count_if(m_grid->begin(), m_grid->end(), [](const TileRef& t) { return t != nullptr; }));
 }
 
 std::size_t TileMap::bytes() const {
     std::size_t n = 0;
     if (m_grid) for (const auto& t : *m_grid) if (t) n += t->bytes();
+    if (m_over) for (const auto& [c, t] : *m_over) n += t->bytes();
     return n;
+}
+
+TileMap::TileRef TileMap::outside(int col, int row) const {
+    if (!m_over) return nullptr;
+    const auto it = m_over->find({col, row});
+    return it == m_over->end() ? nullptr : it->second;
+}
+
+const TileMap::Outside& TileMap::outside_tiles() const {
+    static const Outside none;
+    return m_over ? *m_over : none;
+}
+
+TileMap TileMap::with_outside(Outside o) const {
+    TileMap out = *this;
+    std::erase_if(o, [this](const auto& kv) { return !kv.second || !(kv.second->format() == m_format); });
+    out.m_over = o.empty() ? nullptr : std::make_shared<const Outside>(std::move(o));
+    return out;
+}
+
+TileMap TileMap::with_grid(std::vector<TileRef> grid) const {
+    TileMap out = from_tiles(m_format, m_w, m_h, std::move(grid));
+    out.m_over = m_over;
+    return out;
 }
 
 TileMap TileMap::with_tile(int col, int row, TileRef t) const {

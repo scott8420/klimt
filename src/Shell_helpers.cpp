@@ -101,7 +101,7 @@ void Shell::update_layer_actions() {
     };
     // s009: with no image, the verbs that need one grey.
     const bool img = has_image();
-    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "select-all"})
+    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all"})
         on(a, img);
     on("layer-duplicate", any);
     on("layer-group", any);
@@ -253,6 +253,20 @@ void Shell::queue_render() {
                     tile.col = col;
                     tile.row = row;
                     core::composite_tile_argb(im, *shared, col, row, *px, tile.w, tile.h);
+                    // s010 m4: its mips, here on the worker.
+                    {
+                        const std::vector<std::uint32_t>* from = px.get();
+                        int fw = tile.w, fh = tile.h;
+                        for (int k = 0; k < CanvasView::kMips && (fw > 1 || fh > 1); ++k) {
+                            auto m = std::make_shared<std::vector<std::uint32_t>>();
+                            int mw = 0, mh = 0;
+                            core::argb_half(*from, fw, fh, *m, mw, mh);
+                            from = m.get();
+                            fw = mw;
+                            fh = mh;
+                            tile.mips.push_back({mw, mh, std::move(m)});
+                        }
+                    }
                     tile.argb = std::move(px);
                     out->push_back(std::move(tile));
                 }

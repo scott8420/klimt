@@ -40,18 +40,29 @@ void Shell::on_crop_box(core::select::Pt a, core::select::Pt b) {
     const pixel::Rect r{x0, y0, x1 - x0, y1 - y0};
     if (const auto why = Cv::size_refusal(r.w, r.h); !why.empty()) { toast("Crop: " + why); return; }
     const auto bg = background_px();
-    run_canvas_job("Crop", [r, bg](const Cv::Before& b, core::Jobs::Token&) { return Cv::crop_plan(b, r, bg); });
+    const bool del = m_strip.crop_deletes();
+    run_canvas_job("Crop", [r, bg, del](const Cv::Before& b, core::Jobs::Token&) { return Cv::crop_plan(b, r, bg, del); });
 }
 
 void Shell::on_crop_selection() {
     if (!m_doc.selection()) { toast("Crop to Selection: nothing is selected"); return; }
     const auto bg = background_px();
-    run_canvas_job("Crop", [bg](const Cv::Before& b, core::Jobs::Token&) -> std::optional<Cv::Reshape> {
+    const bool del = m_strip.crop_deletes();
+    run_canvas_job("Crop", [bg, del](const Cv::Before& b, core::Jobs::Token&) -> std::optional<Cv::Reshape> {
         if (!b.mask) return std::nullopt;
         const auto r = Cv::bounds(*b.mask);
         if (r.empty()) return std::nullopt;
-        return Cv::crop_plan(b, r, bg);
+        return Cv::crop_plan(b, r, bg, del);
     });
+}
+
+// s010: Image > Reveal All -- the canvas grows to every pixel the layers hold.
+void Shell::on_reveal_all() {
+    if (!has_image()) { toast("Reveal All: no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
+    bool any = false;
+    for (const auto& [id, l] : m_doc.snapshot()) any = any || (l.pixels && l.pixels->has_outside());
+    if (!any) { toast("Reveal All: nothing lies beyond the canvas"); return; }
+    run_canvas_job("Reveal All", [](const Cv::Before& b, core::Jobs::Token&) { return Cv::reveal_plan(b); });
 }
 
 void Shell::on_image_size() {

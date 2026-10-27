@@ -131,6 +131,17 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
         append(*group);
     }
 
+    // s010: Crop -- what happens to the pixels outside the box.
+    if (t.id == "crop") {
+        append(*Gtk::make_managed<Gtk::Separator>(Gtk::Orientation::VERTICAL));
+        auto del = Gtk::make_managed<Gtk::CheckButton>("Delete cropped pixels");
+        del->set_active(m_crop_delete);
+        del->set_tooltip_text("On: what's outside the box is gone. Off: it's kept beyond the canvas -- "
+                              "Move brings it back, Image > Reveal All shows it");
+        del->signal_toggled().connect([this, del] { m_crop_delete = del->get_active(); });
+        append(*del);
+    }
+
     // s008 m3: the Magic Wand's options, when it's the select variant.
     if (t.id == "select" && variant("select") == 3) {
         append(*Gtk::make_managed<Gtk::Separator>(Gtk::Orientation::VERTICAL));

@@ -253,6 +253,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     image->append("Image Size…", "win.image-size");
     image->append("Canvas Size…", "win.canvas-size");
     image->append("Crop to Selection", "win.crop-selection");
+    image->append("Reveal All", "win.reveal-all");
     auto view = Gio::Menu::create();
     view->append("Zoom In", "win.zoom-in");
     view->append("Zoom Out", "win.zoom-out");
