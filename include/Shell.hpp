@@ -7,6 +7,7 @@
 #include "core/Paint.hpp"      // s008: the brush
 #include "core/Move.hpp"       // s009: the Move tool
 #include "core/Canvas.hpp"     // s009: Crop, Image / Canvas Size
+#include "core/Transform.hpp"  // s011: Free Transform
 #include "CanvasView.hpp"
 #include "ContextStrip.hpp"
 #include "EdgeTab.hpp"
@@ -64,6 +65,8 @@ typedef struct _AdwWindowTitle AdwWindowTitle;
 //   Paint    -- the Brush / Eraser stroke pipeline.      src/Shell_paint.cpp (s008)
 //   Move     -- the Move tool's drag, the arrow nudges.  src/Shell_move.cpp (s009)
 //   Canvas   -- Crop, Image Size, Canvas Size (jobs).    src/Shell_canvas.cpp (s009)
+//   Transform-- Free Transform, flips, quarter turns.    src/Shell_transform.cpp (s011)
+//   Masks    -- the Layer Mask menu, the mask view.     src/Shell_masks.cpp (s012)
 //   Glue     -- the ctor + build_ui().                   src/Shell.cpp
 //
 // Finding things
@@ -139,6 +142,7 @@ private:
     void run_pixel_job(const std::string& verb, bool fill, ToolRail::RGB colour);   // category: select: Fill / Delete as a job
     void queue_ants();                           // category: select: the outline follows the selection
     void on_feather();                           // category: select: Select > Feather (asks the radius)
+    void on_modify(core::select::Modify k);      // category: select: Select > Modify > ... (asks; a job) (s011 m4)
     void on_pick(int x, int y, bool background); // category: select: the Eyedropper
     void update_select_actions();                // category: select: grey Deselect when nothing is
 
@@ -160,6 +164,26 @@ private:
     void on_reveal_all();                        // category: canvas: Image > Reveal All (s010)
     void on_image_size();                        // category: canvas: Image > Image Size (the dialog)
     void on_canvas_size();                       // category: canvas: Image > Canvas Size (the dialog)
+
+    // ── transform (s011 m2) ────────────────────────────────────────────────
+    void on_free_transform();                    // category: transform: Ctrl+T -- the box on the canvas
+    void on_xform_change(const std::array<double, 6>& m);   // category: transform: the box moved
+    void xform_pump();                           // category: transform: the preview, one job at a time
+    void xform_commit();                         // category: transform: Enter -- the step, bicubic, on a worker
+    void xform_cancel();                         // category: transform: Esc / Ctrl+Z -- nothing was written
+    void xform_end();                            // category: transform: the mode is over
+    bool xform_current(const core::xform::Plan& p) const;   // category: transform: the plan's pixels still there?
+    void on_turn(core::xform::Turn t);           // category: transform: Image > Image Rotation (s011 m3)
+    void on_rotate_canvas();                     // category: transform: Image > Image Rotation > Arbitrary (asks)
+    void on_straighten(core::select::Pt a, core::select::Pt b);   // category: transform: the Crop tool's Straighten
+    void run_xform(const std::string& label, std::function<core::xform::Affine(const pixel::Rect&)> map);   // category: transform: a flip / turn as a job
+
+    // ── layer masks (s012 m3) ──────────────────────────────────────────────
+    void on_mask_add(int from);                  // category: masks: Layer > Layer Mask > Reveal / Hide ... (-1: the panel's button)
+    void on_mask_verb(const std::string& verb);  // category: masks: delete / apply / toggle / invert / edit
+    void on_mask_view(const std::string& id);    // category: masks: Alt-click a chip -- the mask on the canvas
+    float mask_hide_of(ToolRail::RGB c) const;   // category: masks: a colour as what it hides
+    void on_gradient(core::select::Pt a, core::select::Pt b);   // category: masks: the Gradient tool's drag (a job) (s012 m4)
 
     // ── helpers ────────────────────────────────────────────────────────────
     void load_demo();                             // category: helper: a demo document, LOADED (not undoable)
@@ -223,6 +247,8 @@ private:
     std::unique_ptr<NewDialog>       m_new;       // s007: same again
     std::unique_ptr<NumberDialog>    m_feather;   // s008
     std::unique_ptr<SizeDialog>      m_image_size, m_canvas_size;   // s009
+    std::unique_ptr<NumberDialog>    m_rotate_dialog;               // s011
+    std::map<int, std::unique_ptr<NumberDialog>> m_modify_dialogs;  // s011 m4: one per Modify kind
 
     // ── the file (s007) ────────────────────────────────────────────────────
     std::string        m_path;                 // the .klimt this document saves to; "" = never saved
@@ -239,6 +265,8 @@ private:
         std::shared_ptr<const pixel::TileMap> original, current, cov, mask;
         std::vector<core::paint::Dab> pending;      // dabs not yet painted
         core::paint::Dab    last;
+        core::paint::Smoother smoother;             // s012: the stabiliser (Smoothing)
+        bool                on_mask = false;        // s012: painting the layer's mask
         double              carry = 0;
         core::Jobs::Id      job = 0;
     };
@@ -264,6 +292,18 @@ private:
         int x = 0, y = 0;
     };
     Nudges             m_nudge;
+
+    // ── Free Transform in progress (s011 m2) ───────────────────────────────
+    struct Xform {
+        bool                active = false, planning = false, committing = false, has_done = false;
+        std::shared_ptr<const core::xform::Plan> plan;
+        core::xform::Affine want, done;
+        core::Jobs::Id      job = 0;
+    };
+    Xform              m_xform;
+    // What the render shows in place of a layer's pixels (the preview).
+    std::map<core::Document::Id, std::shared_ptr<const pixel::TileMap>> m_preview;
+    std::string        m_mask_view;              // s012: the layer whose mask the canvas shows ("" : the image)
 
     // ── the ants (s008) ────────────────────────────────────────────────────
     std::shared_ptr<const pixel::TileMap> m_ants_for;   // the mask the canvas's ants are of

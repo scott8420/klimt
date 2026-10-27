@@ -68,8 +68,25 @@ struct Walker {
         const int n = f.channels();
         // A uniform tile of nothing shows nothing.
         if (t->is_uniform() && f.alpha && t->get(0, 0).c[static_cast<std::size_t>(n - 1)] <= 0.f) return false;
+        // s012: the mask's hide amount for this tile (nullptr: hides nothing).
+        pixel::TileMap::TileRef mt;
+        if (l.mask && l.mask_on) {
+            mt = l.mask->tile(col, row);
+            if (mt && mt->is_uniform() && mt->get(0, 0).c[0] >= 1.f) return false;   // wholly hidden
+        }
+        const auto masked = [&]() {
+            if (!mt) return;
+            thread_local std::vector<float> hide;
+            mt->premultiplied(hide);   // one channel: the hide amount
+            for (std::size_t i = 0; i < kPx; ++i) {
+                const float k = 1.f - std::clamp(hide[i], 0.f, 1.f);
+                float* d = out.data() + i * 4;
+                d[0] *= k; d[1] *= k; d[2] *= k; d[3] *= k;
+            }
+        };
         if (f.mode == pixel::Mode::RGB && f.alpha) {   // already the compositor's layout
             t->premultiplied(out);
+            masked();
             return true;
         }
         thread_local std::vector<float> raw;
@@ -99,6 +116,7 @@ struct Walker {
                 }
             }
         }
+        masked();
         return true;
     }
 
@@ -144,6 +162,7 @@ struct Walker {
             // s010 m3: one opaque colour at full strength, Normal, unclipped:
             // it simply IS what's below from here up.
             if (l.blend == pixel::Blend::Normal && !l.clipped && l.opacity >= 100 && l.fill >= 100 && l.pixels &&
+                !(l.mask && l.mask_on && l.mask->tile(col, row)) &&
                 l.pixels->format().mode == pixel::Mode::RGB) {
                 const auto t = l.pixels->tile(col, row);
                 if (t && t->is_uniform()) {
@@ -253,6 +272,22 @@ void argb_half(const std::vector<std::uint32_t>& in, int w, int h, std::vector<s
             std::uint32_t q = 0;
             for (int c = 0; c < 4; ++c) q |= ((sum[c] + static_cast<std::uint32_t>(n) / 2) / static_cast<std::uint32_t>(n)) << (8 * c);
             out[static_cast<std::size_t>(y) * static_cast<std::size_t>(ow) + static_cast<std::size_t>(x)] = q;
+        }
+}
+
+void mask_tile_argb(const pixel::TileMap& mask, int col, int row, std::vector<std::uint32_t>& out, int& w, int& h) {
+    w = std::clamp(mask.width() - col * kTile, 0, kTile);
+    h = std::clamp(mask.height() - row * kTile, 0, kTile);
+    out.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0xffffffffu);
+    const auto t = mask.tile(col, row);
+    if (!t) return;
+    std::vector<float> hide;
+    t->premultiplied(hide);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const float v = 1.f - std::clamp(hide[static_cast<std::size_t>(y) * kTile + static_cast<std::size_t>(x)], 0.f, 1.f);
+            const auto g = static_cast<std::uint32_t>(v * 255.f + 0.5f);
+            out[static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] = 0xff000000u | (g << 16) | (g << 8) | g;
         }
 }
 

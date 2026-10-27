@@ -230,6 +230,15 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     edit->append("Fill with Foreground", "win.fill-fg");
     edit->append("Fill with Background", "win.fill-bg");
     edit->append("Delete Selected Pixels", "win.delete-selection");
+    // s011: transforms -- the selection's pixels, or the whole layer.
+    edit->append("Free Transform", "win.free-transform");
+    auto tr = Gio::Menu::create();
+    tr->append("Flip Horizontal", "win.flip-h");
+    tr->append("Flip Vertical", "win.flip-v");
+    tr->append("Rotate 90° Clockwise", "win.rotate-cw");
+    tr->append("Rotate 90° Counter Clockwise", "win.rotate-ccw");
+    tr->append("Rotate 180°", "win.rotate-180");
+    edit->append_submenu("Transform", tr);
     menu->append_section(edit);
 
     auto layer = Gio::Menu::create();
@@ -242,18 +251,49 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     layer->append("Rename", "win.layer-rename");
     layer->append("Sort by Name", "win.layer-sort");
     layer->append("Delete", "win.layer-delete");
+    // s012: Layer > Layer Mask.
+    auto lm = Gio::Menu::create();
+    auto lm_add = Gio::Menu::create();
+    lm_add->append("Reveal All", "win.mask-reveal-all");
+    lm_add->append("Hide All", "win.mask-hide-all");
+    lm_add->append("Reveal Selection", "win.mask-reveal-sel");
+    lm_add->append("Hide Selection", "win.mask-hide-sel");
+    lm->append_section(lm_add);
+    auto lm_do = Gio::Menu::create();
+    lm_do->append("Paint the Mask / the Pixels", "win.mask-edit");
+    lm_do->append("Disable / Enable", "win.mask-toggle");
+    lm_do->append("Invert", "win.mask-invert");
+    lm_do->append("Apply", "win.mask-apply");
+    lm_do->append("Delete", "win.mask-delete");
+    lm->append_section(lm_do);
+    layer->append_submenu("Layer Mask", lm);
     // s008: the Select menu, and Fill / Delete beside Undo.
     auto sel = Gio::Menu::create();
     sel->append("All", "win.select-all");
     sel->append("Deselect", "win.deselect");
     sel->append("Inverse", "win.select-invert");
     sel->append("Feather…", "win.select-feather");
+    auto mod = Gio::Menu::create();   // s011 m4
+    mod->append("Border…", "win.select-border");
+    mod->append("Smooth…", "win.select-smooth");
+    mod->append("Expand…", "win.select-expand");
+    mod->append("Contract…", "win.select-contract");
+    sel->append_submenu("Modify", mod);
     // s009 m2: the Image menu.
     auto image = Gio::Menu::create();
     image->append("Image Size…", "win.image-size");
     image->append("Canvas Size…", "win.canvas-size");
     image->append("Crop to Selection", "win.crop-selection");
     image->append("Reveal All", "win.reveal-all");
+    // s011 m3: the whole canvas turned.
+    auto turn = Gio::Menu::create();
+    turn->append("180°", "win.canvas-180");
+    turn->append("90° Clockwise", "win.canvas-cw");
+    turn->append("90° Counter Clockwise", "win.canvas-ccw");
+    turn->append("Arbitrary…", "win.canvas-rotate");
+    turn->append("Flip Canvas Horizontal", "win.canvas-flip-h");
+    turn->append("Flip Canvas Vertical", "win.canvas-flip-v");
+    image->append_submenu("Image Rotation", turn);
     auto view = Gio::Menu::create();
     view->append("Zoom In", "win.zoom-in");
     view->append("Zoom Out", "win.zoom-out");

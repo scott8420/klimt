@@ -3,6 +3,8 @@
 #include "core/Paint.hpp"       // s008 m4: and the brush
 #include "core/Move.hpp"        // s009 m1: and the Move tool
 #include "core/Canvas.hpp"      // s009 m2: Crop, Canvas Size, Image Size
+#include "core/Transform.hpp"   // s011: Free Transform, flips, rotations
+#include "core/Gradient.hpp"    // s012: the Gradient tool
 
 #include <algorithm>
 #include <set>
@@ -234,6 +236,11 @@ std::string Document::check() const {
         if (l.fill < 0 || l.fill > 100) return id + ": fill out of range";
         if (l.locks & ~lock::Mask) return id + ": unknown lock bits";
         if (l.blend == Blend::PassThrough && l.kind != Kind::Group) return id + ": Pass Through on a layer";
+        if (l.mask) {   // s012
+            if (l.kind == Kind::Group) return id + ": a group with a mask";
+            if (!(l.mask->format() == mask_format()) || l.mask->width() != m_image.width || l.mask->height() != m_image.height)
+                return id + ": a mask not at the image's size in the mask format";
+        }
         if (l.pixels) {
             if (l.kind == Kind::Group) return id + ": a group with pixels";
             if (!(l.pixels->format() == m_image.format) || l.pixels->width() != m_image.width ||
@@ -779,6 +786,16 @@ void load_fixture(Document& d) {
     d.put("L4", a);
 }
 
+// s012: a mask on `id` hiding everything but (120, 110) 60 x 60, LOADED.
+void load_mask(Document& d, const Id& id) {
+    Document::Loading load(d);
+    auto l = *d.get(id);
+    l.mask = std::make_shared<const pixel::TileMap>(select::inverted(
+        std::make_shared<pixel::TileMap>(select::rect_mask(d.mask_format(), d.image().width, d.image().height, {120, 110, 60, 60})).get(),
+        d.mask_format(), d.image().width, d.image().height));
+    d.put(id, l);
+}
+
 // A selection already there (a verb's setup): LOADED, not a step.
 void load_selection(Document& d, const pixel::Rect& r) {
     Document::Loading load(d);
@@ -855,11 +872,62 @@ const std::vector<Verb>& verbs() {
         {"brush_pen",     [](DocJournal& j, Document& d) {
              paint::Brush b; b.size = 50; b.pressure_opacity = true; b.colour = pixel::rgba(0, 0, 1, 1);
              paint::stroke_pen(j, d, "L5", {{40, 300, 0.1f}, {300, 200, 0.6f}, {560, 100, 1.f}}, b); }},
+        // s012 m1: build-up -- a flow under 100% over the same line.
+        {"brush_flow",    [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 40; b.flow = 0.3; b.colour = pixel::rgba(1, 0, 1, 1);
+             paint::stroke_pen(j, d, "L5", {{50, 100, 1.f}, {500, 100, 1.f}, {50, 110, 1.f}}, b); }},
         // s009 m1: the Move tool -- a layer, a group's contents, a lifted selection.
         {"move_layer",    [](DocJournal& j, Document& d) { move::by(j, d, {"L4"}, 37, -20, pixel::rgba(1, 1, 1, 1)); }},
         {"move_group",    [](DocJournal& j, Document& d) { move::by(j, d, {"L2"}, -300, 5, pixel::rgba(1, 1, 1, 1)); }},
         {"move_selection", [](DocJournal& j, Document& d) { move::by(j, d, {"L4"}, 120, 60, pixel::rgba(1, 1, 1, 1)); },
              [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        // s011 m1: transforms -- the whole layer, or the selection's pixels.
+        {"flip_h",        [](DocJournal& j, Document& d) { xform::flip(j, d, {"L4"}, true, pixel::rgba(1, 1, 1, 1)); }},
+        {"rotate_90",     [](DocJournal& j, Document& d) { xform::rotate(j, d, {"L2"}, 90, pixel::rgba(1, 1, 1, 1)); }},
+        {"free_transform", [](DocJournal& j, Document& d) {
+             xform::apply(j, d, {"L4"}, xform::Affine::about({200, 175}, xform::Affine::rotate(0.3) * xform::Affine::scale(1.4, 0.8)),
+                          "Free Transform", pixel::rgba(1, 1, 1, 1)); }},
+        {"transform_selection", [](DocJournal& j, Document& d) {
+             xform::apply(j, d, {"L4"}, xform::Affine::about({200, 160}, xform::Affine::scale(2, 2)), "Free Transform",
+                          pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        // s012 m4: the Gradient tool, on pixels and on a mask.
+        {"gradient",      [](DocJournal& j, Document& d) {
+             gradient::Spec s; s.a = {50, 50}; s.b = {500, 300}; s.from = pixel::rgba(1, 1, 0, 1); s.to = pixel::rgba(0, 0, 1, 1);
+             gradient::apply(j, d, "L5", s); }},
+        {"gradient_radial_selection", [](DocJournal& j, Document& d) {
+             gradient::Spec s; s.shape = gradient::Shape::Radial; s.a = {200, 200}; s.b = {300, 200};
+             s.from = pixel::rgba(1, 0, 0, 1); s.to = pixel::rgba(1, 0, 0, 0); gradient::apply(j, d, "L5", s); },
+             [](Document& d) { load_selection(d, {100, 100, 250, 200}); }},
+        {"gradient_mask", [](DocJournal& j, Document& d) {
+             gradient::Spec s; s.a = {100, 0}; s.b = {300, 0}; s.to.c[0] = 1; gradient::apply(j, d, "L4", s, true); },
+             [](Document& d) { load_mask(d, "L4"); }},
+        // s012 m2: layer masks.
+        {"add_mask",      [](DocJournal& j, Document& d) { add_mask(j, d, "L4", MaskFrom::RevealSelection); },
+             [](Document& d) { load_selection(d, {120, 110, 60, 60}); }},
+        {"invert_mask",   [](DocJournal& j, Document& d) { invert_mask(j, d, "L4"); }, [](Document& d) { load_mask(d, "L4"); }},
+        {"mask_off",      [](DocJournal& j, Document& d) { set_mask_on(j, d, "L4", false); }, [](Document& d) { load_mask(d, "L4"); }},
+        {"apply_mask",    [](DocJournal& j, Document& d) { apply_mask(j, d, "L4"); }, [](Document& d) { load_mask(d, "L4"); }},
+        {"delete_mask",   [](DocJournal& j, Document& d) { delete_mask(j, d, "L4"); }, [](Document& d) { load_mask(d, "L4"); }},
+        {"move_masked",   [](DocJournal& j, Document& d) { move::by(j, d, {"L4"}, 40, 30, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_mask(d, "L4"); }},
+        {"crop_masked",   [](DocJournal& j, Document& d) { canvas::crop(j, d, {50, 40, 400, 300}, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_mask(d, "L4"); }},
+        // s011 m4: Select > Modify.
+        {"select_expand", [](DocJournal& j, Document& d) { select::modify(j, d, select::Modify::Expand, 12); },
+             [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        {"select_contract", [](DocJournal& j, Document& d) { select::modify(j, d, select::Modify::Contract, 6); },
+             [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        {"select_border", [](DocJournal& j, Document& d) { select::modify(j, d, select::Modify::Border, 10); },
+             [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        {"select_smooth", [](DocJournal& j, Document& d) { select::modify(j, d, select::Modify::Smooth, 3); },
+             [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        // s011 m3: the whole canvas turned, rotated, straightened.
+        {"canvas_turn_cw", [](DocJournal& j, Document& d) { xform::turn(j, d, xform::Turn::Clockwise); },
+             [](Document& d) { load_selection(d, {10, 10, 100, 50}); }},
+        {"canvas_flip_v", [](DocJournal& j, Document& d) { xform::turn(j, d, xform::Turn::FlipVertical); }},
+        {"canvas_rotate", [](DocJournal& j, Document& d) { xform::rotate_canvas(j, d, 30, pixel::rgba(1, 1, 1, 1)); }},
+        {"straighten",    [](DocJournal& j, Document& d) { xform::straighten(j, d, {0, 0}, {200, 15}, pixel::rgba(1, 1, 1, 1)); }},
         // s009 m2: the canvas -- the image itself is a record, so these are steps.
         {"crop",          [](DocJournal& j, Document& d) { canvas::crop(j, d, {50, 40, 400, 300}, pixel::rgba(1, 1, 1, 1)); }},
         {"crop_selected", [](DocJournal& j, Document& d) { canvas::crop(j, d, {150, 120, 100, 80}, pixel::rgba(1, 1, 1, 1)); },

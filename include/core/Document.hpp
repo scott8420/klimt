@@ -88,6 +88,13 @@ struct Layer {
     // s009: only on the "@image" record -- the image's size, format and
     // resolution, shared and compared by pointer like the pixels.
     std::shared_ptr<const Image> image;
+    // s012: the LAYER MASK -- stored as how much is HIDDEN (0 shows, 1 hides;
+    // the UI paints it the usual way: white reveals, black hides), one Gray
+    // channel at the document's depth like the selection, so an absent tile
+    // shows everything and "Reveal All" costs nothing. nullptr: no mask; a
+    // map with no tiles: a mask that hides nothing. Pixel layers only.
+    std::shared_ptr<const pixel::TileMap> mask;
+    bool          mask_on = true;      // Shift-click the mask: off (it stays, shows nothing)
     bool operator==(const Layer&) const = default;
 };
 
@@ -273,6 +280,21 @@ void opacity_begin(DocJournal& j, Document& d, const Id& id);
 void opacity_to(DocJournal& j, Document& d, const Id& id, int percent);
 bool opacity_end(DocJournal& j);
 
+// s012 -- LAYER MASKS. Refused on a group, under an All lock (a mask edits
+// what shows, not the pixels: the Pixels lock doesn't stop it).
+enum class MaskFrom { RevealAll, HideAll, RevealSelection, HideSelection };
+bool add_mask(DocJournal& j, Document& d, const Id& id, MaskFrom from);
+bool delete_mask(DocJournal& j, Document& d, const Id& id);
+// Bake the mask into the pixels' alpha and drop it. Refused with no alpha,
+// under a Pixels or Alpha lock.
+bool apply_mask(DocJournal& j, Document& d, const Id& id);
+bool set_mask_on(DocJournal& j, Document& d, const Id& id, bool on);
+bool invert_mask(DocJournal& j, Document& d, const Id& id);
+// A job that computed a mask on a copy lands through this (refused unless
+// the mask is still `expect`).
+bool set_mask_if(DocJournal& j, Document& d, const Id& id, const std::shared_ptr<const pixel::TileMap>& expect,
+                 pixel::TileMap after, const std::string& label);
+
 // Who takes the selection when `id` goes: the row below it in the panel, else
 // the row above, else its group, else nobody.
 Id neighbour(const Document& d, const Id& id);
@@ -298,6 +320,8 @@ const std::vector<Verb>& verbs();
 void load_fixture(Document& d);
 // s008: a rectangular selection, LOADED (a verb's setup; tests).
 void load_selection(Document& d, const pixel::Rect& r);
+// s012: a layer mask (a verb's setup; tests).
+void load_mask(Document& d, const Id& id);
 }  // namespace layers
 
 }  // namespace klimt::core

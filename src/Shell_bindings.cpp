@@ -40,6 +40,33 @@ void Shell::bind_actions() {  // bindings
     m_canvas.signal_stroke().connect(sigc::mem_fun(*this, &Shell::on_stroke));
     m_canvas.signal_move().connect(sigc::mem_fun(*this, &Shell::on_move));   // s009
     m_canvas.signal_crop().connect(sigc::mem_fun(*this, &Shell::on_crop_box));
+    // s011: Free Transform and the one-shot transforms (Shell_transform.cpp).
+    m_canvas.signal_transform().connect(sigc::mem_fun(*this, &Shell::on_xform_change));
+    m_canvas.signal_transform_commit().connect(sigc::mem_fun(*this, &Shell::xform_commit));
+    m_layer_acts["free-transform"] = add_action("free-transform", sigc::mem_fun(*this, &Shell::on_free_transform));
+    namespace X = core::xform;
+    m_layer_acts["flip-h"] = add_action("flip-h", [this] { run_xform("Flip Horizontal", [](const pixel::Rect& b) { return X::flip_about(b, true); }); });
+    m_layer_acts["flip-v"] = add_action("flip-v", [this] { run_xform("Flip Vertical", [](const pixel::Rect& b) { return X::flip_about(b, false); }); });
+    m_layer_acts["rotate-cw"] = add_action("rotate-cw", [this] { run_xform("Rotate 90° Clockwise", [](const pixel::Rect& b) { return X::rotate_about(b, 90); }); });
+    m_layer_acts["rotate-ccw"] = add_action("rotate-ccw", [this] { run_xform("Rotate 90° Counter Clockwise", [](const pixel::Rect& b) { return X::rotate_about(b, -90); }); });
+    m_canvas.signal_straighten().connect(sigc::mem_fun(*this, &Shell::on_straighten));   // s011 m3
+    // s012: layer masks (Shell_masks.cpp).
+    m_layers.signal_mask_view().connect(sigc::mem_fun(*this, &Shell::on_mask_view));
+    m_canvas.signal_gradient().connect(sigc::mem_fun(*this, &Shell::on_gradient));   // s012 m4
+    m_layer_acts["mask-add"]         = add_action("mask-add", [this] { on_mask_add(-1); });
+    m_layer_acts["mask-reveal-all"]  = add_action("mask-reveal-all", [this] { on_mask_add(int(core::layers::MaskFrom::RevealAll)); });
+    m_layer_acts["mask-hide-all"]    = add_action("mask-hide-all", [this] { on_mask_add(int(core::layers::MaskFrom::HideAll)); });
+    m_layer_acts["mask-reveal-sel"]  = add_action("mask-reveal-sel", [this] { on_mask_add(int(core::layers::MaskFrom::RevealSelection)); });
+    m_layer_acts["mask-hide-sel"]    = add_action("mask-hide-sel", [this] { on_mask_add(int(core::layers::MaskFrom::HideSelection)); });
+    for (const char* v : {"delete", "apply", "toggle", "invert", "edit"})
+        m_layer_acts[std::string("mask-") + v] = add_action(std::string("mask-") + v, [this, v] { on_mask_verb(v); });
+    m_layer_acts["canvas-cw"]  = add_action("canvas-cw",  [this] { on_turn(X::Turn::Clockwise); });
+    m_layer_acts["canvas-ccw"] = add_action("canvas-ccw", [this] { on_turn(X::Turn::CounterClockwise); });
+    m_layer_acts["canvas-180"] = add_action("canvas-180", [this] { on_turn(X::Turn::Half); });
+    m_layer_acts["canvas-flip-h"] = add_action("canvas-flip-h", [this] { on_turn(X::Turn::FlipHorizontal); });
+    m_layer_acts["canvas-flip-v"] = add_action("canvas-flip-v", [this] { on_turn(X::Turn::FlipVertical); });
+    m_layer_acts["canvas-rotate"] = add_action("canvas-rotate", sigc::mem_fun(*this, &Shell::on_rotate_canvas));
+    m_layer_acts["rotate-180"] = add_action("rotate-180", [this] { run_xform("Rotate 180°", [](const pixel::Rect& b) { return X::rotate_about(b, 180); }); });
     // s009 m2: the Image menu (Shell_canvas.cpp).
     m_layer_acts["image-size"]  = add_action("image-size", sigc::mem_fun(*this, &Shell::on_image_size));
     m_layer_acts["canvas-size"] = add_action("canvas-size", sigc::mem_fun(*this, &Shell::on_canvas_size));
@@ -47,6 +74,11 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["crop-selection"] = add_action("crop-selection", sigc::mem_fun(*this, &Shell::on_crop_selection));
     m_strip.signal_brush_changed().connect([this] { m_canvas.set_brush_size(m_strip.brush(m_rail.tool()).size); });
     m_layer_acts["select-feather"] = add_action("select-feather", sigc::mem_fun(*this, &Shell::on_feather));
+    // s011 m4: Select > Modify.
+    m_layer_acts["select-expand"]   = add_action("select-expand",   [this] { on_modify(core::select::Modify::Expand); });
+    m_layer_acts["select-contract"] = add_action("select-contract", [this] { on_modify(core::select::Modify::Contract); });
+    m_layer_acts["select-border"]   = add_action("select-border",   [this] { on_modify(core::select::Modify::Border); });
+    m_layer_acts["select-smooth"]   = add_action("select-smooth",   [this] { on_modify(core::select::Modify::Smooth); });
     m_strip.signal_variant().connect([this](const std::string& id, int v) {
         if (id == m_rail.tool()) m_canvas.set_tool(id, v);
     });
@@ -126,6 +158,11 @@ void Shell::bind_actions() {  // bindings
             const auto CTRL  = Gdk::ModifierType::CONTROL_MASK;
             const auto SHIFT = Gdk::ModifierType::SHIFT_MASK;
             if (focus_is_text()) return false;
+            // s011: a transform's box is up -- Enter applies, Escape drops it.
+            if (m_xform.active && mods == NONE) {
+                if (keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) { xform_commit(); return true; }
+                if (keyval == GDK_KEY_Escape) { xform_cancel(); return true; }
+            }
             const char* act = nullptr;
             if ((keyval == GDK_KEY_z || keyval == GDK_KEY_Z) && mods == CTRL)               act = "win.undo";
             else if ((keyval == GDK_KEY_z || keyval == GDK_KEY_Z) && mods == (CTRL | SHIFT)) act = "win.redo";
@@ -134,6 +171,7 @@ void Shell::bind_actions() {  // bindings
             // Backspace and Delete for itself (and the Layers list hears its
             // own Delete first).
             else if ((keyval == GDK_KEY_a || keyval == GDK_KEY_A) && mods == CTRL)          act = "win.select-all";
+            else if ((keyval == GDK_KEY_t || keyval == GDK_KEY_T) && mods == CTRL)          act = "win.free-transform";
             else if ((keyval == GDK_KEY_BackSpace) && mods == Gdk::ModifierType::ALT_MASK)   act = "win.fill-fg";
             else if ((keyval == GDK_KEY_BackSpace) && mods == CTRL)                          act = "win.fill-bg";
             else if ((keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete) && mods == NONE) act = "win.delete-selection";
@@ -185,6 +223,20 @@ void Shell::bind_actions() {  // bindings
     auto arrows = Gtk::EventControllerKey::create();
     arrows->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
     arrows->signal_key_pressed().connect([this](guint keyval, guint, Gdk::ModifierType state) {
+        // s011: in a transform, Enter / Escape / the arrows are the box's.
+        if (m_xform.active) {
+            const auto m2 = state & (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK | Gdk::ModifierType::ALT_MASK);
+            const double step = m2 == Gdk::ModifierType::SHIFT_MASK ? 10 : 1;
+            switch (keyval) {
+                case GDK_KEY_Return: case GDK_KEY_KP_Enter: xform_commit(); return true;
+                case GDK_KEY_Escape: xform_cancel(); return true;
+                case GDK_KEY_Left:  m_canvas.nudge_transform(-step, 0); return true;
+                case GDK_KEY_Right: m_canvas.nudge_transform(step, 0); return true;
+                case GDK_KEY_Up:    m_canvas.nudge_transform(0, -step); return true;
+                case GDK_KEY_Down:  m_canvas.nudge_transform(0, step); return true;
+                default: break;
+            }
+        }
         // s009 m2: the Crop tool's box -- Enter crops, Escape drops it.
         if (m_rail.tool() == "crop" && m_canvas.has_crop()) {
             if (keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) { m_canvas.commit_crop(); return true; }

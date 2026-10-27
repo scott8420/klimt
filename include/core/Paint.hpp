@@ -17,6 +17,7 @@
 #include "core/Document.hpp"
 #include "core/Selection.hpp"
 
+#include <optional>
 #include <vector>
 
 namespace klimt::core::paint {
@@ -33,6 +34,10 @@ struct Brush {
     // dab's size and / or its strength -- each a toggle in the strip.
     bool       pressure_size = true;
     bool       pressure_opacity = false;
+    // s012 m1: FLOW -- how much each dab lays down. 1: a dab reaches its full
+    // strength at once (coverage by max, as before). Below 1, dabs BUILD UP
+    // where they overlap (Photoshop's flow), still capped by the opacity.
+    double     flow = 1;
     double spacing() const { return std::max(0.5, size * 0.25); }
 };
 
@@ -41,6 +46,25 @@ struct Dab { double x = 0, y = 0; float p = 1.f; };
 // The light touch still leaves a mark: pressure never takes a dab below this
 // fraction of the brush's size.
 inline constexpr float kMinPressure = 0.05f;
+
+// s012 m1: the STABILISER (Smoothing). A pulled string: the brush follows
+// the pointer only once the pointer is more than `radius` (image px) away,
+// staying `radius` behind it -- wobbles inside the string are ignored, curves
+// come out smooth. finish() catches up to where the pointer is.
+class Smoother {
+public:
+    Smoother() = default;
+    explicit Smoother(double radius) : m_r(std::max(0.0, radius)) {}
+    // The pointer is at p; where the brush is now (none when it didn't move).
+    std::optional<struct Dab> push(const struct Dab& p);
+    std::optional<struct Dab> finish();
+    bool started() const { return m_started; }
+private:
+    double m_r = 0;
+    bool   m_started = false;
+    double m_x = 0, m_y = 0;
+    struct { double x = 0, y = 0; float p = 1; } m_last;
+};
 
 // The dab centres from `from` to `to`, `spacing` apart, carrying the leftover
 // distance in `carry` across calls (so a slow drag spaces dabs like a fast one).

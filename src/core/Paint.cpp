@@ -51,6 +51,29 @@ std::vector<Dab> dabs_along(const Dab& from, const Dab& to, const Brush& b, doub
     return out;
 }
 
+std::optional<Dab> Smoother::push(const Dab& p) {
+    m_last = {p.x, p.y, p.p};
+    if (!m_started) {   // the first point: the brush is there
+        m_started = true;
+        m_x = p.x;
+        m_y = p.y;
+        return p;
+    }
+    const double dx = p.x - m_x, dy = p.y - m_y, d = std::hypot(dx, dy);
+    if (d <= m_r) return std::nullopt;   // inside the string: the brush waits
+    const double k = (d - m_r) / d;
+    m_x += dx * k;
+    m_y += dy * k;
+    return Dab{m_x, m_y, p.p};
+}
+
+std::optional<Dab> Smoother::finish() {
+    if (!m_started || (m_x == m_last.x && m_y == m_last.y)) return std::nullopt;
+    m_x = m_last.x;
+    m_y = m_last.y;
+    return Dab{m_x, m_y, m_last.p};
+}
+
 double dab_radius(const Brush& b, float p) {
     const double r = std::max(0.5, b.size / 2);
     if (!b.pressure_size) return r;
@@ -118,7 +141,12 @@ pixel::TileMap add_pen_dabs(const pixel::TileMap& cov, const Brush& b, const std
                     for (int x = x0; x < x1; ++x) {
                         const float a = dab_alpha(std::hypot(x + 0.5 - p.x, y + 0.5 - p.y), pr, b.hardness) * strength;
                         float& c = buf[static_cast<std::size_t>(y - cell.y) * kTile + static_cast<std::size_t>(x - cell.x)];
-                        if (a > c) { c = a; changed = true; }
+                        if (b.flow >= 1) {
+                            if (a > c) { c = a; changed = true; }
+                        } else if (a > 0.f) {   // s012: build up, a flow's worth a dab
+                            const float n = c + a * static_cast<float>(b.flow) * (1 - c);
+                            if (n > c) { c = n; changed = true; }
+                        }
                     }
             }
             if (!changed) continue;

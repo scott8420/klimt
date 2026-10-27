@@ -32,6 +32,13 @@ double pressure_of(const Glib::RefPtr<Gtk::GestureDrag>& g) {
     if (!pen || !ev->get_axis(Gdk::AxisUse::PRESSURE, p)) return 1;
     return std::clamp(p, 0.0, 1.0);
 }
+// s012 m1: the pen's ERASER end (a tablet tool of type eraser) is down?
+bool eraser_of(const Glib::RefPtr<Gtk::GestureDrag>& g) {
+    const auto ev = g->get_current_event();
+    if (!ev) return false;
+    GdkDeviceTool* tool = gdk_event_get_device_tool(const_cast<GdkEvent*>(ev->gobj()));
+    return tool && gdk_device_tool_get_tool_type(tool) == GDK_DEVICE_TOOL_TYPE_ERASER;
+}
 // The zoom steps zoom_in / zoom_out walk (Photoshop's, roughly).
 constexpr double kSteps[] = {1.0 / 64, 1.0 / 48, 1.0 / 32, 1.0 / 24, 1.0 / 16, 1.0 / 12, 1.0 / 8, 1.0 / 6,
                              0.25, 1.0 / 3, 0.5, 2.0 / 3, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64};
@@ -65,6 +72,10 @@ CanvasView::CanvasView() {
     click->signal_pressed().connect([this, click](int n, double x, double y) {
         grab_focus();
         if (m_tool == "crop" && n == 2 && m_crop && crop_hit(x, y) == -1) { commit_crop(); return; }
+        if (m_xf.on) {   // s011: in a transform, a click is the box's; a double-click inside commits
+            if (n == 2 && xf_inside(x, y)) m_xf_commit.emit();
+            return;
+        }
         if (m_tool == "eyedropper" && !m_space && m_iw > 0) {
             const bool alt = (click->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
             const int ix = static_cast<int>(std::floor(to_image_x(x))), iy = static_cast<int>(std::floor(to_image_y(y)));
@@ -88,6 +99,21 @@ CanvasView::CanvasView() {
         drag->set_button(button);
         drag->signal_drag_begin().connect([this, button, drag](double x, double y) {
             m_panning = button == GDK_BUTTON_MIDDLE || m_space || m_tool == "hand";
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && m_xf.on) {   // s011: the transform box first
+                m_press_x = x;
+                m_press_y = y;
+                xf_press(x, y);
+                return;
+            }
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && ((m_tool == "crop" && m_variant == 1) || m_tool == "gradient") && m_iw > 0) {
+                m_line = true;   // s011: Straighten; s012: the Gradient
+                m_line_gradient = m_tool == "gradient";
+                m_line_a = m_line_b = {to_image_x(x), to_image_y(y)};
+                m_press_x = x;
+                m_press_y = y;
+                queue_draw();
+                return;
+            }
             if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "crop" && m_iw > 0) {
                 m_press_x = x;
                 m_press_y = y;
@@ -101,7 +127,9 @@ CanvasView::CanvasView() {
                 m_move_signal.emit(MoveAt::Begin, 0, 0);
                 return;
             }
-            if (!m_panning && button == GDK_BUTTON_PRIMARY && painting() && m_iw > 0) {
+            // s012: the pen's eraser end erases, whatever the tool (Photoshop's way).
+            m_pen_eraser = button == GDK_BUTTON_PRIMARY && eraser_of(drag);
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && (painting() || m_pen_eraser) && m_iw > 0) {
                 const bool shift = (drag->get_current_event_state() & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{};
                 m_stroking = true;
                 m_press_x = x;
@@ -140,10 +168,27 @@ CanvasView::CanvasView() {
             oy = static_cast<int>(std::lround(iy));
         };
         drag->signal_drag_update().connect([this, drag, offset](double dx, double dy) {
+            if (m_xf.on && m_xf.mode != Xf::Mode::None) {
+                const auto st = drag->get_current_event_state();
+                xf_drag(m_press_x + dx, m_press_y + dy, (st & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{},
+                        (st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{});
+                return;
+            }
             if (m_moving) {
                 int ox = 0, oy = 0;
                 offset(dx, dy, ox, oy);
                 m_move_signal.emit(MoveAt::Move, ox, oy);
+                return;
+            }
+            if (m_line) {
+                m_line_b = {to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)};
+                // s012: Shift -- the gradient's line in 45-degree steps.
+                if (m_line_gradient && (drag->get_current_event_state() & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{}) {
+                    const double ldx = m_line_b.x - m_line_a.x, ldy = m_line_b.y - m_line_a.y, len = std::hypot(ldx, ldy);
+                    const double ang = std::round(std::atan2(ldy, ldx) / (M_PI / 4)) * (M_PI / 4);
+                    m_line_b = {m_line_a.x + len * std::cos(ang), m_line_a.y + len * std::sin(ang)};
+                }
+                queue_draw();
                 return;
             }
             if (m_crop_mode != CropMode::None) {
@@ -154,6 +199,28 @@ CanvasView::CanvasView() {
             if (m_stroking) {
                 m_px = m_press_x + dx;
                 m_py = m_press_y + dy;
+                // s012 m1: every sample the device sent since the last frame
+                // (GTK merges motion per frame: a fast pen curve would come
+                // out as straight segments). History is in SURFACE coords:
+                // shift it by where this event sits in the widget.
+                if (const auto ev = drag->get_current_event()) {
+                    GdkEvent* ce = const_cast<GdkEvent*>(ev->gobj());
+                    double ex = 0, ey = 0;
+                    if (gdk_event_get_event_type(ce) == GDK_MOTION_NOTIFY && gdk_event_get_position(ce, &ex, &ey)) {
+                        const double ox = m_px - ex, oy = m_py - ey;
+                        const bool pen = pressure_of(drag) != 1.0 || gdk_event_get_device_tool(ce);
+                        guint n = 0;
+                        GdkTimeCoord* h = gdk_event_get_history(ce, &n);
+                        for (guint i = 0; h && i + 1 < n; ++i) {   // the last is this event itself
+                            if (!(h[i].flags & GDK_AXIS_FLAG_X) || !(h[i].flags & GDK_AXIS_FLAG_Y)) continue;
+                            double p = 1;
+                            if (pen && (h[i].flags & GDK_AXIS_FLAG_PRESSURE)) p = std::clamp(h[i].axes[GDK_AXIS_PRESSURE], 0.0, 1.0);
+                            m_stroke_signal.emit(StrokeAt::Move, {to_image_x(h[i].axes[GDK_AXIS_X] + ox), to_image_y(h[i].axes[GDK_AXIS_Y] + oy)},
+                                                 false, p);
+                        }
+                        g_free(h);
+                    }
+                }
                 m_stroke_signal.emit(StrokeAt::Move, {to_image_x(m_px), to_image_y(m_py)}, false, pressure_of(drag));
                 queue_draw();
                 return;
@@ -196,7 +263,15 @@ CanvasView::CanvasView() {
                 m_move_signal.emit(MoveAt::End, ox, oy);
                 return;
             }
+            if (m_line) {
+                m_line = false;
+                if (!m_line_gradient) m_line_b = {to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)};   // the gradient keeps its snap
+                queue_draw();
+                if (std::hypot(dx, dy) >= 4) (m_line_gradient ? m_gradient_signal : m_straighten_signal).emit(m_line_a, m_line_b);
+                return;
+            }
             if (m_crop_mode != CropMode::None) { crop_release(); return; }
+            if (m_xf.on && m_xf.mode != Xf::Mode::None) { m_xf.mode = Xf::Mode::None; return; }
             if (m_stroking) {
                 m_stroking = false;
                 m_stroke_signal.emit(StrokeAt::End, {to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)}, false, pressure_of(drag));
@@ -386,7 +461,7 @@ void CanvasView::update_cursor() {
     else if (m_space || m_tool == "hand") set_cursor("grab");
     else if (m_tool == "zoom") set_cursor("zoom-in");
     else if (m_tool == "move") set_cursor("move");
-    else if (m_tool == "crop") set_cursor("crosshair");
+    else if (m_tool == "crop" || m_tool == "gradient") set_cursor("crosshair");
     else if (selecting() || m_tool == "eyedropper" || painting()) set_cursor("crosshair");
     else set_cursor("");
 }
@@ -592,6 +667,172 @@ void CanvasView::draw_crop(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h
     cr->restore();
 }
 
+// ── s011 m2: the transform box ───────────────────────────────────────────────
+namespace {
+constexpr double kHandle = 8;   // screen px: how near a handle counts
+}
+
+void CanvasView::begin_transform(double x, double y, double w, double h) {
+    m_xf = {};
+    m_xf.on = true;
+    m_xf.bx = x; m_xf.by = y; m_xf.bw = std::max(1.0, w); m_xf.bh = std::max(1.0, h);
+    set_cursor("default");
+    queue_draw();
+}
+
+void CanvasView::end_transform() {
+    m_xf = {};
+    update_cursor();
+    queue_draw();
+}
+
+std::array<double, 6> CanvasView::xf_matrix() const {
+    const double cx = m_xf.bx + m_xf.bw / 2, cy = m_xf.by + m_xf.bh / 2;
+    const double cs = std::cos(m_xf.ang), sn = std::sin(m_xf.ang);
+    // R S: [cs*sx, sn*sx, -sn*sy, cs*sy]
+    const double a = cs * m_xf.sx, b = sn * m_xf.sx, c = -sn * m_xf.sy, d = cs * m_xf.sy;
+    const double e = cx + m_xf.tx - (a * cx + c * cy), f = cy + m_xf.ty - (b * cx + d * cy);
+    return {a, b, c, d, e, f};
+}
+
+core::select::Pt CanvasView::xf_world(double lx, double ly) const {
+    const auto m = xf_matrix();
+    const double x = m_xf.bx + m_xf.bw / 2 + lx, y = m_xf.by + m_xf.bh / 2 + ly;
+    return {m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]};
+}
+
+bool CanvasView::xf_inside(double sx, double sy) const {
+    const auto m = xf_matrix();
+    const double det = m[0] * m[3] - m[1] * m[2];
+    if (std::abs(det) < 1e-12) return false;
+    const double ix = to_image_x(sx) - m[4], iy = to_image_y(sy) - m[5];
+    const double x = (m[3] * ix - m[2] * iy) / det, y = (-m[1] * ix + m[0] * iy) / det;
+    return x >= m_xf.bx && x <= m_xf.bx + m_xf.bw && y >= m_xf.by && y <= m_xf.by + m_xf.bh;
+}
+
+void CanvasView::xf_press(double sx, double sy) {
+    m_xf.tx0 = m_xf.tx; m_xf.ty0 = m_xf.ty; m_xf.sx0 = m_xf.sx; m_xf.sy0 = m_xf.sy; m_xf.ang0 = m_xf.ang;
+    m_xf.px0 = to_image_x(sx);
+    m_xf.py0 = to_image_y(sy);
+    m_xf.mode = Xf::Mode::None;
+    for (int hy = -1; hy <= 1; ++hy)
+        for (int hx = -1; hx <= 1; ++hx) {
+            if (!hx && !hy) continue;
+            const auto p = xf_world(hx * m_xf.bw / 2, hy * m_xf.bh / 2);
+            if (std::hypot(to_screen_x(p.x) - sx, to_screen_y(p.y) - sy) <= kHandle) {
+                m_xf.mode = Xf::Mode::Scale;
+                m_xf.hx = hx;
+                m_xf.hy = hy;
+                return;
+            }
+        }
+    m_xf.mode = xf_inside(sx, sy) ? Xf::Mode::Move : Xf::Mode::Rotate;
+}
+
+void CanvasView::xf_drag(double sx, double sy, bool shift, bool alt) {
+    const double px = to_image_x(sx), py = to_image_y(sy);
+    const double cx = m_xf.bx + m_xf.bw / 2, cy = m_xf.by + m_xf.bh / 2;
+    if (m_xf.mode == Xf::Mode::Move) {
+        double dx = px - m_xf.px0, dy = py - m_xf.py0;
+        if (shift) { if (std::abs(dx) >= std::abs(dy)) dy = 0; else dx = 0; }
+        m_xf.tx = m_xf.tx0 + dx;
+        m_xf.ty = m_xf.ty0 + dy;
+    } else if (m_xf.mode == Xf::Mode::Rotate) {
+        const double wcx = cx + m_xf.tx0, wcy = cy + m_xf.ty0;
+        double a = m_xf.ang0 + std::atan2(py - wcy, px - wcx) - std::atan2(m_xf.py0 - wcy, m_xf.px0 - wcx);
+        if (shift) a = std::round(a / (M_PI / 12)) * (M_PI / 12);
+        m_xf.ang = a;
+    } else if (m_xf.mode == Xf::Mode::Scale) {
+        const int hx = m_xf.hx, hy = m_xf.hy;
+        // The anchor: the opposite handle (Alt: the centre), local, box-centred.
+        const double ax = alt ? 0 : -hx * m_xf.bw / 2, ay = alt ? 0 : -hy * m_xf.bh / 2;
+        const double lx = hx * m_xf.bw / 2 - ax, ly = hy * m_xf.bh / 2 - ay;   // anchor -> handle, unscaled
+        const double cs = std::cos(m_xf.ang), sn = std::sin(m_xf.ang);
+        // The anchor in the image, at the press's scale.
+        const double wax = cx + m_xf.tx0 + cs * m_xf.sx0 * ax - sn * m_xf.sy0 * ay;
+        const double way = cy + m_xf.ty0 + sn * m_xf.sx0 * ax + cs * m_xf.sy0 * ay;
+        // The pointer from the anchor, in the box's (rotated) frame.
+        const double qx = cs * (px - wax) + sn * (py - way), qy = -sn * (px - wax) + cs * (py - way);
+        double nsx = m_xf.sx0, nsy = m_xf.sy0;
+        if (hx && hy && !shift) {   // a corner: keep the proportions
+            const double dx0 = m_xf.sx0 * lx, dy0 = m_xf.sy0 * ly;
+            const double k = (qx * dx0 + qy * dy0) / std::max(1e-9, dx0 * dx0 + dy0 * dy0);
+            nsx = m_xf.sx0 * k;
+            nsy = m_xf.sy0 * k;
+        } else {
+            if (hx) nsx = qx / lx;
+            if (hy) nsy = qy / ly;
+        }
+        // Never quite zero (a flat box can't be inverted).
+        const auto keep = [](double v) { return std::abs(v) < 1e-3 ? (v < 0 ? -1e-3 : 1e-3) : v; };
+        m_xf.sx = keep(nsx);
+        m_xf.sy = keep(nsy);
+        // The anchor stays where it was.
+        m_xf.tx = wax - cx - (cs * m_xf.sx * ax - sn * m_xf.sy * ay);
+        m_xf.ty = way - cy - (sn * m_xf.sx * ax + cs * m_xf.sy * ay);
+    }
+    queue_draw();
+    m_xf_signal.emit(xf_matrix());
+}
+
+void CanvasView::nudge_transform(double dx, double dy) {
+    if (!m_xf.on) return;
+    m_xf.tx += dx;
+    m_xf.ty += dy;
+    queue_draw();
+    m_xf_signal.emit(xf_matrix());
+}
+
+void CanvasView::draw_transform(const Cairo::RefPtr<Cairo::Context>& cr) {
+    if (!m_xf.on) return;
+    cr->save();
+    const double hw = m_xf.bw / 2, hh = m_xf.bh / 2;
+    const core::select::Pt q[4] = {xf_world(-hw, -hh), xf_world(hw, -hh), xf_world(hw, hh), xf_world(-hw, hh)};
+    cr->set_line_width(1);
+    cr->move_to(to_screen_x(q[0].x), to_screen_y(q[0].y));
+    for (int i = 1; i < 4; ++i) cr->line_to(to_screen_x(q[i].x), to_screen_y(q[i].y));
+    cr->close_path();
+    cr->set_source_rgb(0, 0, 0);
+    cr->set_line_width(3);
+    cr->stroke_preserve();
+    cr->set_source_rgb(1, 1, 1);
+    cr->set_line_width(1);
+    cr->stroke();
+    for (int hy = -1; hy <= 1; ++hy)
+        for (int hx = -1; hx <= 1; ++hx) {
+            if (!hx && !hy) continue;
+            const auto p = xf_world(hx * hw, hy * hh);
+            cr->rectangle(std::round(to_screen_x(p.x)) - 3.5, std::round(to_screen_y(p.y)) - 3.5, 7, 7);
+            cr->set_source_rgb(1, 1, 1);
+            cr->fill_preserve();
+            cr->set_source_rgb(0.1, 0.1, 0.1);
+            cr->stroke();
+        }
+    const auto c = xf_world(0, 0);   // the centre the box turns about
+    const double ccx = to_screen_x(c.x), ccy = to_screen_y(c.y);
+    cr->arc(ccx, ccy, 4, 0, 2 * M_PI);
+    cr->set_source_rgb(1, 1, 1);
+    cr->stroke();
+    // What it's doing, above the box's top.
+    char buf[96];
+    double deg = m_xf.ang * 180 / M_PI;
+    deg = std::remainder(deg, 360.0);
+    std::snprintf(buf, sizeof buf, "W %.0f%%  H %.0f%%  %.1f°", m_xf.sx * 100, m_xf.sy * 100, deg);
+    auto layout = create_pango_layout(buf);
+    int tw = 0, th = 0;
+    layout->get_pixel_size(tw, th);
+    double top = std::min({to_screen_y(q[0].y), to_screen_y(q[1].y), to_screen_y(q[2].y), to_screen_y(q[3].y)});
+    double left = std::min({to_screen_x(q[0].x), to_screen_x(q[1].x), to_screen_x(q[2].x), to_screen_x(q[3].x)});
+    const double ty = top - th - 10 >= 0 ? top - th - 10 : top + 8;
+    cr->set_source_rgba(0, 0, 0, 0.7);
+    cr->rectangle(left, ty - 2, tw + 12, th + 4);
+    cr->fill();
+    cr->set_source_rgb(1, 1, 1);
+    cr->move_to(left + 6, ty);
+    layout->show_in_cairo_context(cr);
+    cr->restore();
+}
+
 // ── drawing ─────────────────────────────────────────────────────────────────
 void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     if (w != m_vw || h != m_vh) layout(w, h);
@@ -681,6 +922,33 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     draw_ants(cr, w, h);
     draw_rubber(cr);
     draw_crop(cr, w, h);
+    draw_transform(cr);
+    if (m_line) {   // s011: the Straighten line, and its angle
+        const double ax = to_screen_x(m_line_a.x), ay = to_screen_y(m_line_a.y);
+        const double bx = to_screen_x(m_line_b.x), by = to_screen_y(m_line_b.y);
+        cr->save();
+        cr->move_to(ax, ay);
+        cr->line_to(bx, by);
+        cr->set_line_width(3);
+        cr->set_source_rgb(0, 0, 0);
+        cr->stroke_preserve();
+        cr->set_line_width(1);
+        cr->set_source_rgb(1, 1, 1);
+        cr->stroke();
+        char buf[48];
+        std::snprintf(buf, sizeof buf, "%.1f°", -std::atan2(m_line_b.y - m_line_a.y, m_line_b.x - m_line_a.x) * 180 / M_PI);
+        if (m_line_gradient) std::snprintf(buf, sizeof buf, "%.0f px", std::hypot(m_line_b.x - m_line_a.x, m_line_b.y - m_line_a.y));
+        auto layout = create_pango_layout(buf);
+        int tw = 0, th = 0;
+        layout->get_pixel_size(tw, th);
+        cr->set_source_rgba(0, 0, 0, 0.7);
+        cr->rectangle(bx + 12, by - th - 6, tw + 12, th + 4);
+        cr->fill();
+        cr->set_source_rgb(1, 1, 1);
+        cr->move_to(bx + 18, by - th - 4);
+        layout->show_in_cairo_context(cr);
+        cr->restore();
+    }
     // s008 m4: the brush's outline at the pointer (its real size on screen).
     if (painting() && m_px >= 0 && !m_space) {
         const double r = std::max(1.0, m_brush / 2 * m_zoom);

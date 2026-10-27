@@ -21,12 +21,16 @@ public:
     // s008 m3: the Magic Wand's options (view state, remembered).
     struct Wand { int tolerance = 32; bool contiguous = true; bool all_layers = false; };
     const Wand& wand() const { return m_wand; }
+    // s012: the Gradient tool's options (view state, remembered).
+    struct GradientOpts { int opacity = 100; bool reverse = false; bool to_transparent = false; };
+    const GradientOpts& gradient() const { return m_gradient; }
     // s010: the Crop tool's "Delete cropped pixels" (off: they're kept beyond the image).
     bool crop_deletes() const { return m_crop_delete; }
     // s008 m4: the Brush's and the Eraser's own options (each remembers).
     struct BrushOpts {
         int size = 30; int hardness = 80; int opacity = 100;
         bool pressure_size = true, pressure_opacity = false;   // s009 m3: what the pen's pressure drives
+        int flow = 100, smoothing = 0;                          // s012 m1: build-up; the stabiliser (%)
     };
     BrushOpts brush(const std::string& tool) const;
     void set_brush_size(const std::string& tool, int size);   // [ and ] -- the strip follows
@@ -38,6 +42,7 @@ private:
     std::map<std::string, int> m_variant;
     Wand m_wand;
     bool m_crop_delete = false;
+    GradientOpts m_gradient;
     std::map<std::string, BrushOpts> m_brush;
     std::string m_shown;                                      // the tool the strip shows
     sigc::signal<void()> m_brush_signal;

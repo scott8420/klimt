@@ -101,8 +101,18 @@ void Shell::update_layer_actions() {
     };
     // s009: with no image, the verbs that need one grey.
     const bool img = has_image();
-    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all"})
+    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all",
+                          "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
+                          "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate"})
         on(a, img);
+    // s012: the mask verbs follow the primary layer's mask.
+    {
+        const auto pl = m_doc.get(m_layers.primary());
+        const bool pixel_layer = pl && pl->kind == core::Kind::Pixel;
+        const bool masked = pixel_layer && pl->mask;
+        for (const char* a : {"mask-add", "mask-reveal-all", "mask-hide-all", "mask-reveal-sel", "mask-hide-sel"}) on(a, pixel_layer && !masked);
+        for (const char* a : {"mask-delete", "mask-apply", "mask-toggle", "mask-invert", "mask-edit"}) on(a, masked);
+    }
     on("layer-duplicate", any);
     on("layer-group", any);
     on("layer-ungroup", m_layers.primary_is_group());
@@ -128,7 +138,7 @@ void Shell::update_undo_ui() {
 }
 
 // The document in a line: the title's subtitle and the status line.
-void Shell::update_summary() {
+void Shell::update_summary() {   // s012: says when the mask is what's painted
     if (!has_image()) {   // s009: launched with nothing open yet
         if (m_title) adw_window_title_set_subtitle(m_title, "");
         m_status.set_summary("No image  ·  New (Ctrl+N), Open (Ctrl+O), or Open Demo in the main menu");
@@ -146,7 +156,8 @@ void Shell::update_summary() {
     const char* depth = im.format.depth == pixel::Depth::U8 ? "8-bit" : im.format.depth == pixel::Depth::U16 ? "16-bit"
                       : "32-bit float";
     m_status.set_summary(std::to_string(im.width) + " × " + std::to_string(im.height) + " px  ·  " + mode + " " +
-                         depth + "  ·  " + s + (n ? "  ·  " + std::to_string(n) + " selected" : std::string{}));
+                         depth + "  ·  " + s + (n ? "  ·  " + std::to_string(n) + " selected" : std::string{}) +
+                         (m_layers.mask_target().empty() ? std::string{} : "  ·  painting the MASK (white shows, black hides)"));
 }
 
 // A toast. With `offer_undo`, its button is Undo (the step just taken).
@@ -212,6 +223,9 @@ void Shell::queue_render() {
         m_render_queued = false;
         const core::Image im = m_doc.image();
         auto layers = m_doc.snapshot();
+        // s011: a transform's preview shows in place of the real pixels.
+        for (const auto& [id, px] : m_preview)
+            if (auto it = layers.find(id); it != layers.end()) it->second.pixels = px;
         const bool fresh = im.width != m_shown_image.width || im.height != m_shown_image.height ||
                            !(im.format == m_shown_image.format) || m_dirty.cols == 0;
         if (fresh) {
@@ -244,7 +258,7 @@ void Shell::queue_render() {
         for (std::size_t i = 0; i < owed.size(); i += kBatch) {
             std::vector<std::pair<int, int>> batch;
             for (std::size_t k = i; k < std::min(owed.size(), i + kBatch); ++k) batch.emplace_back(owed[k].col, owed[k].row);
-            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch](core::Jobs::Token& t) -> core::Jobs::Landing {
+            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch, view = m_mask_view](core::Jobs::Token& t) -> core::Jobs::Landing {
                 auto out = std::make_shared<std::vector<CanvasView::Tile>>();
                 for (const auto& [col, row] : batch) {
                     if (t.cancelled()) return [] {};
@@ -252,7 +266,10 @@ void Shell::queue_render() {
                     CanvasView::Tile tile;
                     tile.col = col;
                     tile.row = row;
-                    core::composite_tile_argb(im, *shared, col, row, *px, tile.w, tile.h);
+                    if (!view.empty() && shared->count(view) && shared->at(view).mask)   // s012: the mask itself
+                        core::mask_tile_argb(*shared->at(view).mask, col, row, *px, tile.w, tile.h);
+                    else
+                        core::composite_tile_argb(im, *shared, col, row, *px, tile.w, tile.h);
                     // s010 m4: its mips, here on the worker.
                     {
                         const std::vector<std::uint32_t>* from = px.get();

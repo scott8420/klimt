@@ -63,6 +63,7 @@ struct Before {
     std::shared_ptr<const Image> image;
     std::map<Id, MapPtr>         pixels;   // every pixel layer's
     MapPtr                       mask;
+    std::map<Id, MapPtr>         masks;    // s012: every layer mask (the layers that have one)
 };
 Before before(const Document& d);
 
@@ -71,6 +72,7 @@ struct Reshape {
     std::shared_ptr<const Image> image;
     std::map<Id, MapPtr>         pixels;
     MapPtr                       mask;     // nullptr: nothing selected after
+    std::map<Id, MapPtr>         masks;    // s012: each layer mask, reshaped like its layer
 };
 // Crop to `r` (image pixels; may reach past the canvas -- that adds canvas).
 // s010: what falls outside is KEPT beyond the new image unless delete_cropped.

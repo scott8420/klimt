@@ -21,6 +21,7 @@
 #include <cairomm/surface.h>
 #include <sigc++/signal.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -83,6 +84,8 @@ public:
     // s009 m3: the last argument is the pen's pressure, 0..1 (a mouse: 1).
     sigc::signal<void(StrokeAt, core::select::Pt, bool, double)>& signal_stroke() { return m_stroke_signal; }
     void set_brush_size(double px) { m_brush = px; queue_draw(); }   // the outline at the pointer
+    // s012 m1: the stroke under way is the pen's eraser end (the Shell erases).
+    bool pen_eraser() const { return m_pen_eraser; }
     // s009 m1: the Move tool's drag: Begin, Move, End, each with the offset
     // from the press in WHOLE image pixels (Shift: along one axis only).
     enum class MoveAt { Begin, Move, End };
@@ -96,6 +99,24 @@ public:
     void clear_crop() { m_crop = false; m_crop_mode = CropMode::None; queue_draw(); }
     void set_crop(double x0, double y0, double x1, double y1);   // e.g. Crop to Selection's preview
     bool commit_crop();                                          // Enter: true if there was a box
+    // s011 m3: the Crop tool's Straighten: drag along what should be level
+    // (or upright); let go -> signal_straighten (image coords).
+    sigc::signal<void(core::select::Pt, core::select::Pt)>& signal_straighten() { return m_straighten_signal; }
+    // s012 m4: the Gradient tool's drag: where it starts and ends (Shift: 45° steps).
+    sigc::signal<void(core::select::Pt, core::select::Pt)>& signal_gradient() { return m_gradient_signal; }
+    // s011 m2: FREE TRANSFORM. While on, every left-drag on the canvas works
+    // the box (whatever the tool): a handle scales (corners keep the
+    // proportions; Shift frees them; Alt scales about the centre), inside
+    // moves (Shift: one axis), outside rotates (Shift: 15-degree steps).
+    // Each change emits signal_transform with the whole map (image coords);
+    // a double-click inside asks to commit. The Shell decides Enter / Esc.
+    void begin_transform(double x, double y, double w, double h);
+    void end_transform();
+    bool transforming() const { return m_xf.on; }
+    void nudge_transform(double dx, double dy);                  // the arrows, in transform
+    core::select::Pt transform_offset() const { return {m_xf.tx, m_xf.ty}; }
+    sigc::signal<void(const std::array<double, 6>&)>& signal_transform() { return m_xf_signal; }   // a b c d e f
+    sigc::signal<void()>& signal_transform_commit() { return m_xf_commit; }
     // s008 m3: the Eyedropper clicked at an image point; `background`: Alt.
     sigc::signal<void(int, int, bool)>& signal_pick() { return m_pick_signal; }
     // Told the zoom whenever it changes: 0.37 -> "37%".
@@ -156,6 +177,7 @@ private:
     sigc::signal<void(int, int, bool)> m_pick_signal;
     sigc::signal<void(StrokeAt, core::select::Pt, bool, double)> m_stroke_signal;
     bool   m_stroking = false;
+    bool   m_pen_eraser = false;                       // s012: this stroke is the pen's eraser end
     bool   m_moving = false;                           // s009: a Move drag in progress
     // s009 m2: the crop box (image coords, x0 < x1, y0 < y1 once let go).
     enum class CropMode { None, New, Move, Resize };
@@ -170,6 +192,29 @@ private:
     void     draw_crop(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     int      crop_hit(double sx, double sy) const;      // edges under the pointer; -1 inside; 0 outside
     sigc::signal<void(core::select::Pt, core::select::Pt)> m_crop_signal;
+    bool             m_line = false;                    // s011: a Straighten line being dragged
+    core::select::Pt m_line_a, m_line_b;
+    sigc::signal<void(core::select::Pt, core::select::Pt)> m_straighten_signal;
+    bool             m_line_gradient = false;           // s012: the line is a gradient's
+    sigc::signal<void(core::select::Pt, core::select::Pt)> m_gradient_signal;
+    // s011 m2: the transform box. M = T(c + t) R(ang) S(sx, sy) T(-c).
+    struct Xf {
+        bool   on = false;
+        double bx = 0, by = 0, bw = 0, bh = 0;          // the box, image coords
+        double tx = 0, ty = 0, sx = 1, sy = 1, ang = 0;
+        enum class Mode { None, Move, Scale, Rotate } mode = Mode::None;
+        int    hx = 0, hy = 0;                           // the handle: -1 / 0 / 1 each
+        double tx0 = 0, ty0 = 0, sx0 = 1, sy0 = 1, ang0 = 0;
+        double px0 = 0, py0 = 0;                         // the press, image coords
+    } m_xf;
+    sigc::signal<void(const std::array<double, 6>&)> m_xf_signal;
+    sigc::signal<void()> m_xf_commit;
+    std::array<double, 6> xf_matrix() const;
+    core::select::Pt xf_world(double lx, double ly) const;   // a box-centred local point -> image
+    void xf_press(double sx, double sy);
+    void xf_drag(double sx, double sy, bool shift, bool alt);
+    bool xf_inside(double sx, double sy) const;
+    void draw_transform(const Cairo::RefPtr<Cairo::Context>& cr);
     sigc::signal<void(MoveAt, int, int)> m_move_signal;
     double m_brush = 30;
 };

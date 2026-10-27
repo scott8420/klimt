@@ -25,6 +25,7 @@
 
 #include <functional>
 #include <set>
+#include <sigc++/signal.h>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,15 @@ public:
     void toggle_clip();
     void rename_primary();   // F2 / double-click: the name becomes a field
 
+    // s012: LAYER MASKS on the rows. The mask chip: a click paints the MASK
+    // (the Brush, Eraser and Fill go to it) -- clicking the layer's own icon
+    // goes back to its pixels; Shift-click turns the mask off / on;
+    // Alt-click shows the mask itself on the canvas.
+    const Id& mask_target() const { return m_mask_target; }   // "" : painting pixels
+    void set_mask_target(const Id& id);
+    sigc::signal<void(const Id&)>& signal_mask_view() { return m_mask_view; }   // Alt-click a chip
+    void set_mask_viewing(const Id& id) { m_mask_viewing = id; queue_repaint(); }
+
     // Is there something for each verb to act on? (The Shell greys by these.)
     bool has_selection() const { return !m_sel.empty(); }
     bool primary_is_group() const;
@@ -94,6 +104,9 @@ private:
     std::vector<Id>   m_dragging;               // what the drag in flight carries
     Gtk::ListBoxRow*  m_drop_row = nullptr;     // the row showing the drop line
     const char*       m_drop_css = nullptr;
+    Id                m_mask_target;            // s012: the layer whose mask is painted
+    Id                m_mask_viewing;           // s012: the mask shown on the canvas
+    sigc::signal<void(const Id&)> m_mask_view;
 
     // The rows, then the verbs. (Blend / opacity / fill / locks moved to the
     // PropertiesPanel at s005 -- docs/ui.md call 2: the panel is the stack.)

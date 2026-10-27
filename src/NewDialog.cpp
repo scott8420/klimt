@@ -159,6 +159,9 @@ NewDialog::NewDialog(Gtk::Window& parent)
     });
     // Enter anywhere creates; Escape cancels.
     auto keys = Gtk::EventControllerKey::create();
+    // s012: CAPTURE, as NumberDialog -- the size field took Enter first and
+    // Create never heard it (seen under Xvfb).
+    keys->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
     keys->signal_key_pressed().connect([this](guint k, guint, Gdk::ModifierType) {
         if (k == GDK_KEY_Escape) { close(); return true; }
         if (k == GDK_KEY_Return || k == GDK_KEY_KP_Enter) {

@@ -367,6 +367,163 @@ std::optional<TileMap> feathered(const TileMap& m, double radius, const std::fun
     });
 }
 
+// ── Select > Modify (s011 m4) ───────────────────────────────────────────────
+namespace {
+// Felzenszwalb & Huttenlocher's 1-D squared distance transform of f (n
+// samples, `stride` apart), in place. Doubles: the 1e20 "no feature" would
+// swallow q^2 in float. v / z / g: scratch.
+void edt_1d(double* f, std::size_t n, std::size_t stride, std::vector<int>& v, std::vector<double>& z, std::vector<double>& g) {
+    constexpr double kInf = 1e30;
+    v.assign(n, 0);
+    z.assign(n + 1, 0);
+    g.resize(n);
+    for (std::size_t i = 0; i < n; ++i) g[i] = f[i * stride];
+    std::size_t k = 0;
+    v[0] = 0;
+    z[0] = -kInf;
+    z[1] = kInf;
+    const auto cross = [&](std::size_t q, std::size_t p) {
+        const double dq = static_cast<double>(q), dp = static_cast<double>(p);
+        return ((g[q] + dq * dq) - (g[p] + dp * dp)) / (2 * dq - 2 * dp);
+    };
+    for (std::size_t q = 1; q < n; ++q) {
+        double sq = cross(q, static_cast<std::size_t>(v[k]));
+        while (sq <= z[k]) {   // z[0] is -inf: k never passes 0
+            --k;
+            sq = cross(q, static_cast<std::size_t>(v[k]));
+        }
+        ++k;
+        v[k] = static_cast<int>(q);
+        z[k] = sq;
+        z[k + 1] = kInf;
+    }
+    k = 0;
+    for (std::size_t q = 0; q < n; ++q) {
+        while (z[k + 1] < static_cast<double>(q)) ++k;
+        const auto vk = static_cast<std::size_t>(v[k]);
+        const double d = static_cast<double>(q) - static_cast<double>(vk);
+        f[q * stride] = d * d + g[vk];
+    }
+}
+
+// The distance (pixels, centre to centre) from each of W x H cells to the
+// nearest cell where `feature` is set; none at all: very large.
+std::vector<float> distance(const std::vector<std::uint8_t>& feature, std::size_t W, std::size_t H,
+                            const std::function<bool()>& cancelled, bool& stopped) {
+    std::vector<double> f(W * H);
+    for (std::size_t i = 0; i < f.size(); ++i) f[i] = feature[i] ? 0.0 : 1e20;
+    std::vector<int> v;
+    std::vector<double> z, g;
+    for (std::size_t y = 0; y < H; ++y) {
+        if (cancelled && (y & 63) == 0 && cancelled()) { stopped = true; return {}; }
+        edt_1d(f.data() + y * W, W, 1, v, z, g);
+    }
+    for (std::size_t x = 0; x < W; ++x) {
+        if (cancelled && (x & 63) == 0 && cancelled()) { stopped = true; return {}; }
+        edt_1d(f.data() + x, H, W, v, z, g);
+    }
+    std::vector<float> out(f.size());
+    for (std::size_t i = 0; i < f.size(); ++i) out[i] = f[i] >= 1e19 ? 1e9f : static_cast<float>(std::sqrt(f[i]));
+    return out;
+}
+}  // namespace
+
+const char* modify_name(Modify k) {
+    switch (k) {
+        case Modify::Expand:   return "Expand";
+        case Modify::Contract: return "Contract";
+        case Modify::Border:   return "Border";
+        case Modify::Smooth:   return "Smooth";
+    }
+    return "";
+}
+
+std::optional<TileMap> modified(const TileMap& m, Modify k, double r, const std::function<bool()>& cancelled) {
+    if (r <= 0 || empty(m)) return m;
+    const int reach = static_cast<int>(std::ceil(r)) + 2;
+    const pixel::Rect e = extent(m);
+    const pixel::Rect R = pixel::Rect{e.x - reach, e.y - reach, e.w + 2 * reach, e.h + 2 * reach}.intersect({0, 0, m.width(), m.height()});
+    const auto W = static_cast<std::size_t>(R.w), H = static_cast<std::size_t>(R.h);
+    std::vector<std::uint8_t> sel(W * H);
+    for (int y = 0; y < R.h; ++y) {
+        if (cancelled && (y & 63) == 0 && cancelled()) return std::nullopt;
+        for (int x = 0; x < R.w; ++x)
+            sel[static_cast<std::size_t>(y) * W + static_cast<std::size_t>(x)] = coverage(m, R.x + x, R.y + y) >= 0.5f;
+    }
+    std::vector<float> out(W * H, 0.f);
+    bool stopped = false;
+    const auto fr = static_cast<float>(r);
+    if (k == Modify::Smooth) {
+        // A summed-area table of the selected pixels; each pixel takes its window's majority.
+        const int rr = static_cast<int>(std::lround(r));
+        std::vector<std::uint32_t> sum((W + 1) * (H + 1), 0);
+        for (std::size_t y = 0; y < H; ++y)
+            for (std::size_t x = 0; x < W; ++x)
+                sum[(y + 1) * (W + 1) + x + 1] = sel[y * W + x] + sum[y * (W + 1) + x + 1] + sum[(y + 1) * (W + 1) + x] - sum[y * (W + 1) + x];
+        for (int y = 0; y < R.h; ++y) {
+            if (cancelled && (y & 63) == 0 && cancelled()) return std::nullopt;
+            for (int x = 0; x < R.w; ++x) {
+                const auto x0 = static_cast<std::size_t>(std::max(0, x - rr)), x1 = static_cast<std::size_t>(std::min(R.w, x + rr + 1));
+                const auto y0 = static_cast<std::size_t>(std::max(0, y - rr)), y1 = static_cast<std::size_t>(std::min(R.h, y + rr + 1));
+                const std::uint32_t n = sum[y1 * (W + 1) + x1] - sum[y0 * (W + 1) + x1] - sum[y1 * (W + 1) + x0] + sum[y0 * (W + 1) + x0];
+                const auto area = static_cast<std::uint32_t>((x1 - x0) * (y1 - y0));
+                out[static_cast<std::size_t>(y) * W + static_cast<std::size_t>(x)] = 2 * n > area ? 1.f : 0.f;
+            }
+        }
+    } else {
+        // To the nearest selected (for growing) and the nearest unselected (for shrinking).
+        std::vector<float> to_sel, to_out;
+        if (k == Modify::Expand || k == Modify::Border) {
+            to_sel = distance(sel, W, H, cancelled, stopped);
+            if (stopped) return std::nullopt;
+        }
+        if (k == Modify::Contract || k == Modify::Border) {
+            std::vector<std::uint8_t> unsel(W * H);
+            for (std::size_t i = 0; i < unsel.size(); ++i) unsel[i] = !sel[i];
+            to_out = distance(unsel, W, H, cancelled, stopped);
+            if (stopped) return std::nullopt;
+        }
+        const float half = fr / 2;
+        for (std::size_t i = 0; i < W * H; ++i) {
+            switch (k) {
+                case Modify::Expand:   out[i] = std::clamp(fr + 0.5f - to_sel[i], 0.f, 1.f); break;
+                case Modify::Contract: out[i] = sel[i] ? std::clamp(to_out[i] - fr, 0.f, 1.f) : 0.f; break;
+                case Modify::Border:
+                    out[i] = sel[i] ? 1.f - std::clamp(to_out[i] - half, 0.f, 1.f) : std::clamp(half + 0.5f - to_sel[i], 0.f, 1.f);
+                    break;
+                default: break;
+            }
+        }
+    }
+    const pixel::Format mf = m.format();
+    auto res = build(mf, m.width(), m.height(), [&](int col, int row, std::vector<float>& cov) {
+        const pixel::Rect cell = live(col, row, m.width(), m.height());
+        const pixel::Rect hit = cell.intersect(R);
+        if (hit.empty()) return 0;
+        cov.assign(kPx, 0.f);
+        bool any = false, all = hit == cell;
+        for (int y = hit.y; y < hit.y + hit.h; ++y)
+            for (int x = hit.x; x < hit.x + hit.w; ++x) {
+                const float v = out[static_cast<std::size_t>(y - R.y) * W + static_cast<std::size_t>(x - R.x)];
+                cov[static_cast<std::size_t>(y - row * kTile) * kTile + static_cast<std::size_t>(x - col * kTile)] = v;
+                any = any || v > 0.f;
+                all = all && v >= 1.f;
+            }
+        return !any ? 0 : all ? 1 : 2;
+    });
+    return res;
+}
+
+bool modify(DocJournal& j, Document& d, Modify k, double r) {
+    const auto* m = d.selection();
+    if (!m || r <= 0) return false;
+    auto f = modified(*m, k, r);
+    if (!f) return false;
+    char buf[48];
+    std::snprintf(buf, sizeof buf, "%s %g px", modify_name(k), r);
+    return set(j, d, std::move(*f), buf);
+}
+
 // ── the Magic Wand ──────────────────────────────────────────────────────────
 std::optional<TileMap> wand_mask(const TileMap& src, const pixel::Format& mf, int x0, int y0, float tol,
                                  bool contiguous, const std::function<bool()>& cancelled) {

@@ -52,6 +52,18 @@ pixel::TileMap inverted(const pixel::TileMap* old, const pixel::Format& mf, int 
 std::optional<pixel::TileMap> feathered(const pixel::TileMap& m, double radius,
                                         const std::function<bool()>& cancelled = {});
 bool empty(const pixel::TileMap& m);       // nothing selected anywhere
+
+// s011 m4 -- Select > Modify. The selection's edge (coverage >= 1/2), moved
+// by an exact Euclidean distance, with a one-pixel soft edge. The canvas's
+// edge is not "unselected" (Photoshop's default: a selection touching the
+// edge doesn't shrink from it). nullopt when cancelled.
+//   Expand   -- out by r;   Contract -- in by r;
+//   Border   -- a band r wide, centred on the edge;
+//   Smooth   -- each pixel takes the majority of its (2r + 1)^2 square (hard).
+enum class Modify { Expand, Contract, Border, Smooth };
+const char* modify_name(Modify k);   // "Expand"
+std::optional<pixel::TileMap> modified(const pixel::TileMap& m, Modify k, double r,
+                                       const std::function<bool()>& cancelled = {});
 // The tiles' extent (coarse: whole tiles), empty Rect when nothing.
 pixel::Rect extent(const pixel::TileMap& m);
 float coverage(const pixel::TileMap& m, int x, int y);   // 0..1; outside: 0
@@ -92,6 +104,7 @@ bool all(DocJournal& j, Document& d);        // Ctrl+A
 bool none(DocJournal& j, Document& d);       // Ctrl+D -- Deselect
 bool invert(DocJournal& j, Document& d);     // Ctrl+Shift+I
 bool feather(DocJournal& j, Document& d, double radius);
+bool modify(DocJournal& j, Document& d, Modify k, double r);   // s011 m4: "Expand 8 px" ...
 
 }  // namespace klimt::core::select
 

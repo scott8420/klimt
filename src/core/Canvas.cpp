@@ -122,6 +122,7 @@ Reshape same_layers(const Before& b) {
     Reshape r;
     r.pixels = b.pixels;
     r.mask = b.mask;
+    r.masks = b.masks;
     return r;
 }
 }  // namespace
@@ -417,7 +418,10 @@ Before before(const Document& d) {
     b.image = d.image_ptr();
     b.mask = d.selection_ptr();
     for (const auto& [id, l] : d.snapshot())
-        if (l.kind == Kind::Pixel) b.pixels[id] = l.pixels;
+        if (l.kind == Kind::Pixel) {
+            b.pixels[id] = l.pixels;
+            if (l.mask) b.masks[id] = l.mask;
+        }
     return b;
 }
 
@@ -464,6 +468,8 @@ std::optional<Reshape> crop_plan(const Before& b, const pixel::Rect& r, const pi
     out.image = std::make_shared<const Image>(next);
     for (const auto& [id, p] : b.pixels)
         out.pixels[id] = p ? held(reframed(*p, r.w, r.h, -r.x, -r.y, fill, !delete_cropped)) : nullptr;
+    for (const auto& [id, m] : b.masks)   // s012: a mask goes with its layer (beyond it: shows)
+        out.masks[id] = std::make_shared<const pixel::TileMap>(reframed(*m, r.w, r.h, -r.x, -r.y, pixel::transparent(), !delete_cropped));
     out.mask = nullptr;   // a crop deselects (Photoshop)
     return out;
 }
@@ -481,6 +487,8 @@ std::optional<Reshape> canvas_plan(const Before& b, int w, int h, int anchor_x, 
     out.image = std::make_shared<const Image>(next);
     for (const auto& [id, p] : b.pixels)
         out.pixels[id] = p ? held(reframed(*p, w, h, ox, oy, fill)) : nullptr;
+    for (const auto& [id, m] : b.masks)
+        out.masks[id] = std::make_shared<const pixel::TileMap>(reframed(*m, w, h, ox, oy, pixel::transparent()));
     if (b.mask) {
         auto m = reframed(*b.mask, w, h, ox, oy, pixel::transparent(), false);
         out.mask = select::empty(m) ? nullptr : std::make_shared<const pixel::TileMap>(std::move(m));
@@ -520,6 +528,11 @@ std::optional<Reshape> size_plan(const Before& b, int w, int h, double dpi, Filt
         }
         done += 1;
     }
+    for (const auto& [id, lm] : b.masks) {   // s012: layer masks scale with their layers
+        auto m = resampled_layer(*lm, w, h, f, cancelled);
+        if (!m) return std::nullopt;
+        out.masks[id] = std::make_shared<const pixel::TileMap>(std::move(*m));
+    }
     if (b.mask) {
         auto m = resampled(*b.mask, w, h, f, cancelled, part(done));
         if (!m) return std::nullopt;
@@ -531,7 +544,8 @@ std::optional<Reshape> size_plan(const Before& b, int w, int h, double dpi, Filt
 bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, const std::string& label) {
     if (!r.image) return false;
     const Before now = before(d);
-    if (now.image != expect.image || now.mask != expect.mask || now.pixels != expect.pixels) return false;
+    if (now.image != expect.image || now.mask != expect.mask || now.pixels != expect.pixels || now.masks != expect.masks)
+        return false;
     std::vector<Id> ids{kImageId};
     for (const auto& [id, p] : r.pixels) ids.push_back(id);
     ids.push_back(kSelectionId);
@@ -544,6 +558,7 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
             auto l = d.get(id);
             if (!l) continue;
             l->pixels = p;
+            if (const auto m = r.masks.find(id); m != r.masks.end()) l->mask = m->second;   // s012
             d.put(id, *l);
         }
         if (r.mask) {

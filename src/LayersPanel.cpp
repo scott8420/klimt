@@ -141,6 +141,7 @@ LayersPanel::LayersPanel(core::Document& doc, core::DocJournal& journal)
     verb("list-add-symbolic", nullptr, "win.layer-new", "New layer (Ctrl+Shift+N)");
     verb("folder-new-symbolic", nullptr, "win.layer-new-group", "New group");
     verb("edit-copy-symbolic", nullptr, "win.layer-duplicate", "Duplicate (Ctrl+J)");
+    verb("klimt-layer-mask-symbolic", nullptr, "win.mask-add", "Add a layer mask -- showing the selection, when there is one");   // s012
     // The rest behind one button (s005: less clutter; each keeps its key).
     auto more_model = Gio::Menu::create();
     more_model->append("Group Layers", "win.layer-group");
@@ -198,6 +199,10 @@ void LayersPanel::repaint() {
     // Drop what no longer exists (a redo removed it, a delete took it).
     std::erase_if(m_sel, [this](const Id& id) { return !m_doc.get(id); });
     std::erase_if(m_collapsed, [this](const Id& id) { return !m_doc.get(id); });
+    if (!m_mask_target.empty()) {   // s012: the mask went (deleted, applied, undone)
+        const auto l = m_doc.get(m_mask_target);
+        if (!l || !l->mask) m_mask_target.clear();
+    }
 
     while (auto* c = m_list.get_first_child()) m_list.remove(*c);
     Gtk::ListBoxRow* first_selected = nullptr;
@@ -276,7 +281,43 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
     }
     auto kind = Gtk::make_managed<Gtk::Image>();
     kind->set_from_icon_name(group ? "folder-symbolic" : "image-x-generic-symbolic");
+    if (l.mask && m_mask_target != id) kind->add_css_class("accent");   // s012: the pixels are what's painted
+    if (l.mask) {   // the layer's own icon: back to painting its pixels
+        kind->set_tooltip_text("The layer's pixels -- click to paint them (not the mask)");
+        auto back = Gtk::GestureClick::create();
+        back->signal_pressed().connect([this, id](int, double, double) { set_mask_target({}); select({id}, false); });
+        kind->add_controller(back);
+    }
     box->append(*kind);
+    // s012: the mask chip.
+    if (l.mask) {
+        auto chip = Gtk::make_managed<Gtk::Button>();
+        chip->set_icon_name("klimt-layer-mask-symbolic");
+        chip->set_has_frame(m_mask_target == id);   // framed: the mask is what's painted
+        chip->set_focus_on_click(false);
+        if (m_mask_target == id) chip->add_css_class("suggested-action");
+        if (!l.mask_on) chip->set_opacity(0.35);
+        if (m_mask_viewing == id) chip->add_css_class("destructive-action");
+        chip->set_tooltip_text(std::string(l.mask_on ? "Layer mask" : "Layer mask (off)") +
+                               " -- click: paint the mask (white shows, black hides); Shift-click: off / on; "
+                               "Alt-click: see the mask");
+        auto press = Gtk::GestureClick::create();
+        press->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+        press->signal_pressed().connect([this, id, press](int, double, double) {
+            const auto st = press->get_current_event_state();
+            press->set_state(Gtk::EventSequenceState::CLAIMED);
+            if ((st & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{}) {
+                const auto cur = m_doc.get(id);
+                if (cur && cur->mask) L::set_mask_on(m_journal, m_doc, id, !cur->mask_on);
+                return;
+            }
+            if ((st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{}) { m_mask_view.emit(id); return; }
+            set_mask_target(m_mask_target == id ? Id{} : id);
+            select({id}, false);
+        });
+        chip->add_controller(press);
+        box->append(*chip);
+    }
 
     if (id == m_renaming) {
         auto field = Gtk::make_managed<Gtk::Entry>();
@@ -432,11 +473,23 @@ bool LayersPanel::primary_is_clipped() const {
 // ─────────────────────────────────────────────────────────────────────────────
 // User choices -- each is ONE call into core::layers, then the selection.
 // ─────────────────────────────────────────────────────────────────────────────
+void LayersPanel::set_mask_target(const Id& id) {
+    if (m_mask_target == id) return;
+    m_mask_target = id;
+    queue_repaint();
+    if (m_changed) m_changed();
+}
+
 void LayersPanel::on_rows_selected() {
     if (m_painting) return;
     std::vector<Id> ids;
     for (auto* row : m_list.get_selected_rows()) ids.push_back(row->get_name());
     m_sel = in_walk_order(ids);
+    // s012: painting a mask follows the layer: another layer, its pixels.
+    if (!m_mask_target.empty() && (m_sel.empty() || m_sel.front() != m_mask_target)) {
+        m_mask_target.clear();
+        queue_repaint();
+    }
     if (m_changed) m_changed();
 }
 

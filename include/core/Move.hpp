@@ -46,6 +46,7 @@ struct Plan {
     std::map<Id, MapPtr> base;       // with a selection: original minus the lifted pixels
     MapPtr              mask;        // the selection at the press; nullptr: none
     pixel::Px           fill;        // what a layer with no alpha shows where pixels left
+    std::map<Id, MapPtr> masks;      // s012: the targets' layer masks (moved with a whole layer)
     int                 width = 0, height = 0;
     pixel::Format       format;
 };
@@ -58,6 +59,7 @@ std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, con
 struct Result {
     std::map<Id, MapPtr> pixels;
     MapPtr              mask;
+    std::map<Id, MapPtr> masks;      // s012: layer masks that moved (absent: unchanged)
 };
 std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function<bool()>& cancelled = {});
 

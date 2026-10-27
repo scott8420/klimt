@@ -117,6 +117,11 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         // ── Edit (s046) ───────────────────────────────────────────────────────
         // Doc-only ON PURPOSE: an accelerator would take Ctrl+Z from every text
         // box. The window hears these instead (Shell_bindings.cpp).
+        // s011: Free Transform (the window hears Ctrl+T: a text box keeps it).
+        {"Edit", "", {}, "Ctrl+T", "Free Transform -- the selection's pixels, or the whole layer"},
+        {"Edit", "", {}, "Transform: Enter  /  Esc  /  arrows", "Apply / cancel / nudge the box"},
+        {"Edit", "", {}, "Transform: drag a corner / an edge", "Scale (corners keep the proportions; Shift frees them; Alt: about the centre)"},
+        {"Edit", "", {}, "Transform: drag outside / inside", "Rotate (Shift: 15-degree steps) / move"},
         {"Edit", "", {}, "Ctrl+Z", "Undo -- anywhere but a text box (which keeps its own)"},
         {"Edit", "", {}, "Ctrl+Shift+Z  /  Ctrl+Y", "Redo"},
         // s008 -- doc-only: the window hears them, so a text box keeps its own.

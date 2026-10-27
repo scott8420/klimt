@@ -55,6 +55,7 @@ std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, con
     for (const auto& id : p.ids) {
         const auto l = *d.get(id);
         p.original[id] = l.pixels;
+        if (l.mask) p.masks[id] = l.mask;
         if (p.mask) {
             const pixel::TileMap src = l.pixels ? *l.pixels : d.blank();
             auto c = select::cleared(src, p.mask.get(), background);
@@ -105,6 +106,9 @@ std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function
             auto m = shifted(*o, dx, dy, p.fill);
             r.pixels[id] = m.tile_count() ? std::make_shared<const pixel::TileMap>(std::move(m)) : nullptr;
         }
+        // s012: a whole layer's mask moves with it (beyond the canvas: kept).
+        for (const auto& [id, lm] : p.masks)
+            r.masks[id] = (dx == 0 && dy == 0) ? lm : std::make_shared<const pixel::TileMap>(shifted(*lm, dx, dy, pixel::transparent()));
         return r;
     }
     if (dx == 0 && dy == 0) {   // back where it started: exactly the original
@@ -144,6 +148,7 @@ void put(Document& d, const Plan& p, const Result& r) {
         const auto it = r.pixels.find(id);
         if (!l || it == r.pixels.end()) continue;
         l->pixels = it->second;
+        if (const auto m = r.masks.find(id); m != r.masks.end()) l->mask = m->second;   // s012
         d.put(id, *l);
     }
     if (p.mask) {

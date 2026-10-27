@@ -33,6 +33,7 @@ void Shell::on_about() {
 // panel selects it and takes the keyboard, so the next Ctrl+Z lands.
 void Shell::on_undo() {
     if (m_stroke.active) return;   // s008: mid-stroke, the stroke finishes first
+    if (m_xform.active) { xform_cancel(); toast("Free Transform cancelled"); return; }   // s011: nothing was written
     const auto r = m_journal.undo();
     if (!r.done) return;
     toast("Undid " + r.label);
@@ -41,7 +42,7 @@ void Shell::on_undo() {
 }
 
 void Shell::on_redo() {
-    if (m_stroke.active) return;
+    if (m_stroke.active || m_xform.active) return;
     const auto r = m_journal.redo();
     if (!r.done) return;
     toast("Redid " + r.label);
@@ -86,6 +87,7 @@ void Shell::on_job_cancel() {  // leaves nothing behind
 }
 
 void Shell::on_tool(const std::string& id) {  // view state: not a step
+    if (m_xform.active) xform_commit();   // s011: another tool applies the transform (Photoshop asks; we apply)
     if (const auto* t = core::find_tool(id)) {
         m_strip.show_tool(*t);
         m_canvas.set_tool(id, m_strip.variant(id));   // s007: Hand pans, Zoom zooms; s008: Select selects

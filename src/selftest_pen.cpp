@@ -90,4 +90,48 @@ void selftest_pen(const Check& check) {
             for (int x = 0; x < 360 && same; x += 3) same = a.d.get("L5")->pixels->get(x, y) == m.d.get("L5")->pixels->get(x, y);
         check("pen: a mouse paints as before", same, "");
     }
+
+    std::cout << "\n-- pen: smoothing and flow (s012) --\n";
+    {
+        Pa::Smoother sm(10);
+        const auto a = sm.push({0, 0, 1.f});
+        check("smooth: the first point is the brush's", a && a->x == 0 && a->y == 0, "");
+        check("smooth: a wobble inside the string doesn't move it", !sm.push({6, 3, 1.f}) && !sm.push({-4, 5, 1.f}), "");
+        const auto b = sm.push({30, 0, 0.5f});
+        check("smooth: past the string, it follows 10 behind", b && std::abs(b->x - 20) < 1e-9 && std::abs(b->y) < 1e-9 && b->p == 0.5f,
+              b ? std::to_string(b->x) : "");
+        const auto c = sm.finish();
+        check("smooth: at the end it catches up", c && std::abs(c->x - 30) < 1e-9, "");
+        check("smooth: nothing more to catch up", !sm.finish(), "");
+        Pa::Smoother none;
+        check("smooth: off, every point is the brush's", none.push({0, 0, 1.f}) && none.push({0.5, 0, 1.f}), "");
+    }
+    {
+        // Flow: back and forth over the same line builds up; at 100% it doesn't.
+        const auto paint = [](double flow) {
+            Fix t;
+            Pa::Brush b;
+            b.size = 30;
+            b.hardness = 1;
+            b.flow = flow;
+            b.colour = P::rgba(0, 0, 1, 1);
+            Pa::stroke_pen(t.j, t.d, "L5", {{100, 200, 1.f}, {300, 200, 1.f}, {100, 200, 1.f}, {300, 200, 1.f}}, b);
+            return t.alpha("L5", 200, 200);
+        };
+        const float full = paint(1.0), low = paint(0.2);
+        check("flow: 100% -- one pass is all of it", full > 0.99f, std::to_string(full));
+        check("flow: 20% -- passes build up, but not to full yet", low > 0.25f && low < 0.99f, std::to_string(low));
+        Fix t;
+        Pa::Brush b;
+        b.size = 30;
+        b.hardness = 1;
+        b.flow = 0.2;
+        b.opacity = 0.5;
+        b.colour = P::rgba(0, 0, 1, 1);
+        std::vector<Pa::Dab> zig;
+        for (int i = 0; i < 20; ++i) zig.push_back({i % 2 ? 300.0 : 100.0, 200, 1.f});
+        Pa::stroke_pen(t.j, t.d, "L5", zig, b);
+        const float capped = t.alpha("L5", 200, 200);
+        check("flow: build-up stops at the opacity", capped > 0.45f && capped <= 0.5f + 1e-3, std::to_string(capped));
+    }
 }

@@ -108,6 +108,26 @@ void Shell::run_pixel_job(const std::string& verb, bool fill, ToolRail::RGB colo
     const auto id = m_layers.primary();
     const auto l = m_doc.get(id);
     if (!l) { toast(verb + ": select a layer first"); return; }
+    // s012: the MASK is the target: fill it with the colour's grey (white
+    // shows, black hides); Delete fills with the background colour.
+    if (l->mask && m_layers.mask_target() == id) {
+        if (m_doc.locked_all(id)) { toast(verb + ": “" + l->name + "” is locked"); return; }
+        if (!fill && !m_doc.selection()) { toast("Delete: nothing is selected -- Select All (Ctrl+A) first"); return; }
+        const auto before = l->mask;
+        const auto sel = m_doc.selection_ptr();
+        pixel::Px hide;
+        hide.c[0] = mask_hide_of(colour);
+        const std::string label = (fill ? "Fill Mask of “" : "Delete in Mask of “") + l->name + "”";
+        start_job(label, [this, id, before, sel, hide, label](core::Jobs::Token& t) -> core::Jobs::Landing {
+            auto after = std::make_shared<pixel::TileMap>(S::filled(*before, sel.get(), hide, false));
+            if (t.cancelled()) return [] {};
+            return [this, id, before, sel, after, label] {
+                if (m_doc.selection_ptr() != sel || !core::layers::set_mask_if(m_journal, m_doc, id, before, std::move(*after), label))
+                    toast(label + ": the mask changed meanwhile -- nothing done");
+            };
+        });
+        return;
+    }
     if (l->kind != core::Kind::Pixel) { toast(verb + ": “" + l->name + "” is a group -- pick a layer in it"); return; }
     if (m_doc.locked_all(id) || (l->locks & core::lock::Pixels)) { toast(verb + ": “" + l->name + "” is locked"); return; }
     const bool alpha_lock = (l->locks & core::lock::Alpha) != 0;
@@ -148,6 +168,7 @@ void Shell::queue_ants() {
     m_ants_queued = true;
     Glib::signal_idle().connect_once([this] {
         m_ants_queued = false;
+        if (m_xform.active) return;   // s011: no ants while a transform's box is up
         const auto sel = m_doc.selection_ptr();
         if (m_ants_known && sel == m_ants_for) return;
         m_ants_known = true;
@@ -205,11 +226,44 @@ void Shell::on_pick(int x, int y, bool background) {
     });
 }
 
+// s011 m4: Select > Modify -- the number, then the mask work as a job.
+void Shell::on_modify(S::Modify k) {
+    if (!m_doc.selection()) { toast(std::string(S::modify_name(k)) + ": nothing is selected"); return; }
+    auto& dlg = m_modify_dialogs[static_cast<int>(k)];
+    if (!dlg) {
+        const char* label = k == S::Modify::Border ? "Width" : k == S::Modify::Smooth ? "Sample radius"
+                          : k == S::Modify::Expand ? "Expand by" : "Contract by";
+        const double hi = k == S::Modify::Smooth ? 100 : k == S::Modify::Border ? 200 : 500;
+        const std::string name = std::string("shell.modify_") + S::modify_name(k);
+        dlg = std::make_unique<NumberDialog>(*this, name, std::string(S::modify_name(k)) + " Selection", label, "px", 1, hi,
+                                             k == S::Modify::Smooth ? 2 : 8, 0);
+        dlg->signal_ok().connect([this, k](double r) {
+            const auto old = m_doc.selection_ptr();
+            if (!old) return;
+            char text[48];
+            std::snprintf(text, sizeof text, "%s %g px", S::modify_name(k), r);
+            const std::string label = text;
+            start_job(label, [this, old, k, r, label](core::Jobs::Token& t) -> core::Jobs::Landing {
+                auto f = S::modified(*old, k, r, [&t] { return t.cancelled(); });
+                if (!f) return [] {};
+                auto next = std::make_shared<pixel::TileMap>(std::move(*f));
+                return [this, old, next, label] {
+                    if (!S::set_if(m_journal, m_doc, old, std::move(*next), label) && m_doc.selection_ptr() != old)
+                        toast(label + ": the selection changed meanwhile -- nothing done");
+                };
+            });
+        });
+    }
+    dlg->ask();
+}
+
 void Shell::update_select_actions() {
     const bool any = m_doc.selection() != nullptr;
     if (auto it = m_layer_acts.find("deselect"); it != m_layer_acts.end()) it->second->set_enabled(any);
     if (auto it = m_layer_acts.find("select-feather"); it != m_layer_acts.end()) it->second->set_enabled(any);
     if (auto it = m_layer_acts.find("crop-selection"); it != m_layer_acts.end()) it->second->set_enabled(any);
+    for (const char* a : {"select-expand", "select-contract", "select-border", "select-smooth"})
+        if (auto it = m_layer_acts.find(a); it != m_layer_acts.end()) it->second->set_enabled(any);
 }
 
 }  // namespace klimt

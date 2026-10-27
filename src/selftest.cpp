@@ -101,6 +101,10 @@ void selftest_move(const std::function<void(const std::string&, bool, const std:
 void selftest_canvas(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_pen(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_bounds(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_transform(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_modify(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_masks(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_gradient(const std::function<void(const std::string&, bool, const std::string&)>& check);
 
 int main() {
     std::cout << "klimt_selftest -- undo, layers, jobs, recents, textmap, shortcuts\n";
@@ -1203,6 +1207,10 @@ int main() {
     selftest_canvas([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_pen([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_bounds([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_transform([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_modify([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_masks([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_gradient([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
 
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";

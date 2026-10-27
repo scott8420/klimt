@@ -7,13 +7,76 @@
 #include <gtkmm/togglebutton.h>
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/spinbutton.h>
+#include <gtkmm/entry.h>
+#include <gtkmm/eventcontrollerfocus.h>
+#include <gtkmm/eventcontrollerscroll.h>
+#include <gtkmm/gesturedrag.h>
+#include <gdkmm/cursor.h>
 #include <glibmm/main.h>
 
 #include <algorithm>
+#include <functional>
+#include <cmath>
+#include <memory>
+#include <string>
 
 namespace klimt {
 
-ContextStrip::ContextStrip() : widgets::Box("strip", Gtk::Orientation::HORIZONTAL, 12) {
+namespace {
+// s012: a COMPACT number field (the -/+ spin buttons pushed options off a
+// 1280 px window): type a number, scroll over it, or drag its label sideways
+// to scrub (Photoshop's way; easy with a pen).
+void number_field(Gtk::Box& into, const char* label, int lo, int hi, int value, const char* unit, const char* tip,
+                  std::function<int()> get, std::function<void(int)> put) {
+    auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 4);
+    auto l = Gtk::make_managed<Gtk::Label>(label);
+    l->add_css_class("dim-label");
+    l->set_cursor(Gdk::Cursor::create("ew-resize"));
+    l->set_tooltip_text(std::string(tip) + "  (drag this label sideways, or scroll, to change it)");
+    box->append(*l);
+    auto e = Gtk::make_managed<Gtk::Entry>();
+    e->set_width_chars(4);
+    e->set_max_width_chars(5);
+    e->set_alignment(1.0f);
+    e->set_text(std::to_string(value) + unit);
+    e->set_tooltip_text(tip);
+    box->append(*e);
+    const auto set = [put, lo, hi, e, unit = std::string(unit)](int v) {
+        v = std::clamp(v, lo, hi);
+        e->set_text(std::to_string(v) + unit);
+        put(v);
+    };
+    const auto parse = [e, set, get] {
+        try { set(std::stoi(e->get_text())); } catch (...) { set(get()); }
+    };
+    e->signal_activate().connect(parse);
+    auto focus = Gtk::EventControllerFocus::create();
+    focus->signal_leave().connect(parse);
+    e->add_controller(focus);
+    const auto step_of = [lo, hi](int v) { return hi - lo > 200 ? (v < 10 ? 1 : v < 50 ? 5 : v < 200 ? 10 : 50) : 1; };
+    for (Gtk::Widget* w : {static_cast<Gtk::Widget*>(l), static_cast<Gtk::Widget*>(e)}) {
+        auto scroll = Gtk::EventControllerScroll::create();
+        scroll->set_flags(Gtk::EventControllerScroll::Flags::VERTICAL);
+        scroll->signal_scroll().connect([get, set, step_of](double, double dy) {
+            const int v = get();
+            set(v + (dy < 0 ? step_of(v) : -step_of(v)));
+            return true;
+        }, false);
+        w->add_controller(scroll);
+    }
+    auto drag = Gtk::GestureDrag::create();
+    auto from = std::make_shared<int>(value);
+    drag->signal_drag_begin().connect([get, from](double, double) { *from = get(); });
+    drag->signal_drag_update().connect([from, set, lo, hi](double dx, double) {
+        const double per_px = std::max(0.25, (hi - lo) / 600.0);   // the whole range in ~600 px
+        set(*from + static_cast<int>(std::lround(dx * per_px)));
+    });
+    l->add_controller(drag);
+    into.append(*box);
+}
+}  // namespace
+
+ContextStrip::ContextStrip() : widgets::Box("strip", Gtk::Orientation::HORIZONTAL, 8) {
     add_css_class("klimt-strip");
     set_margin_start(12);
     set_margin_end(12);
@@ -80,34 +143,29 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
 
     // s008 m4: the Brush's and the Eraser's options.
     if (t.id == "brush" || t.id == "eraser") {
+        // s012: COMPACT number fields (the -/+ spin buttons pushed Pressure,
+        // Flow and Smoothing off a 1280 px window): type a number, scroll over
+        // it, or drag its label sideways to scrub (Photoshop's way; easy with a pen).
         const auto spin = [this, id = t.id](const char* label, int lo, int hi, int value, const char* unit, const char* tip,
                                             int BrushOpts::*field) {
-            auto l = Gtk::make_managed<Gtk::Label>(label);
-            l->add_css_class("dim-label");
-            append(*l);
-            auto sb = Gtk::make_managed<Gtk::SpinButton>();
-            sb->set_range(lo, hi);
-            sb->set_increments(1, 10);
-            sb->set_value(value);
-            sb->set_width_chars(4);
-            sb->set_tooltip_text(tip);
-            sb->signal_value_changed().connect([this, sb, id, field] {
-                auto o = brush(id);
-                o.*field = static_cast<int>(sb->get_value());
-                m_brush[id] = o;
-                m_brush_signal.emit();
-            });
-            append(*sb);
-            if (*unit) {
-                auto u = Gtk::make_managed<Gtk::Label>(unit);
-                u->add_css_class("dim-label");
-                append(*u);
-            }
+            number_field(*this, label, lo, hi, value, unit, tip, [this, id, field] { return brush(id).*field; },
+                         [this, id, field](int v) {
+                             auto o = brush(id);
+                             if (o.*field == v) return;
+                             o.*field = v;
+                             m_brush[id] = o;
+                             m_brush_signal.emit();
+                         });
         };
         const auto o = brush(t.id);
         spin("Size", 1, 2500, o.size, "px", "The brush's diameter  ([ and ] change it)", &BrushOpts::size);
         spin("Hardness", 0, 100, o.hardness, "%", "100: a hard edge; 0: soft all the way in", &BrushOpts::hardness);
         spin("Opacity", 1, 100, o.opacity, "%", "The stroke's strength -- crossing itself doesn't build past it", &BrushOpts::opacity);
+        // s012 m1: build-up and the stabiliser.
+        spin("Flow", 1, 100, o.flow, "%", "How much each dab lays down: below 100, a stroke builds up where it overlaps (up to the opacity)",
+             &BrushOpts::flow);
+        spin("Smoothing", 0, 100, o.smoothing, "%", "The stabiliser: the brush trails the pen on a string -- wobbles vanish, curves stay smooth",
+             &BrushOpts::smoothing);
         // s009 m3: what a pen's pressure drives (a mouse has none: always full).
         auto pl = Gtk::make_managed<Gtk::Label>("Pressure");
         pl->add_css_class("dim-label");
@@ -129,6 +187,23 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
         toggle("Size", "A pen's pressure sets the size (light: thin)", o.pressure_size, &BrushOpts::pressure_size);
         toggle("Opacity", "A pen's pressure sets the strength (light: faint)", o.pressure_opacity, &BrushOpts::pressure_opacity);
         append(*group);
+    }
+
+    // s012: the Gradient -- its strength, its direction, its far end.
+    if (t.id == "gradient") {
+        append(*Gtk::make_managed<Gtk::Separator>(Gtk::Orientation::VERTICAL));
+        number_field(*this, "Opacity", 1, 100, m_gradient.opacity, "%", "The gradient's strength over what's there",
+                     [this] { return m_gradient.opacity; }, [this](int v) { m_gradient.opacity = v; });
+        auto rev = Gtk::make_managed<Gtk::CheckButton>("Reverse");
+        rev->set_active(m_gradient.reverse);
+        rev->set_tooltip_text("Background colour first, foreground last");
+        rev->signal_toggled().connect([this, rev] { m_gradient.reverse = rev->get_active(); });
+        append(*rev);
+        auto tr = Gtk::make_managed<Gtk::CheckButton>("To transparent");
+        tr->set_active(m_gradient.to_transparent);
+        tr->set_tooltip_text("From the foreground colour to nothing (not to the background colour)");
+        tr->signal_toggled().connect([this, tr] { m_gradient.to_transparent = tr->get_active(); });
+        append(*tr);
     }
 
     // s010: Crop -- what happens to the pixels outside the box.
