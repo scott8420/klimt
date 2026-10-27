@@ -1,4 +1,8 @@
 #include "ToolRail.hpp"
+
+#include <gtkmm/colordialog.h>
+#include <gtkmm/gestureclick.h>
+#include <gtkmm/window.h>
 #include "core/Tools.hpp"
 
 #include <gtkmm/separator.h>
@@ -46,26 +50,48 @@ ToolRail::ToolRail() : widgets::Box("rail", Gtk::Orientation::VERTICAL, 2) {
     // The colour pair: foreground over background (defaults black / white).
     m_colours.set_content_width(36);
     m_colours.set_content_height(36);
-    m_colours.set_tooltip_text("Foreground / background colour");
-    m_colours.set_draw_func([](const Cairo::RefPtr<Cairo::Context>& cr, int, int) {
-        const auto sq = [&](double x, double y, double s, double v) {
+    m_colours.set_tooltip_text("Foreground / background colour  (X swaps, D resets)");
+    m_colours.set_draw_func([this](const Cairo::RefPtr<Cairo::Context>& cr, int, int) {
+        const auto sq = [&](double x, double y, double s, RGB c) {
             cr->rectangle(x + 0.5, y + 0.5, s, s);
-            cr->set_source_rgb(v, v, v);
+            cr->set_source_rgb(c.r, c.g, c.b);
             cr->fill_preserve();
             cr->set_source_rgba(0.5, 0.5, 0.5, 0.9);
             cr->set_line_width(1.0);
             cr->stroke();
         };
-        sq(13, 13, 20, 1.0);   // background
-        sq(2, 2, 21, 0.0);     // foreground, on top
+        sq(13, 13, 20, m_bg);   // background
+        sq(2, 2, 21, m_fg);     // foreground, on top
     });
     append(m_colours);
+    // s008 m3: click the foreground square (top-left) or the background one
+    // to choose it.
+    auto click = Gtk::GestureClick::create();
+    click->signal_released().connect([this](int, double x, double y) { pick(x < 23 && y < 23); });
+    m_colours.add_controller(click);
 
     if (first) {
         m_setting = true;
         first->set_active(true);
         m_setting = false;
     }
+}
+
+void ToolRail::pick(bool foreground) {
+    auto* win = dynamic_cast<Gtk::Window*>(get_root());
+    if (!win) return;
+    auto dlg = Gtk::ColorDialog::create();
+    dlg->set_title(foreground ? "Foreground Colour" : "Background Colour");
+    dlg->set_with_alpha(false);
+    const RGB c = foreground ? m_fg : m_bg;
+    Gdk::RGBA initial;
+    initial.set_rgba(c.r, c.g, c.b, 1.0);
+    dlg->choose_rgba(*win, initial, [this, dlg, foreground](Glib::RefPtr<Gio::AsyncResult>& res) {
+        Gdk::RGBA got;
+        try { got = dlg->choose_rgba_finish(res); } catch (const Glib::Error&) { return; }
+        const RGB v{static_cast<float>(got.get_red()), static_cast<float>(got.get_green()), static_cast<float>(got.get_blue())};
+        if (foreground) set_foreground(v); else set_background(v);
+    });
 }
 
 void ToolRail::set_tool(const std::string& id) {

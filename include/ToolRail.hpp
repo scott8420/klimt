@@ -10,6 +10,7 @@
 #include <sigc++/signal.h>
 
 #include <map>
+#include <utility>
 #include <string>
 
 namespace klimt {
@@ -21,12 +22,26 @@ public:
     void set_tool(const std::string& id);              // from a key: no echo back
     sigc::signal<void(const std::string&)>& signal_tool() { return m_signal; }
 
+    // s008: the colour pair is real -- what Fill (Alt+Backspace) and Delete
+    // on a layer with no alpha use. sRGB 0..1. X swaps, D resets (black /
+    // white); m3 makes them pickable. View state, not a document change.
+    struct RGB { float r = 0, g = 0, b = 0; };
+    RGB foreground() const { return m_fg; }
+    RGB background() const { return m_bg; }
+    void set_foreground(RGB c) { m_fg = c; m_colours.queue_draw(); }
+    void set_background(RGB c) { m_bg = c; m_colours.queue_draw(); }
+    void swap_colours() { std::swap(m_fg, m_bg); m_colours.queue_draw(); }
+    void reset_colours() { m_fg = {0, 0, 0}; m_bg = {1, 1, 1}; m_colours.queue_draw(); }
+    // s008 m3: a click on a swatch picks it (GTK's colour dialog).
+    void pick(bool foreground);
+
 private:
     std::map<std::string, Gtk::ToggleButton*> m_buttons;   // managed by the rail
     std::string m_tool;
     bool        m_setting = false;
     sigc::signal<void(const std::string&)> m_signal;
     Gtk::DrawingArea m_colours;
+    RGB m_fg{0, 0, 0}, m_bg{1, 1, 1};
 };
 
 }  // namespace klimt

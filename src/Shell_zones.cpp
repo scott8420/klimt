@@ -5,6 +5,7 @@
 #include <gtkmm/cssprovider.h>
 #include <gtkmm/headerbar.h>
 #include <gtkmm/overlay.h>
+#include <gtkmm/scrolledwindow.h>
 
 #include <algorithm>
 #include <gtkmm/separator.h>
@@ -50,6 +51,11 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     m_logo_button.set_tooltip_text("About Klimt");
     m_logo_button.set_action_name("win.about");
     header->pack_start(m_logo_button);
+    // s007: Open beside the mark, GNOME's place for it.
+    m_open_button.set_label("Open");
+    m_open_button.set_action_name("win.open");
+    m_open_button.set_tooltip_text("Open an image or a Klimt document  (Ctrl+O)");
+    header->pack_start(m_open_button);
 
     m_title = ADW_WINDOW_TITLE(adw_window_title_new("Untitled", ""));
     gtk_header_bar_set_title_widget(header->gobj(), GTK_WIDGET(m_title));
@@ -60,8 +66,8 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     header->pack_end(m_menu_button);
     m_export_button.set_label("Export");
     m_export_button.add_css_class("suggested-action");
-    m_export_button.set_sensitive(false);
-    m_export_button.set_tooltip_text("Export arrives with pixels");
+    m_export_button.set_action_name("win.export");
+    m_export_button.set_tooltip_text("Export a flat PNG, JPEG or TIFF  (Ctrl+Shift+E)");
     header->pack_end(m_export_button);
     m_redo_button.set_icon_name("edit-redo-symbolic");
     m_redo_button.set_action_name("win.redo");
@@ -80,7 +86,15 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     auto strip_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL);
     strip_box->add_css_class("klimt-chrome");
     strip_box->add_css_class("klimt-edge-bottom");
-    strip_box->append(m_strip);
+    // s008: the strip scrolls sideways when the window is narrower than a
+    // tool's options -- it must never make the WINDOW wider (the Wand's
+    // options pushed the dock off screen, seen under Xvfb).
+    auto strip_scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    strip_scroll->set_policy(Gtk::PolicyType::AUTOMATIC, Gtk::PolicyType::NEVER);
+    strip_scroll->set_propagate_natural_height(true);
+    strip_scroll->set_child(m_strip);
+    strip_box->append(*strip_scroll);
+    m_strip_box = strip_box;
     m_centre.append(*strip_box);
     m_centre.append(m_canvas);
     m_centre.set_hexpand(true);
@@ -199,10 +213,24 @@ Gtk::Widget& Shell::build_dock() {  // zone
 Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto menu = Gio::Menu::create();
 
+    // s007: the file verbs first.
+    auto file = Gio::Menu::create();
+    file->append("New…", "win.new");
+    file->append("Open…", "win.open");
+    file->append("Save", "win.save");
+    file->append("Save As…", "win.save-as");
+    file->append("Export…", "win.export");
+    menu->append_section(file);
+
     m_edit_menu = Gio::Menu::create();
     m_edit_menu->append("Undo", "win.undo");
     m_edit_menu->append("Redo", "win.redo");
     menu->append_section(m_edit_menu);
+    auto edit = Gio::Menu::create();
+    edit->append("Fill with Foreground", "win.fill-fg");
+    edit->append("Fill with Background", "win.fill-bg");
+    edit->append("Delete Selected Pixels", "win.delete-selection");
+    menu->append_section(edit);
 
     auto layer = Gio::Menu::create();
     layer->append("New Layer", "win.layer-new");
@@ -214,10 +242,21 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     layer->append("Rename", "win.layer-rename");
     layer->append("Sort by Name", "win.layer-sort");
     layer->append("Delete", "win.layer-delete");
+    // s008: the Select menu, and Fill / Delete beside Undo.
+    auto sel = Gio::Menu::create();
+    sel->append("All", "win.select-all");
+    sel->append("Deselect", "win.deselect");
+    sel->append("Inverse", "win.select-invert");
+    sel->append("Feather…", "win.select-feather");
     auto view = Gio::Menu::create();
+    view->append("Zoom In", "win.zoom-in");
+    view->append("Zoom Out", "win.zoom-out");
+    view->append("Fit on Screen", "win.zoom-fit");
+    view->append("Actual Size (100%)", "win.zoom-actual");
     view->append("Hide / Show Panels", "win.toggle-panels");
     auto sub = Gio::Menu::create();
     sub->append_submenu("Layer", layer);
+    sub->append_submenu("Select", sel);
     sub->append_submenu("View", view);
     menu->append_section(sub);
 

@@ -2,6 +2,9 @@
 #include "widgets/Widgets.hpp"
 #include "core/Document.hpp"   // the document (layer tree) + its journal
 #include "core/Jobs.hpp"       // the worker pool, pumped by a Dispatcher
+#include "core/File.hpp"       // s007: documents in and out of files
+#include "core/Composite.hpp"  // s007: dirty tiles
+#include "core/Paint.hpp"      // s008: the brush
 #include "CanvasView.hpp"
 #include "ContextStrip.hpp"
 #include "EdgeTab.hpp"
@@ -16,6 +19,8 @@
 #include <giomm/simpleaction.h>
 #include <glibmm/dispatcher.h>
 
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -52,6 +57,9 @@ typedef struct _AdwWindowTitle AdwWindowTitle;
 //   Bindings -- actions, the window's keys.              src/Shell_bindings.cpp
 //   Handlers -- what a user action does (on_*).          src/Shell_handlers.cpp
 //   Helpers  -- shared sync: labels, greying, jobs.      src/Shell_helpers.cpp
+//   Files    -- New, Open, Save, Export, unsaved.        src/Shell_files.cpp (s007)
+//   Select   -- shapes, the Select menu, Fill / Delete.  src/Shell_select.cpp (s008)
+//   Paint    -- the Brush / Eraser stroke pipeline.      src/Shell_paint.cpp (s008)
 //   Glue     -- the ctor + build_ui().                   src/Shell.cpp
 //
 // Finding things
@@ -59,11 +67,14 @@ typedef struct _AdwWindowTitle AdwWindowTitle;
 //   "Where does Ctrl+Z / Tab / V go?"   -> Shell_bindings.cpp (the window's keys)
 //   "Where does a layer verb go?"       -> LayersPanel (each one call into core::layers)
 //   "Where is a job landed?"            -> Shell_helpers.cpp  (on_jobs_wake)
+//   "Where does Ctrl+S go?"             -> Shell_files.cpp    (on_save)
 // ─────────────────────────────────────────────────────────────────────────────
 namespace klimt {
 
 class AboutWindow;
 class CommandPalette;
+class NewDialog;
+class NumberDialog;
 class ShortcutsDialog;
 
 class Shell : public Gtk::ApplicationWindow {
@@ -72,6 +83,7 @@ public:
     ~Shell() override;
 
     void build_ui();                             // category: glue
+    void open_path(const std::string& path);     // category: files: open a file (the command line, Open)
 
 private:
     // ── zones ──────────────────────────────────────────────────────────────
@@ -97,6 +109,37 @@ private:
     void set_dock(bool open);                    // category: handler: the dock's edge tab / Tab
     void set_rail(bool open);                    // category: handler: the rail's edge tab / Tab
 
+    // ── files (s007) ───────────────────────────────────────────────────────
+    void on_new();                               // category: files: File > New (the dialog)
+    void on_open();                              // category: files: File > Open (the file chooser)
+    void on_save();                              // category: files: Save -- Save As when never saved
+    void on_save_as();                           // category: files: Save As (.klimt)
+    void on_export();                            // category: files: Export (PNG / JPEG / TIFF)
+    bool on_close_request() override;            // category: files: unsaved changes ask first
+    void save_to(const std::string& path, std::function<void()> then = {});   // category: files: a save JOB
+    void adopt(core::file::Contents c, const std::string& path, const std::string& name);   // category: files: the document becomes c
+    void ask_unsaved(const std::string& doing, std::function<void()> go);   // category: files: Save / Discard / Cancel
+    bool dirty() const { return m_journal.mark() != m_saved_mark; }
+    bool file_job_busy();                        // category: files: one open / save / export at a time
+    void update_title();                         // category: files: the name, and a dot when unsaved
+
+    // ── selection (s008) ───────────────────────────────────────────────────
+    void on_shape(const CanvasView::Shape& shape);   // category: select: a marquee / lasso finished
+    void on_select_all();                        // category: select: Ctrl+A
+    void on_deselect();                          // category: select: Ctrl+D
+    void on_select_invert();                     // category: select: Ctrl+Shift+I
+    void on_fill(bool foreground);               // category: select: Alt / Ctrl+Backspace
+    void on_delete_selection();                  // category: select: Delete / Backspace on the canvas
+    void run_pixel_job(const std::string& verb, bool fill, ToolRail::RGB colour);   // category: select: Fill / Delete as a job
+    void queue_ants();                           // category: select: the outline follows the selection
+    void on_feather();                           // category: select: Select > Feather (asks the radius)
+    void on_pick(int x, int y, bool background); // category: select: the Eyedropper
+    void update_select_actions();                // category: select: grey Deselect when nothing is
+
+    // ── paint (s008 m4) ────────────────────────────────────────────────────
+    void on_stroke(CanvasView::StrokeAt at, core::select::Pt p, bool shift);   // category: paint: the canvas's stroke
+    void paint_pump();                           // category: paint: one job at a time; commit at the end
+
     // ── helpers ────────────────────────────────────────────────────────────
     void load_demo();                             // category: helper: a demo document, LOADED (not undoable)
     void on_selection();                          // category: helper: the Layers selection moved -> Properties, actions, status
@@ -104,7 +147,7 @@ private:
     void update_undo_ui();                        // category: helper: Undo / Redo say what they would do
     void update_summary();                        // category: helper: the title's subtitle + the status line
     void toast(const std::string& text, bool offer_undo = false);   // category: helper: an Adw toast
-    void start_job(const std::string& label, core::Jobs::Work work);   // category: helper: submit + follow
+    core::Jobs::Id start_job(const std::string& label, core::Jobs::Work work);   // category: helper: submit + follow
     void on_jobs_wake();                          // category: helper: (UI thread) land finished jobs
     bool poll_jobs();                             // category: helper: the status line follows progress
     void queue_render();                          // category: helper: the document changed -> composite it (a job)
@@ -116,6 +159,7 @@ private:
     widgets::Button     m_undo_button;
     widgets::Button     m_redo_button;
     widgets::Button     m_export_button;
+    widgets::Button     m_open_button;         // s007
     AdwWindowTitle*     m_title = nullptr;     // "Untitled" / "8 layers"
 
     // ── the document. Declaration order matters: the store, the journal that
@@ -136,6 +180,7 @@ private:
     widgets::Box       m_centre;               // vertical: strip, canvas
     widgets::Box       m_dock;                 // vertical: properties, stack switcher, stack
     widgets::Stack     m_dock_stack;           // Layers / Channels / History
+    Gtk::Widget*       m_strip_box = nullptr;  // the strip's frame (Tab hides it); managed
     AdwOverlaySplitView* m_split = nullptr;    // content | dock (collapsible)
     AdwToastOverlay*     m_toasts = nullptr;
     bool               m_panels = true;        // Tab hides rail, strip and dock
@@ -152,11 +197,50 @@ private:
     std::unique_ptr<AboutWindow>     m_about;
     std::unique_ptr<ShortcutsDialog> m_shortcuts;
     std::unique_ptr<CommandPalette>  m_palette;   // same lifetime stone as About
+    std::unique_ptr<NewDialog>       m_new;       // s007: same again
+    std::unique_ptr<NumberDialog>    m_feather;   // s008
+
+    // ── the file (s007) ────────────────────────────────────────────────────
+    std::string        m_path;                 // the .klimt this document saves to; "" = never saved
+    std::string        m_name = "Demo";        // what the title says ("photo.png", "Untitled")
+    std::string        m_folder;               // where the last chooser was (view state)
+    std::uint64_t      m_saved_mark = 0;       // m_journal.mark() when it last matched a file
+    core::Jobs::Id     m_file_job = 0;         // the open / save / export in flight
+
+    // ── the stroke in progress (s008 m4) ───────────────────────────────────
+    struct Stroke {
+        bool                active = false, ending = false;
+        core::Document::Id  id;
+        core::paint::Brush  brush;
+        std::shared_ptr<const pixel::TileMap> original, current, cov, mask;
+        std::vector<core::select::Pt> pending;      // dabs not yet painted
+        core::select::Pt    last;
+        double              carry = 0;
+        core::Jobs::Id      job = 0;
+    };
+    Stroke             m_stroke;
+    core::select::Pt   m_stroke_last;              // Shift-click draws from here
+    core::Document::Id m_stroke_last_id;
+    bool               m_stroke_last_valid = false;
+
+    // ── the ants (s008) ────────────────────────────────────────────────────
+    std::shared_ptr<const pixel::TileMap> m_ants_for;   // the mask the canvas's ants are of
+    bool               m_ants_known = false;
+    bool               m_ants_queued = false;
+    core::Jobs::Id     m_ants_job = 0;
+    bool               m_closing = false;      // a close already confirmed (or saved)
 
     // THE UI NEVER WAITS, wired. Declared LAST so the pool is destroyed FIRST:
     // it cancels and joins its workers while the dispatcher and document live.
     std::vector<core::Jobs::Id> m_job_ids;     // jobs submitted and not yet over
-    core::Jobs::Id        m_render = 0;        // the composite in flight (silent: not in the status line)
+    // s007 m4: the composite on screen is per tile. m_shown is the snapshot
+    // the canvas's tiles are (or are being) made from; m_dirty the tiles not
+    // yet landed since it changed. Render jobs are silent (not in the status
+    // line), in batches so a big image fills in as it's made.
+    std::vector<core::Jobs::Id> m_renders;     // the batches in flight
+    core::Layers          m_shown;
+    core::Image           m_shown_image;
+    core::TileSet         m_dirty;
     bool                  m_render_queued = false;
     sigc::connection      m_job_poll;
     Glib::Dispatcher      m_jobs_wake;

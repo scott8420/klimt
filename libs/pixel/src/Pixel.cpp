@@ -87,6 +87,28 @@ std::shared_ptr<const Tile> Tile::uniform(const Format& f, const Px& p) {
     return t;
 }
 
+std::shared_ptr<const Tile> Tile::from_bytes(const Format& f, std::vector<std::uint8_t> data) {
+    if (data.size() != full_bytes(f)) return nullptr;
+    const auto bpp = static_cast<std::size_t>(f.bytes_per_pixel());
+    bool same = true;
+    for (std::size_t i = bpp; i < data.size(); i += bpp)
+        if (std::memcmp(data.data() + i, data.data(), bpp) != 0) { same = false; break; }
+    if (same) {
+        if (f.alpha && std::all_of(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(bpp),
+                                   [](std::uint8_t b) { return b == 0; }))
+            return nullptr;
+        auto t = std::shared_ptr<Tile>(new Tile());
+        t->m_format = f;
+        t->m_uniform = true;
+        t->m_data.assign(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(bpp));
+        return t;
+    }
+    auto t = std::shared_ptr<Tile>(new Tile());
+    t->m_format = f;
+    t->m_data = std::move(data);
+    return t;
+}
+
 Px Tile::get(int x, int y) const {
     if (m_uniform) return decode(m_format, m_data.data());
     const auto bpp = static_cast<std::size_t>(m_format.bytes_per_pixel());
@@ -229,6 +251,33 @@ TileMap TileMap::with_tile(int col, int row, TileRef t) const {
     (*grid)[static_cast<std::size_t>(row) * static_cast<std::size_t>(cols()) + static_cast<std::size_t>(col)] = std::move(t);
     out.m_grid = std::move(grid);
     return out;
+}
+
+TileMap TileMap::from_tiles(const Format& f, int width, int height, std::vector<TileRef> grid) {
+    TileMap out(f, width, height);
+    grid.resize(static_cast<std::size_t>(out.cols()) * static_cast<std::size_t>(out.rows()));
+    for (auto& t : grid)
+        if (t && !(t->format() == f)) t = nullptr;
+    out.m_grid = std::make_shared<const std::vector<TileRef>>(std::move(grid));
+    return out;
+}
+
+void TileMap::row_bytes(int y, std::uint8_t* out) const {
+    const auto bpp = static_cast<std::size_t>(m_format.bytes_per_pixel());
+    std::memset(out, 0, static_cast<std::size_t>(m_w) * bpp);
+    if (y < 0 || y >= m_h || !m_grid) return;
+    const int row = y / kTile, ty = y % kTile;
+    for (int col = 0; col < cols(); ++col) {
+        const auto t = tile(col, row);
+        if (!t) continue;
+        const int x0 = col * kTile, n = std::min(kTile, m_w - x0);
+        std::uint8_t* d = out + static_cast<std::size_t>(x0) * bpp;
+        if (t->is_uniform()) {
+            for (int x = 0; x < n; ++x) std::memcpy(d + static_cast<std::size_t>(x) * bpp, t->data(), bpp);
+        } else {
+            std::memcpy(d, t->data() + static_cast<std::size_t>(ty) * kTile * bpp, static_cast<std::size_t>(n) * bpp);
+        }
+    }
 }
 
 TileMap TileMap::fill(const Rect& r0, const Px& p) const {

@@ -91,6 +91,13 @@ void roundtrip(const std::vector<core::FlatLine>& flat,
 }
 }  // namespace
 
+// s007: the formats checks live in their own file (selftest_formats.cpp).
+void selftest_formats(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_files(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_dirty(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_select(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_paint(const std::function<void(const std::string&, bool, const std::string&)>& check);
+
 int main() {
     std::cout << "klimt_selftest -- undo, layers, jobs, recents, textmap, shortcuts\n";
 
@@ -294,6 +301,8 @@ int main() {
         const auto snap = [](const Document& d) {
             SnapMap out;
             for (const auto& id : d.walk()) out.emplace_back(id, *d.get(id));
+            // s008: the selection is a record too (apart from the tree).
+            out.emplace_back(core::kSelectionId, d.get(core::kSelectionId).value_or(Layer{}));
             return out;
         };
         // The panel, flat: "Top,Group[A,B],Background" -- a group's contents in [].
@@ -332,6 +341,7 @@ int main() {
         // the tree's invariants after each of the three.
         for (const auto& v : L::verbs()) {
             Fix f;
+            if (v.setup) v.setup(f.d);
             const auto before = snap(f.d);
             v.run(f.j, f.d);
             const auto after = snap(f.d);
@@ -1177,6 +1187,12 @@ int main() {
     }
 
 
+
+    selftest_formats([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_files([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_dirty([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_select([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_paint([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
 
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";

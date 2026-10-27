@@ -82,7 +82,9 @@ LayersPanel::LayersPanel(core::Document& doc, core::DocJournal& journal)
         // Through the window's action, so Delete from the key, the button and
         // the menu all say the same (the Shell's toast offers Undo).
         if (keyval == GDK_KEY_Delete || keyval == GDK_KEY_BackSpace) {
-            activate_action("win.layer-delete");
+            // s008: with a selection, Delete deletes the selected PIXELS
+            // (Photoshop's); the layer goes by the trash button or the menu.
+            activate_action(m_doc.selection() ? "win.delete-selection" : "win.layer-delete");
             return true;
         }
         if (keyval == GDK_KEY_F2) { rename_primary(); return true; }

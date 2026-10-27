@@ -110,7 +110,8 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
     static const std::vector<ShortcutSpec> kReg = [] {
     std::vector<ShortcutSpec> reg = {
         // ── Diagnostics ───────────────────────────────────────────────────────
-        {"Diagnostics", "win.dump-registry", {"<Ctrl>d"}, "",
+        // s008: Ctrl+D is Deselect (Photoshop's); the dump moved.
+        {"Diagnostics", "win.dump-registry", {"<Ctrl><Shift><Alt>d"}, "",
          "Dump the widget registry to the log"},
 
         // ── Edit (s046) ───────────────────────────────────────────────────────
@@ -118,6 +119,17 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         // box. The window hears these instead (Shell_bindings.cpp).
         {"Edit", "", {}, "Ctrl+Z", "Undo -- anywhere but a text box (which keeps its own)"},
         {"Edit", "", {}, "Ctrl+Shift+Z  /  Ctrl+Y", "Redo"},
+        // s008 -- doc-only: the window hears them, so a text box keeps its own.
+        {"Edit", "", {}, "Alt+Backspace", "Fill the selection (or the layer) with the foreground colour"},
+        {"Edit", "", {}, "Ctrl+Backspace", "Fill with the background colour"},
+        {"Edit", "", {}, "Delete  /  Backspace  (on the canvas)", "Delete the selected pixels"},
+
+        // ── File (s007) ───────────────────────────────────────────────────────
+        {"File", "win.new",     {"<Ctrl>n"}, "", "New image"},
+        {"File", "win.open",    {"<Ctrl>o"}, "", "Open an image or a Klimt document"},
+        {"File", "win.save",    {"<Ctrl>s"}, "", "Save (.klimt)"},
+        {"File", "win.save-as", {"<Ctrl><Shift>s"}, "", "Save As (.klimt)"},
+        {"File", "win.export",  {"<Ctrl><Shift>e"}, "", "Export a flat PNG, JPEG or TIFF"},
 
         // ── General ───────────────────────────────────────────────────────────
         {"General", "win.command-palette", {"<Ctrl>k"}, "", "Find a command (the palette)"},
@@ -135,8 +147,16 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Layer", "win.layer-raise",     {"<Ctrl>bracketright"}, "", "Bring forward"},
         {"Layer", "win.layer-lower",     {"<Ctrl>bracketleft"}, "", "Send backward"},
         // Doc-only: the panel's list hears these itself, so a text box keeps them.
-        {"Layer", "", {}, "Delete  /  Backspace", "Delete the selection (in the Layers list)"},
+        {"Layer", "", {}, "Delete  /  Backspace", "Delete the selected layers (in the Layers list) -- with a pixel selection, its pixels"},
         {"Layer", "", {}, "F2", "Rename (in the Layers list)"},
+
+        // ── Mouse (s008: the Select tool) ───
+        {"Mouse", "", {}, "Select tool: drag", "Rectangle / ellipse / lasso (the strip's choice); a click deselects"},
+        {"Mouse", "", {}, "Shift / Alt / Shift+Alt at the press", "Add to / subtract from / intersect the selection"},
+        {"Mouse", "", {}, "Shift while dragging", "A square or a circle"},
+        {"Mouse", "", {}, "Brush / Eraser: drag  /  Shift+click", "Paint a stroke / a straight line from the last one"},
+        {"Mouse", "", {}, "Eyedropper: click  /  Alt+click", "Foreground / background colour from what you see"},
+        {"Mouse", "", {}, "Click a colour swatch", "Choose the foreground / background colour"},
 
         // ── Mouse ─────────────────────────────────────────────────────────────
         // Doc-only: a gesture is not a GAction, but the reader still needs it.
@@ -145,6 +165,14 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Drag a layer (or the selection)",
          "Move it -- the line shows above / below; a lit group takes it inside"},
     };
+    // ── Paint (s008 m4) -- after Mouse, A-Z.
+    reg.push_back({"Paint", "", {}, "[  /  ]", "Brush / Eraser smaller / bigger"});
+    reg.push_back({"Paint", "", {}, "X  /  D", "Swap the colours / black and white"});
+    // ── Select (s008) -- between Mouse and Tools, A-Z.
+    reg.push_back({"Select", "", {}, "Ctrl+A", "Select all"});
+    reg.push_back({"Select", "win.deselect", {"<Ctrl>d"}, "", "Deselect"});
+    reg.push_back({"Select", "win.select-invert", {"<Ctrl><Shift>i"}, "", "Invert the selection"});
+    reg.push_back({"Select", "win.select-feather", {"<Shift>F6"}, "", "Feather the selection"});
     // ── Tools (s005): one row per tool, FROM the tool registry -- the rail,
     // the keys and this reference read one list. Doc-only: the window hears
     // the letter (an accelerator would take it from every text box).
@@ -154,6 +182,15 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
     }
     // ── View (s005) -- after Tools: sections are authored A-Z.
     reg.push_back({"View", "", {}, "Tab  (on the canvas)", "Hide / show the panels"});
+    // s007 m4: zoom and pan.
+    reg.push_back({"View", "win.zoom-in",     {"<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add"}, "Ctrl++  /  Ctrl+=", "Zoom in"});
+    reg.push_back({"View", "win.zoom-out",    {"<Ctrl>minus", "<Ctrl>KP_Subtract"}, "Ctrl+\u2212", "Zoom out"});
+    reg.push_back({"View", "win.zoom-fit",    {"<Ctrl>0", "<Ctrl>KP_0"}, "Ctrl+0", "Fit the image in the window"});
+    reg.push_back({"View", "win.zoom-actual", {"<Ctrl>1"}, "Ctrl+1", "Actual size (100%)"});
+    reg.push_back({"View", "", {}, "Ctrl+scroll", "Zoom at the pointer"});
+    reg.push_back({"View", "", {}, "Scroll  /  Shift+scroll", "Pan up and down / sideways"});
+    reg.push_back({"View", "", {}, "Space+drag  /  middle-drag", "Pan (any tool); the Hand tool drags too"});
+    reg.push_back({"View", "", {}, "Click  /  Alt+click", "Zoom tool: zoom in / out where you click"});
     return reg;
     }();
     return kReg;

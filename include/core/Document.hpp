@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -92,8 +93,21 @@ struct Layer {
 struct Image {
     int           width = 0, height = 0;
     pixel::Format format;
+    // s007: what a file said of itself -- its resolution, and its colour
+    // profile (kept and saved again; used once libs/tint lands). Shared:
+    // a profile is a few KB and never changes.
+    double        dpi = 72;
+    std::shared_ptr<const std::vector<std::uint8_t>> icc{};
     bool operator==(const Image&) const = default;
 };
+
+// s008: THE SELECTION is a record of the store too -- under this reserved id,
+// held APART from the layer tree (walk / panel / snapshot / count / check's
+// tree never see it). Its value is a Layer whose `pixels` is the MASK (nullptr
+// = nothing selected), so a selection change goes through the one door and
+// undoes like any step, with no second journal (Scott, s007 -> s008, answer
+// 2). docs/selection.md.
+inline constexpr const char* kSelectionId = "@selection";
 
 class Document {
 public:
@@ -110,6 +124,14 @@ public:
     void            set_image(const Image& im);   // only under Loading (a new / opened document)
     // An empty tile map at the image's size and format (a layer's first paint).
     pixel::TileMap  blank() const { return pixel::TileMap(m_image.format, m_image.width, m_image.height); }
+    // s008: the selection. A MASK: one channel (Gray, no alpha) at the
+    // document's depth, on the same sparse grid; 0 = not selected, 1 =
+    // selected, between = partly (a feathered or anti-aliased edge). An
+    // absent tile is unselected. nullptr: nothing selected.
+    const pixel::TileMap* selection() const { return m_selection && m_selection->pixels ? m_selection->pixels.get() : nullptr; }
+    std::shared_ptr<const pixel::TileMap> selection_ptr() const { return m_selection ? m_selection->pixels : nullptr; }
+    pixel::Format   mask_format() const { return {m_image.format.depth, pixel::Mode::Gray, false}; }
+    pixel::TileMap  blank_mask() const { return pixel::TileMap(mask_format(), m_image.width, m_image.height); }
     // A copy of the records -- what a worker composites from (s006). Cheap:
     // values, and the pixels are shared pointers to immutable maps.
     std::map<Id, Layer> snapshot() const { return m_items; }
@@ -126,7 +148,12 @@ public:
     // it. "" when it isn't clipped or nothing is below (then the clip is inert).
     Id    clip_base(const Id& id) const;
     Id    fresh_id();                                    // "L1", "L2", ... never reused
+    int   next_id() const { return m_next; }             // what fresh_id() hands out next (a file keeps it)
 
+    // s007 -- a whole new document in place of this one: New, Open, Revert.
+    // Only under Loading (not a user choice, not a step: the Shell clears the
+    // journal with it). `next` keeps fresh ids ahead of a file's own.
+    void  replace(const Image& im, std::map<Id, Layer> layers, int next = 1);
     // The tree's invariants; "" when they all hold, else the first one broken.
     // Every parent exists and is a group; no cycles; no two siblings share a
     // place; opacity / fill in 0..100; locks within the mask; Pass Through on
@@ -145,6 +172,7 @@ public:
 
 private:
     std::map<Id, Layer>    m_items;
+    std::optional<Layer>   m_selection;    // kSelectionId's record (s008)
     Image                  m_image;
     int                    m_next = 1;
     int                    m_strays = 0;
@@ -245,6 +273,9 @@ Id neighbour(const Document& d, const Id& id);
 struct Verb {
     std::string name;
     std::function<void(DocJournal&, Document&)> run;
+    // s008: what must already be there (a selection to deselect), LOADED --
+    // not a step -- before the gate takes its "before" picture. May be empty.
+    std::function<void(Document&)> setup = {};
 };
 const std::vector<Verb>& verbs();
 // The fixture the table runs on, LOADED (not undoable). Panel order:
@@ -254,6 +285,8 @@ const std::vector<Verb>& verbs();
 //     L3 B
 //   L1 Background
 void load_fixture(Document& d);
+// s008: a rectangular selection, LOADED (a verb's setup; tests).
+void load_selection(Document& d, const pixel::Rect& r);
 }  // namespace layers
 
 }  // namespace klimt::core

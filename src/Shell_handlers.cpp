@@ -32,6 +32,7 @@ void Shell::on_about() {
 // Undo / redo of the document. The step hands back the selection it had; the
 // panel selects it and takes the keyboard, so the next Ctrl+Z lands.
 void Shell::on_undo() {
+    if (m_stroke.active) return;   // s008: mid-stroke, the stroke finishes first
     const auto r = m_journal.undo();
     if (!r.done) return;
     toast("Undid " + r.label);
@@ -40,6 +41,7 @@ void Shell::on_undo() {
 }
 
 void Shell::on_redo() {
+    if (m_stroke.active) return;
     const auto r = m_journal.redo();
     if (!r.done) return;
     toast("Redid " + r.label);
@@ -86,6 +88,8 @@ void Shell::on_job_cancel() {  // leaves nothing behind
 void Shell::on_tool(const std::string& id) {  // view state: not a step
     if (const auto* t = core::find_tool(id)) {
         m_strip.show_tool(*t);
+        m_canvas.set_tool(id, m_strip.variant(id));   // s007: Hand pans, Zoom zooms; s008: Select selects
+        m_canvas.set_brush_size(m_strip.brush(id).size);
         if (auto lg = log::get(log::Area::Shell)) lg->info("tool: {}", id);
     }
 }
@@ -93,7 +97,7 @@ void Shell::on_tool(const std::string& id) {  // view state: not a step
 void Shell::on_toggle_panels() {
     m_panels = !m_panels;
     set_rail(m_panels);
-    m_strip.get_parent()->set_visible(m_panels);
+    if (m_strip_box) m_strip_box->set_visible(m_panels);
     set_dock(m_panels);
     if (!m_panels) toast("Panels hidden -- Tab on the canvas, or the edge tabs, bring them back");
 }

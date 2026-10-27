@@ -43,6 +43,9 @@ public:
     // Select (after the repaint the last write queued); `keys` gives the
     // selected row the keyboard so the next key lands (a delete, an undo).
     void select(const std::vector<Id>& ids, bool keys);
+    // s007: a different document -- forget the old one's selection and
+    // collapsed groups (its ids may be reused by the new one).
+    void forget_view() { m_sel.clear(); m_collapsed.clear(); queue_repaint(); }
     void queue_repaint();
     // Called after every repaint: the Shell greys its layer actions here.
     void set_on_change(std::function<void()> f) { m_changed = std::move(f); }

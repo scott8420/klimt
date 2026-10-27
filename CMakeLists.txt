@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s006")
+set(KLIMT_BUILD "s008")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,6 +59,7 @@ find_package(Threads REQUIRED)
 
 # ── libs/ -- the image libraries, each its own CMakeLists (s006: pixel first)
 add_subdirectory(libs/pixel)
+add_subdirectory(libs/formats)   # s007: PNG / JPEG / TIFF in and out
 
 # ── klimt_core -- the GTK-free core (the model side of the one real seam) ──────
 # No gtkmm on this library's link line, BY DESIGN: a stray UI include under
@@ -91,15 +92,27 @@ add_library(klimt_core STATIC
     src/core/Commands.cpp
     # The COMPOSITOR (s006): the layer tree flattened, per tile, on a worker.
     src/core/Composite.cpp
+    # FILES (s007): .klimt in and out (a zip, libzip), images in, File > New,
+    # Export -- all pure over a snapshot, so they run on a worker.
+    src/core/File.cpp
+    # THE SELECTION (s008): a mask on the tile grid; shapes, set arithmetic,
+    # feather, the ants' outline, fill / delete through it.
+    src/core/Selection.cpp
+    # THE BRUSH (s008 m4): dabs into a stroke's coverage, the layer
+    # recomputed from the original per touched tile -- one stroke, one step.
+    src/core/Paint.cpp
 )
 target_include_directories(klimt_core PUBLIC include)
-target_link_libraries(klimt_core PUBLIC klimt_pixel)
+target_link_libraries(klimt_core PUBLIC klimt_pixel klimt_formats)
+# s007: libzip writes and reads the .klimt container (Fedora: libzip-devel).
+pkg_check_modules(LIBZIP REQUIRED IMPORTED_TARGET libzip>=1.6)
+target_link_libraries(klimt_core PRIVATE PkgConfig::LIBZIP)
 # Vendored nlohmann/json (header-only, MIT), PRIVATE -- an implementation detail
 # of the pump, no consumer inherits the include (CANON: surprise-free build).
 target_include_directories(klimt_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp)
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads)
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -141,6 +154,11 @@ add_executable(klimt
     src/Shell_bindings.cpp
     src/Shell_handlers.cpp
     src/Shell_helpers.cpp
+    src/Shell_files.cpp
+    src/Shell_select.cpp
+    src/Shell_paint.cpp
+    src/NewDialog.cpp
+    src/NumberDialog.cpp
     src/AboutWindow.cpp
     src/ShortcutsDialog.cpp
     # s003 -- the Layers panel on core::Document (Pole B, rebuilt per change).

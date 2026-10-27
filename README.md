@@ -17,8 +17,8 @@ See `docs/REQUIREMENTS.md` for what it is to become.
 ./build/klimt
 ```
 
-Deps (Fedora): `gtkmm4.0-devel spdlog-devel cmake gcc-c++ zip`.
-(Ubuntu/Debian: `libgtkmm-4.0-dev libspdlog-dev cmake g++ zip`.)
+Deps (Fedora): `gtkmm4.0-devel libadwaita-devel spdlog-devel libpng-devel libjpeg-turbo-devel libtiff-devel libzip-devel cmake gcc-c++ zip`.
+(Ubuntu/Debian: `libgtkmm-4.0-dev libadwaita-1-dev libspdlog-dev libpng-dev libjpeg-turbo8-dev libtiff-dev libzip-dev cmake g++ zip`.)
 Optional, for faster builds: `ccache ninja-build mold`.
 
 ## Install / uninstall

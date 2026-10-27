@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Klimt build. Deps (Fedora): gtkmm4.0-devel libadwaita-devel spdlog-devel cmake gcc-c++ zip
-#   (Ubuntu/Debian: libgtkmm-4.0-dev libadwaita-1-dev libspdlog-dev cmake g++ zip).
+#   + (s007) libpng-devel libjpeg-turbo-devel libtiff-devel libzip-devel
+#   (Ubuntu/Debian: libgtkmm-4.0-dev libadwaita-1-dev libspdlog-dev cmake g++ zip
+#    + libpng-dev libjpeg-turbo8-dev libtiff-dev libzip-dev).
 # Optional, for faster builds: ccache ninja-build mold (or lld).
 set -e
 cd "$(dirname "${BASH_SOURCE[0]}")"

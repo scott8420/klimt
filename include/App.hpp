@@ -16,8 +16,11 @@ protected:
     App();
     void on_activate() override;
     void on_startup() override;   // accelerators, driven from core::shortcut_registry()
+    // s007: `klimt photo.png` (and Files' Open With): open the first file.
+    void on_open(const type_vec_files& files, const Glib::ustring& hint) override;
 
 private:
+    Shell* ensure_shell();        // the window, built once
     Shell* m_shell = nullptr;   // owned by the application via add_window
 };
 

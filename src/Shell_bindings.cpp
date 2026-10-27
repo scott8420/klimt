@@ -15,6 +15,32 @@ void Shell::bind_actions() {  // bindings
     add_action("about",         sigc::mem_fun(*this, &Shell::on_about));
     add_action("shortcuts",     sigc::mem_fun(*this, &Shell::on_shortcuts));
     add_action("quit",          [this]() { close(); });
+    // s007: the file verbs (Shell_files.cpp).
+    add_action("new",     sigc::mem_fun(*this, &Shell::on_new));
+    add_action("open",    sigc::mem_fun(*this, &Shell::on_open));
+    add_action("save",    sigc::mem_fun(*this, &Shell::on_save));
+    add_action("save-as", sigc::mem_fun(*this, &Shell::on_save_as));
+    add_action("export",  sigc::mem_fun(*this, &Shell::on_export));
+    // s007 m4: the view (view state: not steps).
+    add_action("zoom-in",     [this] { m_canvas.zoom_in(); });
+    add_action("zoom-out",    [this] { m_canvas.zoom_out(); });
+    add_action("zoom-fit",    [this] { m_canvas.fit(); });
+    add_action("zoom-actual", [this] { m_canvas.actual_size(); });
+    // s008: the selection (Shell_select.cpp). Held in m_layer_acts so they grey.
+    m_layer_acts["select-all"]     = add_action("select-all", sigc::mem_fun(*this, &Shell::on_select_all));
+    m_layer_acts["deselect"]       = add_action("deselect", sigc::mem_fun(*this, &Shell::on_deselect));
+    m_layer_acts["select-invert"]  = add_action("select-invert", sigc::mem_fun(*this, &Shell::on_select_invert));
+    m_layer_acts["fill-fg"]        = add_action("fill-fg", [this] { on_fill(true); });
+    m_layer_acts["fill-bg"]        = add_action("fill-bg", [this] { on_fill(false); });
+    m_layer_acts["delete-selection"] = add_action("delete-selection", sigc::mem_fun(*this, &Shell::on_delete_selection));
+    m_canvas.signal_shape().connect(sigc::mem_fun(*this, &Shell::on_shape));
+    m_canvas.signal_pick().connect(sigc::mem_fun(*this, &Shell::on_pick));
+    m_canvas.signal_stroke().connect(sigc::mem_fun(*this, &Shell::on_stroke));
+    m_strip.signal_brush_changed().connect([this] { m_canvas.set_brush_size(m_strip.brush(m_rail.tool()).size); });
+    m_layer_acts["select-feather"] = add_action("select-feather", sigc::mem_fun(*this, &Shell::on_feather));
+    m_strip.signal_variant().connect([this](const std::string& id, int v) {
+        if (id == m_rail.tool()) m_canvas.set_tool(id, v);
+    });
     add_action("toggle-panels", sigc::mem_fun(*this, &Shell::on_toggle_panels));
     add_action("command-palette", sigc::mem_fun(*this, &Shell::on_palette));
     // win.tool("brush") -- the palette's tool rows (a parameterised action).
@@ -62,15 +88,17 @@ void Shell::bind_actions() {  // bindings
     // UI when Undo / Redo change; the store's changes repaint the panel, whose
     // repaint (and any selection change) reaches Properties and the status.
     m_doc.set_door([this] { return m_journal.open(); });
-    m_doc.set_on_change([this] { m_layers.queue_repaint(); queue_render(); });
+    m_doc.set_on_change([this] { m_layers.queue_repaint(); queue_render(); queue_ants(); });
     m_canvas.set_on_zoom([this](double z) {
         m_status.set_zoom(std::to_string(static_cast<int>(z * 100 + 0.5)) + "%");
     });
     m_journal.set_selection_source([this] { return m_layers.selection(); });
-    m_journal.set_on_change([this] { update_undo_ui(); m_history.repaint(); });
+    m_journal.set_on_change([this] { update_undo_ui(); m_history.repaint(); update_title(); });
     m_history.set_on_go(sigc::mem_fun(*this, &Shell::on_history_go));
     m_layers.set_on_change([this] { on_selection(); });
     load_demo();
+    m_saved_mark = m_journal.mark();   // the demo is "as loaded": nothing to save
+    update_title();
 
     // ── the window's own keys ───────────────────────────────────────────────
     // NOT accelerators: an accelerator fires before the focused widget, so it
@@ -91,12 +119,30 @@ void Shell::bind_actions() {  // bindings
             if ((keyval == GDK_KEY_z || keyval == GDK_KEY_Z) && mods == CTRL)               act = "win.undo";
             else if ((keyval == GDK_KEY_z || keyval == GDK_KEY_Z) && mods == (CTRL | SHIFT)) act = "win.redo";
             else if ((keyval == GDK_KEY_y || keyval == GDK_KEY_Y) && mods == CTRL)          act = "win.redo";
+            // s008: here, not accelerators -- a text box keeps Ctrl+A,
+            // Backspace and Delete for itself (and the Layers list hears its
+            // own Delete first).
+            else if ((keyval == GDK_KEY_a || keyval == GDK_KEY_A) && mods == CTRL)          act = "win.select-all";
+            else if ((keyval == GDK_KEY_BackSpace) && mods == Gdk::ModifierType::ALT_MASK)   act = "win.fill-fg";
+            else if ((keyval == GDK_KEY_BackSpace) && mods == CTRL)                          act = "win.fill-bg";
+            else if ((keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete) && mods == NONE) act = "win.delete-selection";
             if (act) {
                 if (auto lg = log::get(log::Area::Shell)) lg->info("window key -> {}", act);
                 activate_action(act);   // the FULL name: "undo" alone would do nothing
                 return true;
             }
             if (mods != NONE) return false;
+            // s008: the colour pair -- X swaps, D resets (Photoshop's).
+            if (keyval == GDK_KEY_x) { m_rail.swap_colours(); return true; }
+            // s008 m4: [ and ] -- the brush's size, a step at a time.
+            if ((keyval == GDK_KEY_bracketleft || keyval == GDK_KEY_bracketright) &&
+                (m_rail.tool() == "brush" || m_rail.tool() == "eraser")) {
+                const int s = m_strip.brush(m_rail.tool()).size;
+                const int step = s < 10 ? 1 : s < 50 ? 5 : s < 200 ? 10 : 50;
+                m_strip.set_brush_size(m_rail.tool(), keyval == GDK_KEY_bracketright ? s + step : s - step);
+                return true;
+            }
+            if (keyval == GDK_KEY_d) { m_rail.reset_colours(); return true; }
             // A tool's letter (the tool registry's keys).
             const gunichar ch = gdk_keyval_to_unicode(keyval);
             if (ch < 128)
@@ -125,6 +171,7 @@ void Shell::bind_actions() {  // bindings
 
     update_undo_ui();
     update_layer_actions();
+    update_select_actions();
 }
 
 }  // namespace klimt

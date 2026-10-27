@@ -23,7 +23,7 @@ Glib::RefPtr<App> App::create() {
     return Glib::make_refptr_for_instance(new App());
 }
 
-App::App() : Gtk::Application("io.github.scott8420.Klimt") {}
+App::App() : Gtk::Application("io.github.scott8420.Klimt", Gio::Application::Flags::HANDLES_OPEN) {}
 
 // The SHORTCUT-REGISTRY paradigm's other consumer. Accelerators are an
 // application-scope concern (they survive window construction order), so they
@@ -47,6 +47,17 @@ void App::on_startup() {
 }
 
 void App::on_activate() {
+    ensure_shell()->present();
+}
+
+void App::on_open(const type_vec_files& files, const Glib::ustring&) {
+    Shell* shell = ensure_shell();
+    shell->present();
+    if (!files.empty() && !files.front()->get_path().empty()) shell->open_path(files.front()->get_path());
+}
+
+Shell* App::ensure_shell() {
+    if (m_shell) return m_shell;
     // Register the compiled-in bundle and point the icon theme at its icon
     // prefix, so set_icon_name("klimt-logo-symbolic") resolves out of the binary
     // and GTK recolours it to the theme foreground -- no icon on the user's disk.
@@ -60,8 +71,8 @@ void App::on_activate() {
     m_shell = new Shell();       // lifetime owned by the application
     add_window(*m_shell);
     m_shell->build_ui();
-    m_shell->present();
     if (auto lg = log::get(log::Area::App)) lg->info("Klimt activated");
+    return m_shell;
 }
 
 }  // namespace klimt

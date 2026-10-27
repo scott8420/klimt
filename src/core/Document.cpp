@@ -1,4 +1,6 @@
 #include "core/Document.hpp"
+#include "core/Selection.hpp"   // s008: the verb table carries the selection verbs
+#include "core/Paint.hpp"       // s008 m4: and the brush
 
 #include <algorithm>
 #include <set>
@@ -54,6 +56,7 @@ std::optional<Blend> blend_from_key(std::string_view key) {
 
 // ── the store ───────────────────────────────────────────────────────────────
 std::optional<Layer> Document::get(const Id& id) const {
+    if (id == kSelectionId) return m_selection;
     const auto it = m_items.find(id);
     if (it == m_items.end()) return std::nullopt;
     return it->second;
@@ -61,6 +64,11 @@ std::optional<Layer> Document::get(const Id& id) const {
 
 void Document::put(const Id& id, const std::optional<Layer>& v) {
     if (m_loading == 0 && m_door && !m_door()) ++m_strays;
+    if (id == kSelectionId) {   // s008: the selection, apart from the tree
+        m_selection = v;
+        if (m_changed) m_changed();
+        return;
+    }
     if (v) m_items[id] = *v;
     else   m_items.erase(id);
     // A loaded "L<n>" keeps fresh_id() ahead of it.
@@ -173,6 +181,19 @@ Document::Id Document::clip_base(const Id& id) const {
     return {};
 }
 
+void Document::replace(const Image& im, std::map<Id, Layer> layers, int next) {
+    if (m_loading == 0) ++m_strays;   // not a user choice: only a load replaces
+    m_image = im;
+    m_items = std::move(layers);
+    m_selection.reset();   // a new document starts with nothing selected
+    m_next = std::max(1, next);
+    for (const auto& [id, l] : m_items)   // a loaded "L<n>" keeps fresh_id() ahead of it
+        if (id.size() > 1 && id[0] == 'L' && id.size() < 10 &&
+            std::all_of(id.begin() + 1, id.end(), [](char c) { return c >= '0' && c <= '9'; }))
+            m_next = std::max(m_next, std::stoi(id.substr(1)) + 1);
+    if (m_changed) m_changed();
+}
+
 Document::Id Document::fresh_id() { return "L" + std::to_string(m_next++); }
 
 std::string Document::check() const {
@@ -201,6 +222,13 @@ std::string Document::check() const {
                 l.pixels->height() != m_image.height)
                 return id + ": pixels not at the image's size and format";
         }
+    }
+    // s008: the selection's mask is at the image's size, in the mask format,
+    // and holds no tile that is all unselected (that tile is absent).
+    if (const auto* m = selection()) {
+        if (!(m->format() == mask_format()) || m->width() != m_image.width || m->height() != m_image.height)
+            return std::string("the selection is not at the image's size in the mask format");
+        if (m->tile_count() == 0) return std::string("an empty selection is held (it should be none)");
     }
     return {};
 }
@@ -706,7 +734,7 @@ Id neighbour(const Document& d, const Id& id) {
 
 void load_fixture(Document& d) {
     Document::Loading load(d);
-    d.set_image({600, 400, pixel::Format{pixel::Depth::U8, pixel::Mode::RGB, true}});
+    d.set_image({.width = 600, .height = 400, .format = pixel::Format{pixel::Depth::U8, pixel::Mode::RGB, true}});
     const auto add = [&](const Id& id, Kind k, const char* name, const Id& parent, double pos) {
         Layer l;
         l.kind = k;
@@ -729,6 +757,15 @@ void load_fixture(Document& d) {
     auto a = *d.get("L4");
     a.pixels = std::make_shared<const pixel::TileMap>(d.blank().fill({100, 100, 200, 150}, pixel::rgba(1, 0, 0, 1)));
     d.put("L4", a);
+}
+
+// A selection already there (a verb's setup): LOADED, not a step.
+void load_selection(Document& d, const pixel::Rect& r) {
+    Document::Loading load(d);
+    Layer v;
+    v.name = "Selection";
+    v.pixels = std::make_shared<const pixel::TileMap>(select::rect_mask(d.mask_format(), d.image().width, d.image().height, r));
+    d.put(kSelectionId, v);
 }
 
 const std::vector<Verb>& verbs() {
@@ -761,6 +798,39 @@ const std::vector<Verb>& verbs() {
         {"clear",         [](DocJournal& j, Document& d) { clear(j, d, "L4", {150, 150, 50, 50}); }},
         {"opacity_drag",  [](DocJournal& j, Document& d) {
              opacity_begin(j, d, "L4"); opacity_to(j, d, "L4", 80); opacity_to(j, d, "L4", 35); opacity_end(j); }},
+        // s008 -- the selection (core/Selection) and pixels through it.
+        {"select_rect",   [](DocJournal& j, Document& d) { select::rect(j, d, {50, 50, 300, 200}); }},
+        {"select_ellipse", [](DocJournal& j, Document& d) { select::ellipse(j, d, 40, 30, 380, 290); }},
+        {"select_lasso",  [](DocJournal& j, Document& d) {
+             select::polygon(j, d, {{10, 10}, {400, 40}, {300, 350}, {20, 200}}); }},
+        {"select_add",    [](DocJournal& j, Document& d) { select::rect(j, d, {200, 200, 100, 100}, select::Op::Add); },
+             [](Document& d) { load_selection(d, {0, 0, 100, 100}); }},
+        {"select_subtract", [](DocJournal& j, Document& d) { select::ellipse(j, d, 100, 100, 300, 300, select::Op::Subtract); },
+             [](Document& d) { load_selection(d, {0, 0, 600, 400}); }},
+        {"select_intersect", [](DocJournal& j, Document& d) { select::rect(j, d, {200, 200, 300, 150}, select::Op::Intersect); },
+             [](Document& d) { load_selection(d, {0, 0, 300, 300}); }},
+        {"select_all",    [](DocJournal& j, Document& d) { select::all(j, d); }},
+        {"deselect",      [](DocJournal& j, Document& d) { select::none(j, d); },
+             [](Document& d) { load_selection(d, {0, 0, 600, 400}); }},
+        {"select_invert", [](DocJournal& j, Document& d) { select::invert(j, d); },
+             [](Document& d) { load_selection(d, {10, 10, 100, 100}); }},
+        {"select_feather", [](DocJournal& j, Document& d) { select::feather(j, d, 8); },
+             [](Document& d) { load_selection(d, {100, 100, 200, 100}); }},
+        {"fill_selection", [](DocJournal& j, Document& d) { fill_selection(j, d, "L4", pixel::rgba(0, 0.5f, 1, 1)); },
+             [](Document& d) { load_selection(d, {80, 80, 240, 200}); }},
+        {"clear_selection", [](DocJournal& j, Document& d) { clear_selection(j, d, "L4", pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_selection(d, {150, 120, 100, 60}); }},
+        // s008 m4 -- a stroke is ONE step, however many dabs.
+        {"brush",         [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 40; b.colour = pixel::rgba(0, 0, 1, 1);
+             paint::stroke(j, d, "L5", {{50, 50}, {200, 80}, {400, 300}}, b); }},
+        {"brush_in_selection", [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 60; b.colour = pixel::rgba(0, 1, 0, 1);
+             paint::stroke(j, d, "L5", {{0, 200}, {600, 200}}, b); },
+             [](Document& d) { load_selection(d, {200, 0, 200, 400}); }},
+        {"eraser",        [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 30; b.erase = true;
+             paint::stroke(j, d, "L4", {{100, 120}, {300, 230}}, b); }},
     };
     return table;
 }

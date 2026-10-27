@@ -2,6 +2,8 @@
 #include "AboutWindow.hpp"      // complete type for ~unique_ptr<AboutWindow> in ~Shell()
 #include "ShortcutsDialog.hpp"  // ditto
 #include "CommandPalette.hpp"   // ditto
+#include "NewDialog.hpp"        // ditto
+#include "NumberDialog.hpp"     // ditto
 #include "Log.hpp"
 
 // Shell.cpp -- GLUE. The ctor and the ordered build_ui() pass; every other
@@ -15,6 +17,7 @@ Shell::Shell()
       m_undo_button("shell.undo"),
       m_redo_button("shell.redo"),
       m_export_button("shell.export"),
+      m_open_button("shell.open"),
       m_outer("shell.outer", Gtk::Orientation::VERTICAL),
       m_body("shell.body", Gtk::Orientation::HORIZONTAL),
       m_centre("shell.centre", Gtk::Orientation::VERTICAL),

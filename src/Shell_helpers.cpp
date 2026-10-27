@@ -20,7 +20,7 @@ void Shell::load_demo() {
     namespace P = pixel;
     core::Document::Loading load(m_doc);
     const int W = 1200, H = 1600;
-    m_doc.set_image({W, H, P::Format{P::Depth::U8, P::Mode::RGB, true}});
+    m_doc.set_image({.width = W, .height = H, .format = P::Format{P::Depth::U8, P::Mode::RGB, true}});
     const auto put = [this](core::Kind kind, const char* name, const std::string& parent, double pos,
                             core::Blend blend = core::Blend::Normal, int opacity = 100,
                             std::shared_ptr<const P::TileMap> px = nullptr) {
@@ -153,11 +153,13 @@ void Shell::toast(const std::string& text, bool offer_undo) {
 }
 
 // ── Jobs: submit, follow, land ──────────────────────────────────────────────
-void Shell::start_job(const std::string& label, core::Jobs::Work work) {
-    m_job_ids.push_back(m_jobs.submit(label, std::move(work)));
+core::Jobs::Id Shell::start_job(const std::string& label, core::Jobs::Work work) {
+    const auto id = m_jobs.submit(label, std::move(work));
+    m_job_ids.push_back(id);
     if (auto lg = log::get(log::Area::Shell)) lg->info("job: {}", label);
     if (!m_job_poll.connected())
         m_job_poll = Glib::signal_timeout().connect(sigc::mem_fun(*this, &Shell::poll_jobs), 100);
+    return id;
 }
 
 void Shell::on_jobs_wake() {  // the UI thread, woken by a worker
@@ -189,28 +191,75 @@ bool Shell::focus_is_text() const {
     return false;
 }
 
-// The document changed: composite it again, on a worker, once per idle.
-// The newest render wins -- one still running is cancelled (its landing is
-// dropped). Its landing only hands the canvas a new picture: not a step.
+// The document changed: composite the tiles it changed (core::changed_tiles
+// against what the canvas was made from), on workers, once per idle. A change
+// while batches run cancels them all (their landings are dropped) and sends
+// every tile still owed again, nearest the view's centre first; a batch that
+// lands is current. Landings hand the canvas tiles: not a step.
 void Shell::queue_render() {
     if (m_render_queued) return;
     m_render_queued = true;
     Glib::signal_idle().connect_once([this] {
         m_render_queued = false;
-        if (m_render) m_jobs.cancel(m_render);
         const core::Image im = m_doc.image();
-        if (im.width <= 0 || im.height <= 0) return;
         auto layers = m_doc.snapshot();
-        m_render = m_jobs.submit("Composite", [this, im, layers = std::move(layers)](core::Jobs::Token& t)
-                                                   -> core::Jobs::Landing {
-            auto out = std::make_shared<std::vector<std::uint32_t>>();
-            if (!core::composite_argb(im, layers, *out, [&] { return t.cancelled(); },
-                                      [&](double p) { t.progress(p); }))
-                return [] {};
-            return [this, im, out = std::shared_ptr<const std::vector<std::uint32_t>>(out)] {
-                m_canvas.set_image(im.width, im.height, out);
-            };
-        });
+        const bool fresh = im.width != m_shown_image.width || im.height != m_shown_image.height ||
+                           !(im.format == m_shown_image.format) || m_dirty.cols == 0;
+        if (fresh) {
+            m_canvas.set_document(im.width, im.height);
+            m_dirty = core::tiles_of(im);
+            m_dirty.add_all();
+        } else {
+            m_dirty.merge(core::changed_tiles(m_shown_image, m_shown, im, layers));
+        }
+        m_shown = layers;
+        m_shown_image = im;
+        for (const auto id : m_renders) m_jobs.cancel(id);
+        m_renders.clear();
+        if (im.width <= 0 || im.height <= 0 || m_dirty.count() == 0) return;
+
+        // The tiles owed, the view's centre first.
+        double cx = 0, cy = 0;
+        m_canvas.view_centre(cx, cy);
+        struct T { int col, row; double d; };
+        std::vector<T> owed;
+        for (int row = 0; row < m_dirty.rows; ++row)
+            for (int col = 0; col < m_dirty.cols; ++col)
+                if (m_dirty.has(col, row)) {
+                    const double dx = (col + 0.5) * pixel::kTile - cx, dy = (row + 0.5) * pixel::kTile - cy;
+                    owed.push_back({col, row, dx * dx + dy * dy});
+                }
+        std::sort(owed.begin(), owed.end(), [](const T& a, const T& b) { return a.d < b.d; });
+        auto shared = std::make_shared<const core::Layers>(std::move(layers));
+        constexpr std::size_t kBatch = 12;
+        for (std::size_t i = 0; i < owed.size(); i += kBatch) {
+            std::vector<std::pair<int, int>> batch;
+            for (std::size_t k = i; k < std::min(owed.size(), i + kBatch); ++k) batch.emplace_back(owed[k].col, owed[k].row);
+            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch](core::Jobs::Token& t) -> core::Jobs::Landing {
+                auto out = std::make_shared<std::vector<CanvasView::Tile>>();
+                for (const auto& [col, row] : batch) {
+                    if (t.cancelled()) return [] {};
+                    auto px = std::make_shared<std::vector<std::uint32_t>>();
+                    CanvasView::Tile tile;
+                    tile.col = col;
+                    tile.row = row;
+                    core::composite_tile_argb(im, *shared, col, row, *px, tile.w, tile.h);
+                    tile.argb = std::move(px);
+                    out->push_back(std::move(tile));
+                }
+                return [this, out] {
+                    m_canvas.set_tiles(*out);
+                    for (const auto& tl : *out) {
+                        if (m_dirty.all) {   // "all" becomes a real set as tiles land
+                            m_dirty.all = false;
+                            std::fill(m_dirty.on.begin(), m_dirty.on.end(), 1);
+                        }
+                        m_dirty.on[static_cast<std::size_t>(tl.row) * static_cast<std::size_t>(m_dirty.cols) +
+                                   static_cast<std::size_t>(tl.col)] = 0;
+                    }
+                };
+            }));
+        }
     });
 }
 

@@ -54,6 +54,14 @@ class TileWriter;
 class Tile {
 public:
     static std::shared_ptr<const Tile> uniform(const Format& f, const Px& p);
+    // s007 -- a tile from STORED bytes (kTile * kTile * bytes_per_pixel, the
+    // format's depth, native-endian, straight): what a file reader cuts from a
+    // band of rows. Pixels all the same collapse to a uniform tile; all-zero
+    // bytes on a format WITH alpha are fully transparent and come back
+    // nullptr (an absent tile). A wrong size comes back nullptr too.
+    static std::shared_ptr<const Tile> from_bytes(const Format& f, std::vector<std::uint8_t> data);
+    // The stored bytes: one pixel when uniform, else the whole tile.
+    const std::uint8_t* data() const { return m_data.data(); }
 
     const Format& format() const { return m_format; }
     bool is_uniform() const { return m_uniform; }
@@ -123,6 +131,13 @@ public:
     std::size_t bytes() const;             // memory the held tiles use
 
     TileMap with_tile(int col, int row, TileRef t) const;
+    // s007 -- a map from its whole grid at once (cols * rows, row-major; a
+    // reader's or a loader's result). A grid of the wrong size is padded /
+    // cut; a tile of another format is dropped.
+    static TileMap from_tiles(const Format& f, int width, int height, std::vector<TileRef> grid);
+    // Row y's STORED bytes (width * bytes_per_pixel; absent tiles as zero):
+    // what a file writer reads. y outside the map: all zero.
+    void row_bytes(int y, std::uint8_t* out) const;
     // Fill a rectangle (clipped to the map). A tile wholly covered becomes a
     // uniform tile; a partly covered one is copied and written; the rest are
     // shared. Filling with transparent over a whole tile drops it.

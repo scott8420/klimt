@@ -48,6 +48,7 @@
 //     the selftest walks every verb and fails on a stray (the gate).
 // ─────────────────────────────────────────────────────────────────────────────
 #include <chrono>
+#include <cstdint>
 #include <cstddef>
 #include <functional>
 #include <optional>
@@ -76,6 +77,7 @@ public:
         std::vector<Id>    sel_before;  // selection when the step began
         std::vector<Id>    sel_after;   // selection when it ended
         std::string        merge_key;   // "" = never merges
+        std::uint64_t      serial = 0;  // s007: which state this step leaves (mark())
         Clock::time_point  at{};        // last time it grew (for merging)
     };
     // What an undo / redo did. `selection` is what the UI should select now.
@@ -133,6 +135,7 @@ public:
                 top.sel_after = st.sel_after;
                 top.at        = now;
                 top.label     = label;
+                top.serial    = ++m_serial;   // a merged step leaves a NEW state
                 if (unchanged(top)) { m_steps.pop_back(); m_at = m_steps.size(); }
                 notify();
                 return true;
@@ -221,7 +224,14 @@ public:
     const std::string& label(std::size_t i) const { return m_steps.at(i).label; }
 
     // A different document / folder: no step carries over.
-    void clear() { m_steps.clear(); m_at = 0; notify(); }
+    void clear() { m_steps.clear(); m_at = 0; m_base = ++m_serial; notify(); }
+
+    // s007 -- WHICH STATE the document is in, as far as the journal knows: a
+    // number that differs whenever the steps done differ. A save remembers
+    // it; "unsaved changes" is mark() != the saved one. Undo back to the save
+    // and it matches again; a step dropped off the bottom by the cap moves
+    // position 0 to a new state, so it can't match a mark it no longer has.
+    std::uint64_t mark() const { return m_at > 0 ? m_steps[m_at - 1].serial : m_base; }
 
     // True while a write is coming through the door (run, a gesture, undo,
     // redo, cancel). A store's put() asks this to enforce the one-door rule.
@@ -234,6 +244,8 @@ private:
     int                               m_depth = 0;   // >0: inside the door
     bool                              m_gesture = false;
     Step                              m_open;        // the gesture being recorded
+    std::uint64_t                     m_serial = 0;  // the last serial handed out
+    std::uint64_t                     m_base = 0;    // the state at position 0
     std::function<std::vector<Id>()>  m_sel;
     std::function<void()>             m_changed;
 
@@ -269,8 +281,9 @@ private:
     }
     void keep(Step&& st) {
         m_steps.resize(m_at);                 // a new step forgets what was undone
+        st.serial = ++m_serial;
         m_steps.push_back(std::move(st));
-        if (m_steps.size() > kMax) m_steps.erase(m_steps.begin());
+        if (m_steps.size() > kMax) { m_base = m_steps.front().serial; m_steps.erase(m_steps.begin()); }
         m_at = m_steps.size();
         notify();
     }
