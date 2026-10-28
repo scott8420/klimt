@@ -212,7 +212,7 @@ void PropertiesPanel::paint() {
     m_later.set_visible(!adj);
     paint_live(*l);   // s018
     // s019: one pixel layer picked: its styles.
-    const bool styled = l->kind == core::Kind::Pixel && m_sel.size() == 1;
+    const bool styled = (l->kind == core::Kind::Pixel || l->kind == core::Kind::Group) && m_sel.size() == 1;   // s024: groups too
     m_styles.set_visible(styled);
     if (styled) {
         m_styles.set_sensitive(!m_doc.locked_all(primary()));

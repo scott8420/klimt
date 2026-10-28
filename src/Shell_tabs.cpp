@@ -1,5 +1,6 @@
 #include "Shell.hpp"
 #include "Log.hpp"
+#include "ColourRangeDialog.hpp"
 
 #include <adwaita.h>
 
@@ -175,6 +176,7 @@ bool Shell::doc_busy(bool say) {
     if (m_stroke.active || m_move.active || m_patch.active) what = "the stroke to end";
     else if (m_xform.active) what = "Free Transform -- Enter or Escape first";
     else if (m_adjust_preview || !m_preview.empty() || m_filter_landing || m_fade_landing) what = "the preview to finish";
+    else if (m_range_dialog && m_range_dialog->get_visible()) what = "Color Range -- OK or Cancel first";
     else
         for (const auto id : m_job_ids) {
             const auto st = m_jobs.state(id);

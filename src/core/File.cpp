@@ -445,7 +445,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 L.pixels = std::make_shared<const P::TileMap>(std::move(m));
             }
             // s012: the layer mask (stored as what it hides), and whether it's on.
-            if (l.contains("mask") && L.kind != Kind::Group) {
+            if (l.contains("mask")) {   // s024: groups too
                 P::TileMap m;
                 if (!read_map(l, "mask", "mask_outside", P::Format{f.depth, P::Mode::Gray, false}, m)) return std::nullopt;
                 L.mask = std::make_shared<const P::TileMap>(std::move(m));
@@ -611,7 +611,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
             l["filters"] = std::move(fs);
             if (L.filter_mask && !write_map(l, *L.filter_mask, "filter_mask", "filter_mask_outside")) return false;   // m3
         }
-        if (L.mask && L.kind != Kind::Group) {   // s012: the layer mask
+        if (L.mask) {   // s012: the layer mask (s024: a group's too)
             if (!write_map(l, *L.mask, "mask", "mask_outside")) return false;
             l["mask_on"] = L.mask_on;
         }

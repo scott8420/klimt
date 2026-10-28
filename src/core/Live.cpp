@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <mutex>
 
@@ -173,7 +174,10 @@ bool active(const Layer& l) {
 }
 
 bool any(const Layers& ls) {
-    for (const auto& [id, l] : ls) if (active(l)) return true;
+    for (const auto& [id, l] : ls) {
+        if (active(l)) return true;
+        if (l.kind == Kind::Group && l.styles.any()) return true;   // s024
+    }
     return false;
 }
 
@@ -235,8 +239,117 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
     return fut.get();
 }
 
-Layers effective(const Layers& ls) {
+namespace {
+// s024: the cache of styled groups' looks -- keyed by the group's id, its
+// whole subtree (values: pixels by pointer), the image.
+struct GroupEntry {
+    Document::Id id;
+    Layers sub;
+    Layer group;
+    int w = 0, h = 0;
+    std::shared_future<std::shared_ptr<const pixel::TileMap>> result;
+    std::uint64_t used = 0;
+};
+std::mutex g_gmutex;
+std::vector<GroupEntry> g_groups;
+std::uint64_t g_gclock = 0;
+
+bool inside(const Layers& ls, const Document::Id& id, const Document::Id& gid) {
+    for (Document::Id p = ls.at(id).parent; !p.empty();) {
+        if (p == gid) return true;
+        const auto it = ls.find(p);
+        if (it == ls.end()) return false;
+        p = it->second.parent;
+    }
+    return false;
+}
+}  // namespace
+
+std::shared_ptr<const pixel::TileMap> group_look(const Image& im, const Layers& ls, const Document::Id& gid) {
+    const auto git = ls.find(gid);
+    if (git == ls.end() || im.format.mode != pixel::Mode::RGB || !im.format.alpha || im.width <= 0 || im.height <= 0) return nullptr;
+    const Layer& g = git->second;
+    // Its contents, the group's place taken by the top level.
+    Layers sub;
+    for (const auto& [id, l] : ls)
+        if (inside(ls, id, gid)) {
+            Layer v = l;
+            if (v.parent == gid) v.parent.clear();
+            sub[id] = std::move(v);
+        }
+    std::shared_future<std::shared_ptr<const pixel::TileMap>> fut;
+    std::promise<std::shared_ptr<const pixel::TileMap>> mine;
+    bool compute = false;
+    {
+        std::lock_guard lk(g_gmutex);
+        for (auto& e : g_groups)
+            if (e.id == gid && e.w == im.width && e.h == im.height && e.group.styles == g.styles && e.group.fill == g.fill && e.sub == sub) {
+                e.used = ++g_gclock;
+                fut = e.result;
+                break;
+            }
+        if (!fut.valid()) {
+            if (g_groups.size() >= 6) {
+                auto victim = g_groups.end();
+                for (auto it = g_groups.begin(); it != g_groups.end(); ++it)
+                    if (it->result.wait_for(std::chrono::seconds(0)) == std::future_status::ready &&
+                        (victim == g_groups.end() || it->used < victim->used)) victim = it;
+                if (victim != g_groups.end()) g_groups.erase(victim);
+            }
+            fut = mine.get_future().share();
+            g_groups.push_back({gid, sub, g, im.width, im.height, fut, ++g_gclock});
+            compute = true;
+        }
+    }
+    if (compute) {
+        // The contents composited, isolated, tile by tile (live layers and
+        // styled groups inside it as they look -- composite_tile sees to that).
+        pixel::TileMap content(im.format, im.width, im.height);
+        std::vector<pixel::TileMap::TileRef> grid;
+        grid.reserve(static_cast<std::size_t>(content.cols()) * static_cast<std::size_t>(content.rows()));
+        std::vector<float> px;
+        for (int r = 0; r < content.rows(); ++r)
+            for (int c = 0; c < content.cols(); ++c) {
+                composite_tile(im, sub, c, r, px);
+                bool any_px = false;
+                for (std::size_t i = 3; i < px.size(); i += 4) if (px[i] > 0.f) { any_px = true; break; }
+                if (!any_px) { grid.push_back(nullptr); continue; }
+                pixel::TileWriter w(im.format, pixel::transparent());
+                w.set_premultiplied(px);
+                grid.push_back(w.freeze());
+            }
+        const auto flat = pixel::TileMap::from_tiles(im.format, im.width, im.height, std::move(grid));
+        mine.set_value(std::make_shared<const pixel::TileMap>(styles::drawn(flat, g.styles, g.fill)));
+    }
+    return fut.get();
+}
+
+Layers effective(const Layers& ls, const Image* im) {
     Layers out = ls;
+    // s024: styled groups first (the outermost; the inner ones are done
+    // inside their look): each becomes one pixel layer, its contents gone.
+    if (im) {
+        std::vector<Document::Id> styled;
+        for (const auto& [id, l] : ls)
+            if (l.kind == Kind::Group && l.styles.any()) {
+                bool outer = true;
+                for (const auto& [oid, o] : ls)
+                    if (oid != id && o.kind == Kind::Group && o.styles.any() && inside(ls, id, oid)) { outer = false; break; }
+                if (outer) styled.push_back(id);
+            }
+        for (const auto& gid : styled) {
+            const auto look_px = group_look(*im, ls, gid);
+            if (!look_px) continue;
+            for (auto it = out.begin(); it != out.end();)
+                it = inside(ls, it->first, gid) ? out.erase(it) : std::next(it);
+            Layer& g = out.at(gid);
+            g.kind = Kind::Pixel;
+            g.pixels = look_px;
+            if (g.blend == pixel::Blend::PassThrough) g.blend = pixel::Blend::Normal;   // a styled group is isolated
+            g.fill = 100;   // in the look
+            g.styles = Styles{};
+        }
+    }
     for (auto& [id, l] : out)
         if (active(l)) {
             l.pixels = look(l);
@@ -248,8 +361,12 @@ Layers effective(const Layers& ls) {
 }
 
 void clear_cache() {
-    std::lock_guard g(g_mutex);
-    g_cache.clear();
+    {
+        std::lock_guard g(g_mutex);
+        g_cache.clear();
+    }
+    std::lock_guard g(g_gmutex);
+    g_groups.clear();
 }
 
 int partly_count() { return g_partly.load(); }
@@ -270,7 +387,7 @@ std::string named(const Layer& l, const char* what) { return std::string(what) +
 namespace {
 std::optional<Layer> styled_layer(const Document& d, const Id& id, const Styles& s) {
     const auto l = d.get(id);
-    if (!l || l->kind != Kind::Pixel || d.locked_all(id) || l->styles == s) return std::nullopt;
+    if (!l || (l->kind != Kind::Pixel && l->kind != Kind::Group) || d.locked_all(id) || l->styles == s) return std::nullopt;   // s024: groups too
     Layer v = *l;
     v.styles = s;
     return v;
@@ -297,7 +414,7 @@ bool set_styles_on(DocJournal& j, Document& d, const std::vector<Id>& ids, const
 
 void styles_begin(DocJournal& j, Document& d, const Id& id) {
     const auto l = d.get(id);
-    if (l && l->kind == Kind::Pixel && !d.locked_all(id)) j.begin("Layer Style on “" + l->name + "”", {id});
+    if (l && (l->kind == Kind::Pixel || l->kind == Kind::Group) && !d.locked_all(id)) j.begin("Layer Style on “" + l->name + "”", {id});
 }
 
 void styles_to(DocJournal& j, Document& d, const Id& id, const Styles& s) {

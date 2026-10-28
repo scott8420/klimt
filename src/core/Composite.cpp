@@ -191,14 +191,29 @@ struct Walker {
             if (!l.visible) continue;
             const float op = static_cast<float>(l.opacity) / 100.f;
             if (l.kind == Kind::Group) {
+                // s024: a GROUP MASK -- how much of the group shows, per pixel.
+                pixel::TileMap::TileRef mt;
+                if (l.mask && l.mask_on) {
+                    mt = l.mask->tile(col, row);
+                    if (mt && mt->is_uniform() && mt->get(0, 0).c[0] >= 1.f) continue;   // wholly hidden here
+                }
+                thread_local std::vector<float> ghide;
+                if (mt) mt->premultiplied(ghide);
+                const auto shows = [&](std::size_t px) { return mt ? 1.f - std::clamp(ghide[px], 0.f, 1.f) : 1.f; };
                 if (l.blend == pixel::Blend::PassThrough) {
-                    if (l.opacity >= 100) { group(id, dst); continue; }
+                    if (l.opacity >= 100 && !mt) { group(id, dst); continue; }
+                    // What the group does to what's below, mixed in by opacity x mask.
                     std::vector<float> tmp = dst;
                     group(id, tmp);
-                    for (std::size_t i = 0; i < dst.size(); ++i) dst[i] += (tmp[i] - dst[i]) * op;
+                    for (std::size_t i = 0; i < dst.size(); ++i) dst[i] += (tmp[i] - dst[i]) * op * shows(i / 4);
                 } else {
                     std::vector<float> tmp(kPx * 4, 0.f);
                     group(id, tmp);
+                    if (mt)
+                        for (std::size_t px = 0; px < kPx; ++px) {
+                            const float k = shows(px);
+                            for (int c = 0; c < 4; ++c) tmp[px * 4 + static_cast<std::size_t>(c)] *= k;
+                        }
                     blend_into(l.blend, tmp, dst, op);
                 }
                 continue;
@@ -251,7 +266,7 @@ void composite_tile(const Image& im, const Layers& layers, int col, int row, std
     out.assign(kPx * 4, 0.f);
     // s018: layers with live filters are drawn as they LOOK (core/Live.hpp).
     if (live::any(layers)) {
-        const Layers eff = live::effective(layers);
+        const Layers eff = live::effective(layers, &im);   // s024: styled groups need the image
         Walker w(im, eff, col, row);
         w.group({}, out);
         return;
@@ -385,6 +400,18 @@ const Layer* find(const Layers& ls, const Document::Id& id) {
     return it == ls.end() ? nullptr : &it->second;
 }
 
+// s024: id is a styled group, or inside one -- its effects reach past any
+// one layer's tiles.
+bool styled_around(const Layers& ls, const Document::Id& id) {
+    for (Document::Id at = id; !at.empty();) {
+        const Layer* l = find(ls, at);
+        if (!l) return false;
+        if (l->kind == Kind::Group && l->styles.any()) return true;
+        at = l->parent;
+    }
+    return false;
+}
+
 // id's contents (all depths) and its clipped siblings, in one snapshot.
 void add_related(TileSet& t, const Layers& ls, const Document::Id& id) {
     const Layer* self = find(ls, id);
@@ -420,6 +447,7 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
         // s018: a layer with live filters reaches past its own tiles (a blur
         // spreads): any change to it, or to its stack, redraws everything.
         if ((a && live::active(*a)) || (b && live::active(*b))) { t.add_all(); return t; }
+        if (styled_around(before, id) || styled_around(after, id)) { t.add_all(); return t; }   // s024
         if (a && b) {
             Layer x = *a, y = *b;
             x.name = y.name;        // the eye can't see a name

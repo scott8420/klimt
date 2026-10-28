@@ -72,6 +72,7 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["quick-mask"] = add_action("quick-mask", sigc::mem_fun(*this, &Shell::on_quick_mask));
     // s016: saved selections -- the Channels tab and Select > Save Selection.
     m_layer_acts["select-save"] = add_action("select-save", sigc::mem_fun(*this, &Shell::on_save_selection));
+    m_layer_acts["select-range"] = add_action("select-range", sigc::mem_fun(*this, &Shell::on_colour_range));   // s024
     m_channels.signal_save().connect(sigc::mem_fun(*this, &Shell::on_save_selection));
     m_channels.signal_load().connect([this](const std::string& id, int op) {
         core::select::load_channel(m_journal, m_doc, id, static_cast<core::select::Op>(op));

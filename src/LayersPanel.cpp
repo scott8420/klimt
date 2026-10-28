@@ -302,8 +302,8 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
     kind->set_from_icon_name(group ? "folder-symbolic" : adj ? "klimt-adjustment-symbolic" : "image-x-generic-symbolic");
     if (adj) kind->set_tooltip_text(std::string(core::adjust::label(l.adjust.kind)) + " -- an adjustment layer: "
                                     "edit it in Properties; painting goes to its mask");
-    if (l.mask && target != id && !adj) kind->add_css_class("accent");   // s012: the pixels are what's painted
-    if (l.mask && !adj) {   // the layer's own icon: back to painting its pixels
+    if (l.mask && target != id && !adj && !group) kind->add_css_class("accent");   // s012: the pixels are what's painted
+    if (l.mask && !adj && !group) {   // the layer's own icon: back to painting its pixels
         kind->set_tooltip_text("The layer's pixels -- click to paint them (not the mask)");
         auto back = Gtk::GestureClick::create();
         back->signal_pressed().connect([this, id](int, double, double) { set_mask_target({}); select({id}, false); });
@@ -526,7 +526,8 @@ LayersPanel::Id LayersPanel::mask_target() const {
     if (!m_mask_target.empty()) return m_mask_target;
     if (m_sel.size() == 1) {
         const auto l = m_doc.get(m_sel.front());
-        if (l && l->kind == core::Kind::Adjustment && l->mask) return m_sel.front();
+        // No pixels of its own (an adjustment layer, s024 a group): painting goes to its mask.
+        if (l && (l->kind == core::Kind::Adjustment || l->kind == core::Kind::Group) && l->mask) return m_sel.front();
     }
     return {};
 }

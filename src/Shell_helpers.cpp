@@ -102,7 +102,7 @@ void Shell::update_layer_actions() {
     };
     // s009: with no image, the verbs that need one grey.
     const bool img = has_image();
-    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save",
+    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save", "select-range",
                           "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
                           "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate"})
         on(a, img);
@@ -110,7 +110,7 @@ void Shell::update_layer_actions() {
     {
         const auto pl = m_doc.get(m_layers.primary());
         const bool pixel_layer = pl && pl->kind == core::Kind::Pixel;
-        const bool maskable = pl && pl->kind != core::Kind::Group;   // s013: adjustment layers too
+        const bool maskable = pl != std::nullopt;   // s013: adjustment layers; s024: groups too
         const bool masked = maskable && pl->mask;
         for (const char* a : {"mask-add", "mask-reveal-all", "mask-hide-all", "mask-reveal-sel", "mask-hide-sel"}) on(a, maskable && !masked);
         for (const char* a : {"mask-delete", "mask-toggle", "mask-invert"}) on(a, masked);
@@ -127,9 +127,12 @@ void Shell::update_layer_actions() {
         for (const auto k : core::filter::kinds()) on(("filter-" + std::string(core::filter::key(k))).c_str(), filterable);
         on("filter-last", filterable && m_last_filter);
         // s019: a pixel layer takes styles; Paste wants something copied.
-        for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear", "style-rasterize"})
-            on(v, img && pixel_layer);
-        on("style-paste", img && pixel_layer && m_style_clip);
+        // s024: groups take styles too (Rasterize: pixel layers only).
+        const bool styleable = pixel_layer || (pl && pl->kind == core::Kind::Group);
+        for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear"})
+            on(v, img && styleable);
+        on("style-rasterize", img && pixel_layer);
+        on("style-paste", img && styleable && m_style_clip);
         on("filter-last-dialog", filterable && m_last_filter);
     }
     on("layer-duplicate", any);
@@ -288,9 +291,11 @@ void Shell::queue_render() {
         }
         // s016: Quick Mask's red follows the selection -- on / off redraws all;
         // a painted selection redraws the tiles whose mask changed.
-        const auto qm = m_quick_mask ? m_doc.selection_ptr() : nullptr;
-        if (m_quick_mask != m_shown_qm_on) m_dirty.add_all();
-        else if (m_quick_mask && qm != m_shown_qm) {
+        // s024: Color Range's preview shows the same way.
+        const bool qm_flag = m_quick_mask || m_range_preview;
+        const auto qm = m_range_preview ? m_range_preview : m_quick_mask ? m_doc.selection_ptr() : nullptr;
+        if (qm_flag != m_shown_qm_on) m_dirty.add_all();
+        else if (qm_flag && qm != m_shown_qm) {
             if (!qm || !m_shown_qm) m_dirty.add_all();
             else
                 for (int row = 0; row < std::min(m_dirty.rows, qm->rows()); ++row)
@@ -298,7 +303,7 @@ void Shell::queue_render() {
                         if (!qm->same_tile(*m_shown_qm, col, row)) m_dirty.add(col, row);
         }
         m_shown_qm = qm;
-        m_shown_qm_on = m_quick_mask;
+        m_shown_qm_on = qm_flag;
         m_shown = layers;
         m_shown_image = im;
         for (const auto id : m_renders) m_jobs.cancel(id);
@@ -322,7 +327,7 @@ void Shell::queue_render() {
         for (std::size_t i = 0; i < owed.size(); i += kBatch) {
             std::vector<std::pair<int, int>> batch;
             for (std::size_t k = i; k < std::min(owed.size(), i + kBatch); ++k) batch.emplace_back(owed[k].col, owed[k].row);
-            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch, view = m_mask_view, qm, qm_on = m_quick_mask](core::Jobs::Token& t) -> core::Jobs::Landing {
+            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch, view = m_mask_view, qm, qm_on = qm_flag](core::Jobs::Token& t) -> core::Jobs::Landing {
                 auto out = std::make_shared<std::vector<CanvasView::Tile>>();
                 for (const auto& [col, row] : batch) {
                     if (t.cancelled()) return [] {};

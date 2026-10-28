@@ -22,7 +22,6 @@ void Shell::on_mask_add(int from) {
     const auto id = m_layers.primary();
     const auto l = m_doc.get(id);
     if (!l) { toast("Layer Mask: select a layer first"); return; }
-    if (l->kind == core::Kind::Group) { toast("Layer Mask: “" + l->name + "” is a group -- masks are on layers (for now)"); return; }
     if (l->mask) { toast("Layer Mask: “" + l->name + "” has one already"); return; }
     if (m_doc.locked_all(id)) { toast("Layer Mask: “" + l->name + "” is locked"); return; }
     auto f = static_cast<L::MaskFrom>(from);

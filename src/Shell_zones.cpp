@@ -329,6 +329,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     sel->append("Inverse", "win.select-invert");
     sel->append("Feather…", "win.select-feather");
     sel->append("Edit in Quick Mask Mode", "win.quick-mask");   // s016
+    sel->append("Color Range…", "win.select-range");          // s024
     sel->append("Save Selection", "win.select-save");          // s016: to the Channels tab
     auto mod = Gio::Menu::create();   // s011 m4
     mod->append("Border…", "win.select-border");

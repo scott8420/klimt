@@ -28,10 +28,12 @@ public:
     struct RGB { float r = 0, g = 0, b = 0; };
     RGB foreground() const { return m_fg; }
     RGB background() const { return m_bg; }
-    void set_foreground(RGB c) { m_fg = c; m_colours.queue_draw(); }
-    void set_background(RGB c) { m_bg = c; m_colours.queue_draw(); }
-    void swap_colours() { std::swap(m_fg, m_bg); m_colours.queue_draw(); }
-    void reset_colours() { m_fg = {0, 0, 0}; m_bg = {1, 1, 1}; m_colours.queue_draw(); }
+    void set_foreground(RGB c) { m_fg = c; m_colours.queue_draw(); m_colours_signal.emit(); }
+    void set_background(RGB c) { m_bg = c; m_colours.queue_draw(); m_colours_signal.emit(); }
+    void swap_colours() { std::swap(m_fg, m_bg); m_colours.queue_draw(); m_colours_signal.emit(); }
+    void reset_colours() { m_fg = {0, 0, 0}; m_bg = {1, 1, 1}; m_colours.queue_draw(); m_colours_signal.emit(); }
+    // s024: told when the pair changes (the Eyedropper, X, D, a swatch) -- Color Range follows it.
+    sigc::signal<void()>& signal_colours() { return m_colours_signal; }
     // s008 m3: a click on a swatch picks it (GTK's colour dialog).
     void pick(bool foreground);
 
@@ -42,6 +44,7 @@ private:
     sigc::signal<void(const std::string&)> m_signal;
     Gtk::DrawingArea m_colours;
     RGB m_fg{0, 0, 0}, m_bg{1, 1, 1};
+    sigc::signal<void()> m_colours_signal;
 };
 
 }  // namespace klimt

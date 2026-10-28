@@ -47,6 +47,7 @@ struct Plan {
     MapPtr              mask;        // the selection at the press; nullptr: none
     pixel::Px           fill;        // what a layer with no alpha shows where pixels left
     std::map<Id, MapPtr> masks;      // s012: the targets' layer masks (moved with a whole layer)
+    std::vector<Id>     groups;      // s024: groups in the move whose masks move with them
     int                 width = 0, height = 0;
     pixel::Format       format;
 };

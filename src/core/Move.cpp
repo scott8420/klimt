@@ -52,6 +52,16 @@ std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, con
     p.height = d.image().height;
     p.format = d.image().format;
     p.fill = p.format.alpha ? pixel::transparent() : background;
+    // s024: a selected group's mask (and those of groups inside it) travels
+    // with its contents -- on a whole move (a selection lifts pixels only).
+    if (!p.mask)
+        for (const auto& s : selected)
+            for (const auto& id : d.subtree(s))
+                if (const auto l = d.get(id); l && l->kind == Kind::Group && l->mask &&
+                    std::find(p.groups.begin(), p.groups.end(), id) == p.groups.end()) {
+                    p.groups.push_back(id);
+                    p.masks[id] = l->mask;
+                }
     for (const auto& id : p.ids) {
         const auto l = *d.get(id);
         p.original[id] = l.pixels;
@@ -138,6 +148,7 @@ std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function
 
 std::vector<Id> step_ids(const Plan& p) {
     auto ids = p.ids;
+    ids.insert(ids.end(), p.groups.begin(), p.groups.end());   // s024
     if (p.mask) ids.push_back(kSelectionId);
     return ids;
 }
@@ -149,6 +160,13 @@ void put(Document& d, const Plan& p, const Result& r) {
         if (!l || it == r.pixels.end()) continue;
         l->pixels = it->second;
         if (const auto m = r.masks.find(id); m != r.masks.end()) l->mask = m->second;   // s012
+        d.put(id, *l);
+    }
+    for (const auto& id : p.groups) {   // s024: the groups' masks
+        auto l = d.get(id);
+        const auto m = r.masks.find(id);
+        if (!l || m == r.masks.end()) continue;
+        l->mask = m->second;
         d.put(id, *l);
     }
     if (p.mask) {

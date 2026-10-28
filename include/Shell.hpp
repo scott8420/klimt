@@ -96,6 +96,7 @@ class NumberDialog;
 class AdjustDialog;
 class FilterDialog;
 class FadeDialog;
+class ColourRangeDialog;
 class ShortcutsDialog;
 class SizeDialog;
 
@@ -238,6 +239,9 @@ private:
     void filter_preview_stop();                  // category: filter: drop the preview and its job
     void on_live_edit(const core::Document::Id& id, std::size_t i);
     void on_style(const std::string& verb);      // category: layer: s019 -- Layer > Layer Style   // category: filter: s018 -- a live filter's dialog
+    void on_colour_range();                      // category: select: s024 -- Select > Color Range (the dialog)
+    void range_preview_soon();                   // category: select: its preview, a moment after the last change
+    void range_run();                            // category: select: OK -- a job, ONE step
     void on_fade();                              // category: fade: s020 -- Edit > Fade (the dialog)
     void fade_preview_soon();                    // category: fade: the preview, a moment after the last change
     void fade_preview_stop();                    // category: fade: drop the preview and its job
@@ -313,6 +317,10 @@ private:
     std::unique_ptr<AdjustDialog>    m_adjust_dialog;               // s013: Image > Adjustments
     std::unique_ptr<FilterDialog>    m_filter_dialog;               // s014: the Filter menu
     std::unique_ptr<FadeDialog>      m_fade_dialog;                 // s020: Edit > Fade
+    std::unique_ptr<ColourRangeDialog> m_range_dialog;              // s024: Select > Color Range
+    std::shared_ptr<const pixel::TileMap> m_range_preview;          // its preview, shown as Quick Mask's red
+    sigc::connection            m_range_soon;
+    core::Jobs::Id              m_range_job = 0;
 
     // ── the file (s007) ────────────────────────────────────────────────────
     // s020: the live tab's file (the .klimt it saves to, its name, its saved

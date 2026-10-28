@@ -136,7 +136,7 @@ void selftest_styles(const Check& check) {
         j.undo();
         check("a drag: ONE step (one undo takes it all back)", dragged && d.get("L4")->styles == before_drag, "");
         j.redo();
-        check("styles: refused on a group", !L::set_styles(j, d, "L2", t), "");
+        check("styles: on a group too (s024)", L::set_styles(j, d, "L2", t) && (j.undo(), true), "");
         // File.
         namespace fs = std::filesystem;
         const auto path = (fs::temp_directory_path() / ("klimt_styles_" + std::to_string(::getpid()) + ".klimt")).string();
@@ -164,8 +164,8 @@ void selftest_styles(const Check& check) {
         check("rasterize layer style: a step", L::bake_live(j, d, "L4") && j.undo_label().find("Rasterize Layer Style") != std::string::npos, j.undo_label());
         const auto l = *d.get("L4");
         check("rasterize layer style: the look is the pixels; no styles; fill 100", l.pixels == look && !l.styles.any() && l.fill == 100, "");
-        check("paste style: groups skipped, one step for the rest",
-              L::set_styles_on(j, d, {"L5", "L2"}, s, "Paste Layer Style") && d.get("L5")->styles == s && !d.get("L2")->styles.any(), "");
+        check("paste style: groups take it too (s024), one step",
+              L::set_styles_on(j, d, {"L5", "L2"}, s, "Paste Layer Style") && d.get("L5")->styles == s && d.get("L2")->styles == s, "");
     }
     std::cout << "\n-- layer styles: bevel & emboss (s021) --\n";
     {
@@ -237,5 +237,31 @@ void selftest_styles(const Check& check) {
         const auto back = core::file::open(path, err);
         check("inner glow: in the file", back && back->layers.at("L4").styles.inner_glow == s.inner_glow, err);
         fs::remove(path);
+    }
+    std::cout << "\n-- layer styles on groups (s024) --\n";
+    {
+        core::live::clear_cache();
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);   // the red square A (L4) inside the group L2, on white
+        const auto seen = [&](int x, int y) { return core::sample_composite(d.image(), d.snapshot(), x, y, 0); };
+        core::Styles s;
+        s.stroke.on = true;
+        s.stroke.size = 6;
+        s.stroke.colour = {0, 0, 1};
+        check("group style: one step", L::set_styles(j, d, "L2", s) && j.size() == 1, "");
+        check("group style: the stroke round the group's content (outside the square)", seen(96, 175).b > 0.9f && seen(96, 175).r < 0.1f,
+              std::to_string(seen(96, 175).b));
+        check("group style: the content inside untouched", seen(200, 175).r > 0.99f && seen(200, 175).b < 0.01f, "");
+        // A layer added inside: the stroke follows the group's new shape.
+        const auto nid = L::add_layer(j, d, "In", "L4");
+        L::fill(j, d, nid, {400, 300, 50, 50}, P::rgba(0, 1, 0, 1));
+        check("group style: follows its contents (a new layer inside gets the stroke too)", seen(396, 325).b > 0.9f, std::to_string(seen(396, 325).b));
+        // Fill 0 on the group: only the effects.
+        L::set_fill(j, d, std::vector<std::string>{"L2"}, 0);
+        check("group fill 0: content gone, stroke stays", seen(200, 175).g > 0.99f && seen(96, 175).b > 0.9f, "");
+        j.undo(); j.undo(); j.undo(); j.undo();
+        check("group style: undone", !d.get("L2")->styles.any() && seen(96, 175).b > 0.99f && seen(96, 175).r > 0.99f, "");
     }
 }

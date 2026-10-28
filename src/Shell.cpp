@@ -8,6 +8,7 @@
 #include "AdjustDialog.hpp"
 #include "FilterDialog.hpp"   // s013     // ditto
 #include "FadeDialog.hpp"     // s020
+#include "ColourRangeDialog.hpp"   // s024
 #include "Log.hpp"
 
 // Shell.cpp -- GLUE. The ctor and the ordered build_ui() pass; every other

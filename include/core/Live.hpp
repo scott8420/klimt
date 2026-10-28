@@ -35,7 +35,13 @@ bool any(const Layers& ls);               // any layer active
 std::shared_ptr<const pixel::TileMap> look(const Layer& l);
 // The layers as they look: each active layer's pixels through its stack, its
 // stack then empty (so nothing runs twice).
-Layers effective(const Layers& ls);
+// s024: with the image, a GROUP with layer styles too: its contents
+// composited (isolated), its styles drawn round that, and the group then
+// stands in the result as one pixel layer (its mask, opacity, mode kept).
+Layers effective(const Layers& ls, const Image* im = nullptr);
+// s024: a styled group's look (cached, keyed by its whole subtree). nullptr
+// when the image isn't RGB with alpha (styles draw in RGB).
+std::shared_ptr<const pixel::TileMap> group_look(const Image& im, const Layers& ls, const Document::Id& gid);
 // m3: the filtered pixels with the raw ones back where `hide` hides the filters.
 pixel::TileMap masked(const pixel::TileMap& raw, const pixel::TileMap& filtered, const pixel::TileMap& hide);
 // How far an active layer's look can reach past its pixels (the stack's reach).

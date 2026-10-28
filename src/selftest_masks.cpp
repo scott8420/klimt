@@ -55,7 +55,7 @@ void selftest_masks(const Check& check) {
         check("mask: a step each", t.j.size() == 5, std::to_string(t.j.size()));
         t.j.undo();
         check("mask: undo brings it back", t.d.get("L4")->mask != nullptr && t.white_at(150, 150), "");
-        check("mask: not on a group", !L::add_mask(t.j, t.d, "L2", L::MaskFrom::RevealAll), "");
+        check("mask: on a group too (s024)", L::add_mask(t.j, t.d, "L2", L::MaskFrom::RevealAll) && (t.j.undo(), true), "");
     }
     {
         Fix t;
