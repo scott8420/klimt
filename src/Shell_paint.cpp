@@ -19,6 +19,8 @@ namespace klimt {
 namespace Pa = core::paint;
 
 namespace {
+// s018 m4: the tools that only ever paint pixels (not a mask).
+bool erase_only_pixels(bool sampled, bool smudge) { return sampled || smudge; }
 // s015 m4: the very same tiles? (A stroke off the image, or a heal that found
 // nothing, writes nothing -- and so leaves no step.)
 bool same_tiles(const pixel::TileMap& a, const pixel::TileMap& b) {
@@ -73,7 +75,9 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         // s012: the layer's MASK is the target -- white shows, black hides; the
         // Eraser paints the background colour (Photoshop's way).
         const auto lm = m_doc.get(id);
-        const bool on_mask = lm && lm->mask && m_layers.mask_target() == id;
+        // s018 m4: the stack's "Paint Filter Mask" -- the filter mask is the target.
+        const bool on_fmask = lm && !lm->filters.empty() && m_properties.filter_mask_target() == id && !erase_only_pixels(sampled, smudge);
+        const bool on_mask = on_fmask || (lm && lm->mask && m_layers.mask_target() == id);
         if (on_mask && (sampled || smudge)) {
             toast(verb + ": it paints pixels, not the mask -- Layer > Layer Mask > Paint the Mask / the Pixels");
             return;
@@ -101,12 +105,14 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         m_stroke.id = id;
         m_stroke.brush = b;
         m_stroke.on_mask = on_mask;
-        m_stroke.original = on_mask ? l.mask : std::make_shared<const pixel::TileMap>(l.pixels ? *l.pixels : m_doc.blank());
+        m_stroke.on_filter_mask = on_fmask;
+        m_stroke.original = on_fmask ? (l.filter_mask ? l.filter_mask : std::make_shared<const pixel::TileMap>(m_doc.blank_mask()))
+                          : on_mask ? l.mask : std::make_shared<const pixel::TileMap>(l.pixels ? *l.pixels : m_doc.blank());
         m_stroke.current = m_stroke.original;
         m_stroke.cov = std::make_shared<const pixel::TileMap>(Pa::new_coverage(m_doc.image().width, m_doc.image().height));
         m_stroke.mask = m_doc.selection_ptr();
         m_stroke.carry = 1e9;   // the first dab lands at the press
-        m_journal.begin(on_mask ? (erase ? "Eraser on Mask" : "Brush on Mask") : (sampled || smudge ? verb : erase ? "Eraser" : "Brush Stroke"), {id});
+        m_journal.begin(on_fmask ? (erase ? "Eraser on Filter Mask" : "Brush on Filter Mask") : on_mask ? (erase ? "Eraser on Mask" : "Brush on Mask") : (sampled || smudge ? verb : erase ? "Eraser" : "Brush Stroke"), {id});
         if (smudge) m_stroke.smudge = std::make_shared<Pa::SmudgeCarry>();   // s017
         // Shift-click: a straight line from where the last stroke ended.
         const bool line = shift && m_stroke_last_valid && m_stroke_last_id == id;
@@ -221,7 +227,8 @@ void Shell::paint_pump() {
                 v.pixels = cur2;
                 m_doc.put(core::kSelectionId, cur2->tile_count() ? std::optional<core::Layer>(v) : std::nullopt);
             } else if (auto l = unchanged ? std::nullopt : m_doc.get(m_stroke.id)) {
-                if (m_stroke.on_mask) l->mask = cur2;   // s012: a mask stays a mask, even with no tiles
+                if (m_stroke.on_filter_mask) l->filter_mask = cur2;   // s018 m4
+                else if (m_stroke.on_mask) l->mask = cur2;   // s012: a mask stays a mask, even with no tiles
                 else l->pixels = cur2->tile_count() ? cur2 : nullptr;
                 m_doc.put(m_stroke.id, *l);   // inside the gesture: the door is open
             }

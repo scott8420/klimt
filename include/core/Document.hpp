@@ -100,6 +100,13 @@ struct Layer {
     // s013: an ADJUSTMENT LAYER's settings (core/Adjust.hpp); kind None on
     // every other layer. No pixels; it may have a mask.
     Adjust        adjust;
+    // s018: LIVE FILTERS (core/Live.hpp) -- pixel layers only; the compositor
+    // draws the pixels through them. Empty: none.
+    std::vector<LiveFilter> filters;
+    // s018 m3: the FILTER MASK -- where the live filters show, stored as how
+    // much they are HIDDEN (as a layer mask: 0 shows, 1 hides; painted white
+    // reveals, black hides). nullptr: they show everywhere.
+    std::shared_ptr<const pixel::TileMap> filter_mask;
     bool operator==(const Layer&) const = default;
 };
 

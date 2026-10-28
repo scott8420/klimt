@@ -32,6 +32,12 @@ public:
     // asked, and hands it back for that layer).
     sigc::signal<void(const Id&)>& signal_histogram_wanted() { return m_hist_wanted; }
     void set_histogram(const Id& id, const core::adjust::Histogram& h);
+    // s018: a live filter's settings wanted (double-click it): its layer, its place.
+    sigc::signal<void(const Id&, std::size_t)>& signal_live_edit() { return m_live_edit; }
+    // s018 m4: the layer whose FILTER MASK the brushes paint ("" none) -- the
+    // stack's "Paint Mask" toggle; it lets go when another layer is picked.
+    const Id& filter_mask_target() const { return m_fmask_target; }
+    sigc::signal<void(bool)>& signal_filter_mask_paint() { return m_fmask_signal; }
 
 private:
     void paint();
@@ -39,6 +45,7 @@ private:
     void on_opacity();
     void on_fill();
     void on_lock();
+    void paint_live(const core::Layer& l);   // s018: the stack's rows
     Id primary() const { return m_sel.empty() ? Id{} : m_sel.front(); }
 
     core::Document&   m_doc;
@@ -58,6 +65,15 @@ private:
     Id                    m_adjust_id;  // the layer m_adjust shows
     Id                    m_hist_id;    // the layer whose histogram m_adjust has (or was asked for)
     sigc::signal<void(const Id&)> m_hist_wanted;
+    // s018: the live filters -- a heading, a row each, Rasterize.
+    widgets::Box          m_live;
+    widgets::Box          m_live_rows;
+    std::vector<core::LiveFilter> m_live_shown;
+    Id                    m_live_id;
+    bool                  m_live_had_mask = false;
+    sigc::signal<void(const Id&, std::size_t)> m_live_edit;
+    Id                    m_fmask_target;
+    sigc::signal<void(bool)> m_fmask_signal;
 };
 
 }  // namespace klimt

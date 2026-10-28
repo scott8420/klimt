@@ -47,6 +47,15 @@ struct Filter {
     bool operator==(const Filter&) const = default;
 };
 
+// s018: a LIVE filter on a layer (Photoshop's smart filter): the filter, and
+// whether it is on. A layer's stack runs bottom (first) to top (last) over
+// its pixels whenever it is drawn; the pixels themselves never change.
+struct LiveFilter {
+    Filter f;
+    bool   on = true;
+    bool operator==(const LiveFilter&) const = default;
+};
+
 namespace filter {
 const std::vector<FilterKind>& kinds();       // the menu's order
 std::string_view label(FilterKind k);         // "Gaussian Blur"

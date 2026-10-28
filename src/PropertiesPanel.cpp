@@ -1,4 +1,10 @@
 #include "PropertiesPanel.hpp"
+#include "core/Live.hpp"   // s018
+#include <gtkmm/button.h>
+#include <gtkmm/checkbutton.h>
+#include <gtkmm/gestureclick.h>
+#include <cstdio>
+#include <functional>
 
 #include <gtkmm/gesturedrag.h>
 #include <gtkmm/grid.h>
@@ -23,7 +29,9 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
       m_lock_pixels("properties.lock.pixels"),
       m_lock_position("properties.lock.position"),
       m_lock_all("properties.lock.all"),
-      m_later("properties.later") {
+      m_later("properties.later"),
+      m_live("properties.live", Gtk::Orientation::VERTICAL, 4),
+      m_live_rows("properties.live.rows", Gtk::Orientation::VERTICAL, 2) {
     set_margin(12);
 
     auto head = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
@@ -122,9 +130,20 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
     m_adjust.signal_end().connect([this] { L::adjust_end(m_journal); });
     m_fields.append(m_adjust);
 
-    // Where live filters and styles will be edited -- no dialogs.
-    m_later.set_text("Live filters and layer styles will be edited here too, on the layer, "
-                     "with the canvas updating.");
+    // s018: the live filters under a pixel layer.
+    {
+        auto head = Gtk::make_managed<Gtk::Label>();
+        head->set_markup("<b>Live filters</b>");
+        head->set_xalign(0.0f);
+        m_live.append(*head);
+    }
+    m_live.append(m_live_rows);
+    m_live.set_visible(false);
+    m_fields.append(m_live);
+
+    // Where layer styles will be edited -- no dialogs.
+    m_later.set_text("Live filters: tick Live in a Filter's dialog -- they show here, editable later. "
+                     "Layer styles will be edited here too.");
     m_later.set_wrap(true);
     m_later.set_xalign(0.0f);
     m_later.add_css_class("dim-label");
@@ -176,6 +195,7 @@ void PropertiesPanel::paint() {
     const bool adj = l->kind == core::Kind::Adjustment && m_sel.size() == 1;
     m_adjust.set_visible(adj);
     m_later.set_visible(!adj);
+    paint_live(*l);   // s018
     if (adj && primary() != m_adjust_id) m_adjust.set(core::Adjust{});   // another layer: fresh controls
     m_adjust_id = adj ? primary() : Id{};
     if (adj) {
@@ -191,6 +211,93 @@ void PropertiesPanel::paint() {
         m_hist_id.clear();
     }
     m_painting = false;
+}
+
+// s018: the stack, bottom (runs first) at the top of the list, as Photoshop
+// lists smart filters under the layer. A row: on / off, its name and main
+// value, up / down, delete; double-click the name to edit it. Rasterize below.
+void PropertiesPanel::paint_live(const core::Layer& l) {
+    namespace F = core::filter;
+    const bool show = l.kind == core::Kind::Pixel && m_sel.size() == 1 && !l.filters.empty();
+    m_live.set_visible(show);
+    m_later.set_visible(m_later.get_visible() && !show);   // the stack says it better
+    if (!m_fmask_target.empty() && (!show || primary() != m_fmask_target)) {   // m4: another layer -- let go
+        m_fmask_target.clear();
+        m_fmask_signal.emit(false);
+        m_live_shown.clear();   // rebuild: the toggle shows off
+    }
+    if (!show) { m_live_shown.clear(); m_live_id.clear(); return; }
+    if (primary() == m_live_id && l.filters == m_live_shown && (l.filter_mask != nullptr) == m_live_had_mask) return;
+    m_live_had_mask = l.filter_mask != nullptr;
+    m_live_id = primary();
+    m_live_shown = l.filters;
+    while (auto* c = m_live_rows.get_first_child()) m_live_rows.remove(*c);
+    const bool editable = !m_doc.locked_all(primary()) && !(l.locks & core::lock::Pixels);
+    for (std::size_t i = 0; i < l.filters.size(); ++i) {
+        const auto& lf = l.filters[i];
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 4);
+        auto on = Gtk::make_managed<Gtk::CheckButton>();
+        on->set_active(lf.on);
+        on->set_tooltip_text("Show / hide this filter");
+        on->set_sensitive(editable);
+        on->signal_toggled().connect([this, i] { if (!m_painting) L::toggle_live(m_journal, m_doc, m_live_id, i); });
+        row->append(*on);
+        std::string what(F::label(lf.f.kind));
+        char num[32];
+        if (lf.f.kind == core::FilterKind::AddNoise) std::snprintf(num, sizeof num, "  %.1f %%", lf.f.amount);
+        else if (lf.f.kind == core::FilterKind::MotionBlur) std::snprintf(num, sizeof num, "  %d°, %.0f px", lf.f.angle, lf.f.radius);
+        else std::snprintf(num, sizeof num, "  %.1f px", lf.f.radius);
+        auto name = Gtk::make_managed<Gtk::Label>(what + num);
+        name->set_xalign(0.0f);
+        name->set_hexpand(true);
+        name->set_ellipsize(Pango::EllipsizeMode::END);
+        name->set_tooltip_text("Double-click to change its settings");
+        if (!lf.on) name->add_css_class("dim-label");
+        auto click = Gtk::GestureClick::create();
+        click->signal_pressed().connect([this, i](int n, double, double) { if (n == 2) m_live_edit.emit(m_live_id, i); });
+        name->add_controller(click);
+        row->append(*name);
+        const auto button = [&](const char* icon, const char* tip, bool sensitive, std::function<void()> act) {
+            auto b = Gtk::make_managed<Gtk::Button>();
+            b->set_icon_name(icon);
+            b->add_css_class("flat");
+            b->set_tooltip_text(tip);
+            b->set_sensitive(editable && sensitive);
+            b->signal_clicked().connect(std::move(act));
+            row->append(*b);
+        };
+        button("go-up-symbolic", "Earlier in the stack (runs first)", i > 0, [this, i] { L::move_live(m_journal, m_doc, m_live_id, i, i - 1); });
+        button("go-down-symbolic", "Later in the stack", i + 1 < l.filters.size(), [this, i] { L::move_live(m_journal, m_doc, m_live_id, i, i + 1); });
+        button("user-trash-symbolic", "Delete this filter", true, [this, i] { L::remove_live(m_journal, m_doc, m_live_id, i); });
+        m_live_rows.append(*row);
+    }
+    // m4: the filter mask -- paint it (the Brush, Eraser: black hides the
+    // filters, white shows them), or delete it.
+    auto mrow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto paint_mask = Gtk::make_managed<Gtk::ToggleButton>(l.filter_mask ? "Paint Filter Mask" : "Add Filter Mask");
+    paint_mask->set_tooltip_text("The Brush and Eraser paint where the filters show: black hides them, white shows them");
+    paint_mask->set_active(m_fmask_target == primary());
+    paint_mask->set_sensitive(editable);
+    paint_mask->signal_toggled().connect([this, paint_mask] {
+        if (m_painting) return;
+        m_fmask_target = paint_mask->get_active() ? m_live_id : Id{};
+        m_fmask_signal.emit(paint_mask->get_active());
+    });
+    mrow->append(*paint_mask);
+    if (l.filter_mask) {
+        auto del = Gtk::make_managed<Gtk::Button>("Delete Mask");
+        del->add_css_class("flat");
+        del->set_sensitive(editable);
+        del->signal_clicked().connect([this] { L::set_filter_mask(m_journal, m_doc, m_live_id, nullptr, "Delete Filter Mask"); });
+        mrow->append(*del);
+    }
+    m_live_rows.append(*mrow);
+    auto bake = Gtk::make_managed<Gtk::Button>("Rasterize Filters");
+    bake->set_tooltip_text("Into the pixels for good: the layer becomes what it looks like, the filters go");
+    bake->set_sensitive(editable);
+    bake->set_halign(Gtk::Align::START);
+    bake->signal_clicked().connect([this] { L::bake_live(m_journal, m_doc, m_live_id); });
+    m_live_rows.append(*bake);
 }
 
 void PropertiesPanel::set_histogram(const Id& id, const core::adjust::Histogram& h) {

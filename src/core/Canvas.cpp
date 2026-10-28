@@ -421,6 +421,8 @@ Before before(const Document& d) {
         if (l.kind == Kind::Pixel) b.pixels[id] = l.pixels;
         if (l.mask) b.masks[id] = l.mask;   // s013: an adjustment layer's mask too
     }
+    for (const auto& [id, l] : d.snapshot())   // s018 m3: a filter mask goes as a layer mask does
+        if (l.filter_mask) b.masks[id + kFilterMaskKey] = l.filter_mask;
     for (const auto& [id, c] : d.channels())   // s016: saved selections go as masks do
         if (c.mask) b.masks[id] = c.mask;
     return b;
@@ -550,7 +552,10 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
     std::vector<Id> ids{kImageId};
     for (const auto& [id, p] : r.pixels) ids.push_back(id);
     for (const auto& [id, m] : r.masks)   // s013: a mask on a layer with no pixels
-        if (!r.pixels.count(id)) ids.push_back(id);
+        if (filter_mask_key(id)) {   // s018 m3: the layer the filter mask belongs to
+            const Id base = id.substr(0, id.size() - std::char_traits<char>::length(kFilterMaskKey));
+            if (!r.pixels.count(base) && std::find(ids.begin(), ids.end(), base) == ids.end()) ids.push_back(base);
+        } else if (!r.pixels.count(id)) ids.push_back(id);
     ids.push_back(kSelectionId);
     return j.run(label, ids, [&] {
         Layer im;
@@ -564,8 +569,16 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
             if (const auto m = r.masks.find(id); m != r.masks.end()) l->mask = m->second;   // s012
             d.put(id, *l);
         }
+        for (const auto& [key, m] : r.masks) {   // s018 m3: filter masks, after the layer's own write
+            if (!filter_mask_key(key)) continue;
+            const Id id = key.substr(0, key.size() - std::char_traits<char>::length(kFilterMaskKey));
+            auto l = d.get(id);
+            if (!l) continue;
+            l->filter_mask = m;
+            d.put(id, *l);
+        }
         for (const auto& [id, m] : r.masks) {   // s013: adjustment layers' masks
-            if (r.pixels.count(id)) continue;
+            if (r.pixels.count(id) || filter_mask_key(id)) continue;
             auto l = d.get(id);
             if (!l) continue;
             l->mask = m;

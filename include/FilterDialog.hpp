@@ -22,6 +22,12 @@ public:
     ~FilterDialog() override;
     // Ask for one of `start`'s kind (its settings to begin with), about `layer`.
     void ask(const core::Filter& start, const std::string& layer);
+    // s018: LIVE -- OK adds it to the layer's live filters (editable later)
+    // instead of changing the pixels; remembered by the Shell. `editing`: the
+    // dialog edits a live filter already there (no Live box: it is live).
+    void set_live(bool live, bool editing);
+    bool live() const { return m_editing || m_live.get_active(); }
+    bool editing() const { return m_editing; }
     bool preview() const { return m_preview.get_active(); }
     const core::Filter& value() const { return m_f; }
     void set_busy(bool b);   // the preview is being made
@@ -48,6 +54,8 @@ private:
     widgets::Box         m_body;
     widgets::Label       m_busy;
     Gtk::CheckButton     m_preview{"Preview"};
+    Gtk::CheckButton     m_live{"Live -- editable later"};   // s018
+    bool                 m_editing = false;
     widgets::Button      m_ok_button, m_cancel_button;
     sigc::signal<void()> m_changed, m_closed;
     sigc::signal<void(const core::Filter&)> m_ok;

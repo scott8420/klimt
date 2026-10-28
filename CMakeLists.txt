@@ -109,6 +109,7 @@ add_library(klimt_core STATIC
     src/core/Adjust.cpp       # s013: adjustments -- the maths
     src/core/Adjustments.cpp  # s013: adjustment layer verbs (s014: apply_filter)
     src/core/Filter.cpp       # s014: the Filter menu -- the maths
+    src/core/Live.cpp         # s018: live filters -- the stack, its cache, its verbs
     src/core/Heal.cpp         # s015 m3: the healing brushes
     src/core/Prefs.cpp        # s014 m4: the app's settings (the dock divider)
 )

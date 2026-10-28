@@ -210,6 +210,7 @@ private:
     void filter_run(const core::Filter& f);      // category: filter: on m_filter_target's pixels, a job; one step
     void filter_preview_soon();                  // category: filter: the preview, a moment after the last change
     void filter_preview_stop();                  // category: filter: drop the preview and its job
+    void on_live_edit(const core::Document::Id& id, std::size_t i);   // category: filter: s018 -- a live filter's dialog
     void on_histogram(const core::Document::Id& id);   // category: adjust: what's below an adjustment layer, counted (a job)
 
     // ── helpers ────────────────────────────────────────────────────────────
@@ -298,6 +299,7 @@ private:
         core::paint::Smoother smoother;             // s012: the stabiliser (Smoothing)
         bool                on_mask = false;        // s012: painting the layer's mask
         bool                on_selection = false;   // s016: Quick Mask -- painting the selection
+        bool                on_filter_mask = false; // s018 m4: painting the layer's filter mask
         std::shared_ptr<core::paint::SmudgeCarry> smudge;   // s017: a Smudge stroke's finger (its jobs run in turn)
         double              carry = 0;
         core::Jobs::Id      job = 0;
@@ -370,6 +372,8 @@ private:
     sigc::connection            m_filter_soon;
     core::Jobs::Id              m_filter_job = 0;
     std::uint32_t               m_filter_seed = 0;
+    bool                        m_filter_live = false;   // s018: the dialog's Live box, remembered
+    std::optional<std::size_t>  m_filter_edit;           // s018: the live filter the dialog edits
     core::Jobs::Id              m_filter_landing = 0;   // OK's job: the preview stays until it lands
     // s014 m4: the app's settings (~/.config/klimt/prefs.json); saved a moment
     // after a change (the divider dragged).

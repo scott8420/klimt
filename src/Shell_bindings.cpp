@@ -86,6 +86,10 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["filter-last"] = add_action("filter-last", [this] { on_filter_last(false); });
     m_layer_acts["filter-last-dialog"] = add_action("filter-last-dialog", [this] { on_filter_last(true); });
     m_properties.signal_histogram_wanted().connect(sigc::mem_fun(*this, &Shell::on_histogram));
+    m_properties.signal_live_edit().connect(sigc::mem_fun(*this, &Shell::on_live_edit));   // s018
+    m_properties.signal_filter_mask_paint().connect([this](bool on) {   // s018 m4
+        if (on) toast("Painting the filter mask: black hides the filters, white shows them -- the toggle again to stop");
+    });
     m_layer_acts["mask-add"]         = add_action("mask-add", [this] { on_mask_add(-1); });
     m_layer_acts["mask-reveal-all"]  = add_action("mask-reveal-all", [this] { on_mask_add(int(core::layers::MaskFrom::RevealAll)); });
     m_layer_acts["mask-hide-all"]    = add_action("mask-hide-all", [this] { on_mask_add(int(core::layers::MaskFrom::HideAll)); });

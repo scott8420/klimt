@@ -45,10 +45,16 @@ FilterDialog::FilterDialog(Gtk::Window& parent)
     m_busy.set_text("Previewing…");
     m_busy.set_visible(false);
     foot->append(m_busy);
+    // s018: Live -- a live filter on the layer instead of new pixels.
+    m_live.set_name("shell.filter.live");
+    m_live.set_tooltip_text("Keep the layer's pixels: the filter goes under the layer (Properties), "
+                            "where you can hide it, change it or reorder it later");
+    box->append(m_live);
     box->append(*foot);
     set_child(*box);
 
     m_preview.signal_toggled().connect([this] { m_changed.emit(); });
+    m_live.signal_toggled().connect([this] { m_changed.emit(); });
     m_cancel_button.signal_clicked().connect([this] { close(); });
     m_ok_button.signal_clicked().connect([this] {
         const core::Filter f = F::normalised(m_f);
@@ -75,11 +81,17 @@ void FilterDialog::ask(const core::Filter& start, const std::string& layer) {
     m_f = F::normalised(start);
     m_threshold = m_f.threshold;
     m_angle = m_f.angle;
-    set_title(std::string(F::label(m_f.kind)) + " -- “" + layer + "”");
+    set_title(std::string(F::label(m_f.kind)) + (m_editing ? " (live)" : "") + " -- “" + layer + "”");
     if (kind_changed || m_rows.empty()) rebuild();
     sync();
     m_busy.set_visible(false);
     present();
+}
+
+void FilterDialog::set_live(bool live, bool editing) {
+    m_editing = editing;
+    m_live.set_active(live);
+    m_live.set_visible(!editing);
 }
 
 void FilterDialog::row(const char* name, const char* label, double lo, double hi, int digits, bool log, const char* unit, double* field) {

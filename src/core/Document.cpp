@@ -6,6 +6,7 @@
 #include "core/Transform.hpp"   // s011: Free Transform, flips, rotations
 #include "core/Gradient.hpp"    // s012: the Gradient tool
 #include "core/Heal.hpp"        // s015 m3: the healing brushes
+#include "core/Live.hpp"        // s018: live filters
 
 #include <algorithm>
 #include <set>
@@ -983,6 +984,21 @@ const std::vector<Verb>& verbs() {
              paint::Brush b; b.size = 40; b.colour = pixel::Px{};
              paint::stroke_selection(j, d, {{120, 150, 1.f}, {200, 150, 1.f}}, b); },
              [](Document& d) { load_selection(d, {100, 100, 200, 100}); }},
+        // s018: live filters -- added, and one hidden.
+        {"add_live",      [](DocJournal& j, Document& d) { add_live(j, d, "L4", filter::fresh(FilterKind::GaussianBlur)); }},
+        {"toggle_live",   [](DocJournal& j, Document& d) { toggle_live(j, d, "L4", 0); },
+             [](Document& d) {
+                 Document::Loading load(d);
+                 auto l = *d.get("L4"); l.filters.push_back({filter::fresh(FilterKind::GaussianBlur), true}); d.put("L4", l);
+             }},
+        // s018 m3: a filter mask hiding the blur on the left half.
+        {"filter_mask",   [](DocJournal& j, Document& d) {
+             set_filter_mask(j, d, "L4", std::make_shared<const pixel::TileMap>(
+                 select::rect_mask(d.mask_format(), d.image().width, d.image().height, {0, 0, 200, 400}))); },
+             [](Document& d) {
+                 Document::Loading load(d);
+                 auto l = *d.get("L4"); l.filters.push_back({filter::fresh(FilterKind::GaussianBlur), true}); d.put("L4", l);
+             }},
         // s016: saved selections -- save, load (adding), delete.
         {"save_channel",  [](DocJournal& j, Document& d) { select::save_channel(j, d); },
              [](Document& d) { load_selection(d, {100, 100, 80, 60}); }},

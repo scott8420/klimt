@@ -3,6 +3,10 @@
 // rectangle == the result), the verb and its refusals.
 #include "core/Document.hpp"
 #include "core/Filter.hpp"
+#include "core/Composite.hpp"
+#include "core/Canvas.hpp"
+#include "core/File.hpp"
+#include "core/Live.hpp"
 #include "core/Prefs.hpp"
 #include "core/Selection.hpp"
 
@@ -296,5 +300,101 @@ void selftest_filter(const Check& check) {
         { std::ofstream f(file); f << "not json {"; }
         check("prefs: garbage -> the defaults", core::load_prefs(file) == core::Prefs{}, "");
         fs::remove_all(dir);
+    }
+
+    std::cout << "\n-- live filters (s018) --\n";
+    {
+        core::live::clear_cache();
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);   // white Background; L4 a red square (100, 100) 200 x 150
+        const auto seen = [&](int x, int y) { return core::sample_composite(d.image(), d.snapshot(), x, y, 0); };
+        const auto px0 = d.get("L4")->pixels;
+        check("live: the square's edge is crisp first", near(seen(98, 175).g, 1, 0.01), num(seen(98, 175).g));
+        check("live: add a blur, ONE step", L::add_live(j, d, "L4", blur(4)) && j.size() == 1 &&
+                                            j.undo_label().find("(live)") != std::string::npos, j.undo_label());
+        check("live: the pixels never change", d.get("L4")->pixels == px0, "");
+        check("live: the canvas shows it blurred (red spreads over the white)", seen(98, 175).g < 0.8, num(seen(98, 175).g));
+        check("live: the look is cached (the same map twice)", core::live::look(*d.get("L4")) == core::live::look(*d.get("L4")), "");
+        check("live: changed_tiles redraws everything on a change", [&] {
+            auto before = d.snapshot();
+            L::toggle_live(j, d, "L4", 0);
+            const auto t = core::changed_tiles(d.image(), before, d.image(), d.snapshot());
+            return t.all;
+        }(), "");
+        check("live: hidden, crisp again", near(seen(98, 175).g, 1, 0.01), num(seen(98, 175).g));
+        L::toggle_live(j, d, "L4", 0);
+        auto bigger = blur(10);
+        check("live: edit the radius", L::set_live(j, d, "L4", 0, bigger) && d.get("L4")->filters[0].f.radius == 10, "");
+        check("live: further out now", seen(85, 175).g < 0.95, num(seen(85, 175).g));
+        check("live: a kind can't change by editing", !L::set_live(j, d, "L4", 0, F::fresh(FilterKind::HighPass)), "");
+        auto noisy = F::fresh(FilterKind::AddNoise);
+        noisy.amount = 60;
+        L::add_live(j, d, "L4", noisy);
+        const auto a = seen(200, 175);
+        check("live: two in the stack", d.get("L4")->filters.size() == 2, "");
+        check("live: reorder", L::move_live(j, d, "L4", 1, 0) && d.get("L4")->filters[0].f.kind == FilterKind::AddNoise, "");
+        const auto b = seen(200, 175);
+        check("live: the order matters", !(near(a.r, b.r, 1e-6) && near(a.g, b.g, 1e-6)), num(a.r) + "," + num(a.g) + " / " + num(b.r) + "," + num(b.g));
+        check("live: delete one", L::remove_live(j, d, "L4", 0) && d.get("L4")->filters.size() == 1, "");
+        // The preview's rectangle == the full run there.
+        std::vector<core::LiveFilter> stack{{blur(3), true}, {F::fresh(FilterKind::UnsharpMask), true}};
+        const P::Rect view{80, 80, 60, 60};
+        const auto full = core::live::run(square(), stack), part = core::live::run(square(), stack, &view);
+        check("live: a rectangle of the stack is exact there", full && part && same_in(*full, *part, view), "");
+        // File.
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_live_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image();
+        c.layers = d.snapshot();
+        c.next_id = d.next_id();
+        std::string err;
+        check("live: saved", core::file::save_klimt(path, c, err), err);
+        const auto back = core::file::open(path, err);
+        check("live: opened with its stack", back && back->layers.at("L4").filters == d.get("L4")->filters, err);
+        fs::remove(path);
+        // Rasterize: the look becomes the pixels.
+        const auto look = core::live::look(*d.get("L4"));
+        check("live: rasterize", L::bake_live(j, d, "L4") && d.get("L4")->filters.empty() && d.get("L4")->pixels == look, "");
+        j.undo();
+        check("live: undo brings the stack back", d.get("L4")->filters.size() == 1 && d.get("L4")->pixels == px0, "");
+        check("live: refused on a group", !L::add_live(j, d, "L2", blur(2)), "");
+    }
+
+    std::cout << "\n-- live filters: the filter mask (s018 m3) --\n";
+    {
+        core::live::clear_cache();
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        const auto seen = [&](int x, int y) { return core::sample_composite(d.image(), d.snapshot(), x, y, 0); };
+        check("filter mask: refused without live filters", !L::set_filter_mask(j, d, "L4", std::make_shared<const P::TileMap>(d.blank_mask())), "");
+        L::add_live(j, d, "L4", blur(6));
+        const double right_before = seen(299 + 3, 175).g;   // outside the square's right edge: pink
+        // Hide the filters on the left half (x < 200): black there.
+        auto hide = std::make_shared<const P::TileMap>(core::select::rect_mask(d.mask_format(), 600, 400, {0, 0, 200, 400}));
+        check("filter mask: set, ONE step", L::set_filter_mask(j, d, "L4", hide) && j.undo_label().find("Filter Mask") != std::string::npos, j.undo_label());
+        check("filter mask: hidden where it says -- crisp edge on the left", near(seen(98, 175).g, 1, 0.01), num(seen(98, 175).g));
+        check("filter mask: the filters still show on the right", near(seen(302, 175).g, right_before, 0.01) && right_before < 0.9, num(seen(302, 175).g));
+        check("filter mask: the pixels never change", d.get("L4")->filter_mask == hide && d.get("L4")->pixels, "");
+        // The canvas verbs carry it.
+        core::canvas::canvas_size(j, d, 800, 400, 0, 1, P::rgba(1, 1, 1, 1));
+        check("filter mask: Canvas Size carries it", d.get("L4")->filter_mask && d.get("L4")->filter_mask->width() == 800, "");
+        j.undo();
+        // File.
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_fmask_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image(); c.layers = d.snapshot(); c.next_id = d.next_id();
+        std::string err;
+        core::file::save_klimt(path, c, err);
+        const auto back = core::file::open(path, err);
+        check("filter mask: in the file", back && back->layers.at("L4").filter_mask &&
+                                          core::select::coverage(*back->layers.at("L4").filter_mask, 50, 50) == 1.f, err);
+        fs::remove(path);
+        check("filter mask: goes with the last filter", L::remove_live(j, d, "L4", 0) && !d.get("L4")->filter_mask, "");
     }
 }

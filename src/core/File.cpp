@@ -111,6 +111,31 @@ json adjust_json(const Adjust& a) {
     return j;
 }
 
+// s018: a live filter -- the stable key and every setting.
+json live_json(const LiveFilter& lf) {
+    const Filter& f = lf.f;
+    return {{"kind", std::string(filter::key(f.kind))}, {"on", lf.on}, {"radius", f.radius}, {"angle", f.angle},
+            {"amount", f.amount}, {"threshold", f.threshold}, {"gaussian", f.gaussian}, {"mono", f.mono}, {"seed", f.seed}};
+}
+std::optional<LiveFilter> live_from(const json& j) {
+    const std::string key = j.at("kind").get<std::string>();
+    LiveFilter lf;
+    for (const auto k : filter::kinds()) if (filter::key(k) == key) lf.f.kind = k;
+    if (lf.f.kind == FilterKind::None) return std::nullopt;
+    lf.on = j.value("on", true);
+    lf.f.radius = j.value("radius", 1.0);
+    lf.f.angle = j.value("angle", 0);
+    lf.f.amount = j.value("amount", 0.0);
+    lf.f.threshold = j.value("threshold", 0);
+    lf.f.gaussian = j.value("gaussian", false);
+    lf.f.mono = j.value("mono", false);
+    lf.f.seed = j.value("seed", 1u);
+    const std::uint32_t seed = lf.f.seed;
+    lf.f = filter::normalised(lf.f);
+    lf.f.seed = lf.f.kind == FilterKind::AddNoise ? seed : lf.f.seed;
+    return lf;
+}
+
 std::optional<Adjust> adjust_from(const json& j) {
     const auto k = adjust::from_key(j.at("kind").get<std::string>());
     if (!k) return std::nullopt;
@@ -221,6 +246,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             if (l.contains("tiles")) total += l.at("tiles").size();
             if (l.contains("outside")) total += l.at("outside").size();
             if (l.contains("mask")) total += l.at("mask").size();
+            if (l.contains("filter_mask")) total += l.at("filter_mask").size();
         }
         // One map's tiles (s012: a layer's pixels, or its mask): the image's
         // and those beyond it, in the format `fm`. false: damaged (error set).
@@ -287,6 +313,17 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 L.adjust = *a;
             }
             else { error = "a layer kind this Klimt doesn't know (" + kind + ")"; return std::nullopt; }
+            if (l.contains("filters") && L.kind == Kind::Pixel)   // s018: live filters
+                for (const auto& jf : l.at("filters")) {
+                    const auto lf = live_from(jf);
+                    if (!lf) { error = "a live filter this Klimt doesn't know"; return std::nullopt; }
+                    L.filters.push_back(*lf);
+                }
+            if (l.contains("filter_mask") && L.kind == Kind::Pixel) {   // s018 m3
+                P::TileMap m;
+                if (!read_map(l, "filter_mask", "filter_mask_outside", P::Format{f.depth, P::Mode::Gray, false}, m)) return std::nullopt;
+                L.filter_mask = std::make_shared<const P::TileMap>(std::move(m));
+            }
             L.name = l.value("name", std::string{});
             L.parent = l.value("parent", std::string{});
             L.pos = l.at("pos").get<double>();
@@ -444,6 +481,12 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
                   {"clipped", L.clipped}};
         if (L.pixels && L.kind == Kind::Pixel && !write_map(l, *L.pixels, "tiles", "outside")) return false;
         if (L.kind == Kind::Adjustment) l["adjust"] = adjust_json(L.adjust);   // s013
+        if (L.kind == Kind::Pixel && !L.filters.empty()) {                      // s018: live filters
+            json fs = json::array();
+            for (const auto& lf : L.filters) fs.push_back(live_json(lf));
+            l["filters"] = std::move(fs);
+            if (L.filter_mask && !write_map(l, *L.filter_mask, "filter_mask", "filter_mask_outside")) return false;   // m3
+        }
         if (L.mask && L.kind != Kind::Group) {   // s012: the layer mask
             if (!write_map(l, *L.mask, "mask", "mask_outside")) return false;
             l["mask_on"] = L.mask_on;

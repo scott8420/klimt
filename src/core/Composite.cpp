@@ -1,5 +1,6 @@
 #include "core/Composite.hpp"
 #include "core/Adjust.hpp"
+#include "core/Live.hpp"   // s018
 
 #include <algorithm>
 #include <cmath>
@@ -248,6 +249,13 @@ std::uint32_t argb(const float* p) {
 
 void composite_tile(const Image& im, const Layers& layers, int col, int row, std::vector<float>& out) {
     out.assign(kPx * 4, 0.f);
+    // s018: layers with live filters are drawn as they LOOK (core/Live.hpp).
+    if (live::any(layers)) {
+        const Layers eff = live::effective(layers);
+        Walker w(im, eff, col, row);
+        w.group({}, out);
+        return;
+    }
     Walker w(im, layers, col, row);
     w.group({}, out);
 }
@@ -409,6 +417,9 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
         const Layer* a = find(before, id);
         const Layer* b = find(after, id);
         if (a && b && *a == *b) continue;
+        // s018: a layer with live filters reaches past its own tiles (a blur
+        // spreads): any change to it, or to its stack, redraws everything.
+        if ((a && live::active(*a)) || (b && live::active(*b))) { t.add_all(); return t; }
         if (a && b) {
             Layer x = *a, y = *b;
             x.name = y.name;        // the eye can't see a name

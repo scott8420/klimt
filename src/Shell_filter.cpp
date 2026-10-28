@@ -10,6 +10,7 @@
 #include "Log.hpp"
 #include "Shell.hpp"
 #include "core/Selection.hpp"
+#include "core/Live.hpp"   // s018
 
 namespace klimt {
 
@@ -36,6 +37,22 @@ void Shell::filter_run(const core::Filter& f) {
     const auto target = m_filter_target;
     const auto cur = m_doc.get(target);
     if (!cur || !cur->pixels || F::identity(f)) return;
+    // s018: from the dialog -- editing a live filter, or Live ticked: the
+    // stack changes, not the pixels (one step, at once; the canvas follows).
+    const bool from_dialog = m_filter_dialog && m_filter_dialog->get_visible();
+    if (from_dialog && m_filter_dialog->editing()) {
+        if (m_filter_edit) L::set_live(m_journal, m_doc, target, *m_filter_edit, f);
+        if (m_preview.erase(target)) queue_render();
+        return;
+    }
+    if (from_dialog) m_filter_live = m_filter_dialog->live();
+    if (m_filter_live) {
+        m_last_filter = f;
+        update_layer_actions();
+        if (!L::add_live(m_journal, m_doc, target, f)) toast(std::string(F::label(f.kind)) + ": refused");
+        if (m_preview.erase(target)) queue_render();
+        return;
+    }
     m_last_filter = f;
     update_layer_actions();
     const auto before = cur->pixels;
@@ -85,9 +102,23 @@ void Shell::filter_preview_soon() {
         const core::Filter f = F::normalised(m_filter_dialog->value());
         const pixel::Rect view = m_canvas.visible();
         const auto target = m_filter_target;
-        m_filter_job = start_job("Preview", [this, src, sel, keep_alpha, f, view, target](core::Jobs::Token& t) -> core::Jobs::Landing {
-            auto out = F::filtered(*src, f, sel.get(), keep_alpha, &view, [&t] { return t.cancelled(); },
-                                   [&t](double p) { t.progress(p); });
+        // s018: the preview shows the layer as it will LOOK -- its live stack
+        // included (the edited filter in its place, or the new one on top).
+        auto stack = l->filters;
+        const bool editing = m_filter_dialog->editing() && m_filter_edit && *m_filter_edit < stack.size();
+        const bool live = !editing && m_filter_dialog->live();
+        if (editing) stack[*m_filter_edit].f = f;
+        else if (live) stack.push_back({f, true});
+        const int later = core::live::reach(*l);
+        m_filter_job = start_job("Preview", [this, src, sel, keep_alpha, f, view, target, stack, editing, live, later](core::Jobs::Token& t) -> core::Jobs::Landing {
+            const auto stop = [&t] { return t.cancelled(); };
+            std::optional<pixel::TileMap> out;
+            if (editing || live) out = core::live::run(*src, stack, &view, stop);
+            else {   // the pixels changed, then the stack over them
+                const pixel::Rect wide{view.x - later, view.y - later, view.w + 2 * later, view.h + 2 * later};
+                auto base = F::filtered(*src, f, sel.get(), keep_alpha, &wide, stop, [&t](double p) { t.progress(p); });
+                if (base) out = core::live::run(*base, stack, &view, stop);
+            }
             if (!out || t.cancelled()) return [] {};
             auto res = std::make_shared<const pixel::TileMap>(std::move(*out));
             return [this, res, target, src] {
@@ -108,13 +139,27 @@ void Shell::on_filter(core::FilterKind k) {
     if (!filter_layer_ok(std::string(F::label(k)))) return;
     core::Filter start = (m_last_filter && m_last_filter->kind == k) ? *m_last_filter : F::fresh(k);
     start.seed = ++m_filter_seed;   // Add Noise: new noise each time the dialog opens
+    m_filter_edit.reset();
     if (!m_filter_dialog) {
         m_filter_dialog = std::make_unique<FilterDialog>(*this);
         m_filter_dialog->signal_changed().connect(sigc::mem_fun(*this, &Shell::filter_preview_soon));
         m_filter_dialog->signal_closed().connect(sigc::mem_fun(*this, &Shell::filter_preview_stop));
         m_filter_dialog->signal_ok().connect(sigc::mem_fun(*this, &Shell::filter_run));
     }
+    m_filter_dialog->set_live(m_filter_live, false);
     m_filter_dialog->ask(start, m_doc.get(m_filter_target)->name);
+    filter_preview_soon();
+}
+
+// s018: double-click a live filter in Properties -- its dialog, editing it.
+void Shell::on_live_edit(const core::Document::Id& id, std::size_t i) {
+    const auto l = m_doc.get(id);
+    if (!l || i >= l->filters.size() || id != m_layers.primary()) return;
+    if (!filter_layer_ok("Edit " + std::string(F::label(l->filters[i].f.kind)))) return;
+    on_filter(l->filters[i].f.kind);   // makes the dialog (and its signals) if need be
+    m_filter_edit = i;
+    m_filter_dialog->set_live(true, true);
+    m_filter_dialog->ask(l->filters[i].f, l->name);
     filter_preview_soon();
 }
 

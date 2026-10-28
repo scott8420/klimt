@@ -245,7 +245,10 @@ void Shell::queue_render() {
         auto layers = m_doc.snapshot();
         // s011: a transform's preview shows in place of the real pixels.
         for (const auto& [id, px] : m_preview)
-            if (auto it = layers.find(id); it != layers.end()) it->second.pixels = px;
+            if (auto it = layers.find(id); it != layers.end()) {
+                it->second.pixels = px;
+                it->second.filters.clear();   // s018: a filter preview has the live stack in it already
+            }
         // s013: Image > Adjustments' preview -- the adjustment as a layer
         // clipped to its target, just above it, through the selection.
         if (m_adjust_preview && !core::adjust::identity(*m_adjust_preview))

@@ -59,6 +59,14 @@ pixel::Rect content_bounds(const pixel::TileMap& m);
 int anchor_offset(int old_size, int new_size, int anchor);
 
 // What a document looked like when a plan was made (land() checks it).
+// s018 m3: a layer's FILTER MASK rides in Before / Reshape::masks under the
+// layer's id with this suffix (its layer mask under the bare id).
+inline constexpr const char* kFilterMaskKey = "\x1f" "fx";
+inline bool filter_mask_key(const std::string& k) {
+    const std::size_t n = std::char_traits<char>::length(kFilterMaskKey);
+    return k.size() > n && k.compare(k.size() - n, n, kFilterMaskKey) == 0;
+}
+
 struct Before {
     std::shared_ptr<const Image> image;
     std::map<Id, MapPtr>         pixels;   // every pixel layer's
