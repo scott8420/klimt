@@ -5,6 +5,7 @@
 #include <gtkmm/cssprovider.h>
 #include <gtkmm/headerbar.h>
 #include <gtkmm/overlay.h>
+#include <gtkmm/paned.h>
 #include <gtkmm/scrolledwindow.h>
 
 #include <algorithm>
@@ -178,15 +179,20 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
 // History as tabs on one part) -- docs/ui.md 5.
 Gtk::Widget& Shell::build_dock() {  // zone
     m_dock.add_css_class("klimt-chrome");
-    m_dock.append(m_properties);
-    m_dock.append(*Gtk::make_managed<Gtk::Separator>(Gtk::Orientation::HORIZONTAL));
+    // s013: an adjustment's controls can be tall -- Properties and the
+    // tabs share the dock through a divider you can drag; each side scrolls.
+    auto props = Gtk::make_managed<Gtk::ScrolledWindow>();
+    props->set_name("dock.properties");
+    props->set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
+    props->set_child(m_properties);
+    auto lower = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
 
     auto tabs = Gtk::make_managed<Gtk::StackSwitcher>();
     tabs->set_stack(m_dock_stack);
     tabs->set_halign(Gtk::Align::CENTER);
     tabs->set_margin_top(8);
     tabs->set_margin_bottom(4);
-    m_dock.append(*tabs);
+    lower->append(*tabs);
 
     m_layers.set_margin_start(8);
     m_layers.set_margin_end(8);
@@ -206,7 +212,17 @@ Gtk::Widget& Shell::build_dock() {  // zone
     m_history.set_margin_bottom(8);
     m_dock_stack.add(m_history, "history", "History");
     m_dock_stack.set_vexpand(true);
-    m_dock.append(m_dock_stack);
+    lower->append(m_dock_stack);
+    auto split = Gtk::make_managed<Gtk::Paned>(Gtk::Orientation::VERTICAL);
+    split->set_name("dock.split");
+    split->set_start_child(*props);
+    split->set_end_child(*lower);
+    split->set_resize_start_child(false);
+    split->set_shrink_start_child(true);
+    split->set_shrink_end_child(false);
+    split->set_position(360);
+    split->set_vexpand(true);
+    m_dock.append(*split);
     return m_dock;
 }
 
@@ -267,6 +283,11 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     lm_do->append("Delete", "win.mask-delete");
     lm->append_section(lm_do);
     layer->append_submenu("Layer Mask", lm);
+    // s013: Layer > New Adjustment Layer.
+    auto nal = Gio::Menu::create();
+    for (const auto k : core::adjust::kinds())
+        nal->append(std::string(core::adjust::label(k)) + "…", "win.adjust-new-" + std::string(core::adjust::key(k)));
+    layer->append_submenu("New Adjustment Layer", nal);
     // s008: the Select menu, and Fill / Delete beside Undo.
     auto sel = Gio::Menu::create();
     sel->append("All", "win.select-all");
@@ -294,6 +315,11 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     turn->append("Flip Canvas Horizontal", "win.canvas-flip-h");
     turn->append("Flip Canvas Vertical", "win.canvas-flip-v");
     image->append_submenu("Image Rotation", turn);
+    // s013: Image > Adjustments -- on the pixels, for good.
+    auto adj = Gio::Menu::create();
+    for (const auto k : core::adjust::kinds())
+        adj->append(std::string(core::adjust::label(k)) + "…", "win.adjust-apply-" + std::string(core::adjust::key(k)));
+    image->append_submenu("Adjustments", adj);
     auto view = Gio::Menu::create();
     view->append("Zoom In", "win.zoom-in");
     view->append("Zoom Out", "win.zoom-out");

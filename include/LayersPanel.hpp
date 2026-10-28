@@ -67,7 +67,9 @@ public:
     // (the Brush, Eraser and Fill go to it) -- clicking the layer's own icon
     // goes back to its pixels; Shift-click turns the mask off / on;
     // Alt-click shows the mask itself on the canvas.
-    const Id& mask_target() const { return m_mask_target; }   // "" : painting pixels
+    // "" : painting pixels. s013: an adjustment layer has no pixels -- picked
+    // alone, its mask is always what's painted.
+    Id   mask_target() const;
     void set_mask_target(const Id& id);
     sigc::signal<void(const Id&)>& signal_mask_view() { return m_mask_view; }   // Alt-click a chip
     void set_mask_viewing(const Id& id) { m_mask_viewing = id; queue_repaint(); }

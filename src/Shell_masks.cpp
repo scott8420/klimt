@@ -22,7 +22,7 @@ void Shell::on_mask_add(int from) {
     const auto id = m_layers.primary();
     const auto l = m_doc.get(id);
     if (!l) { toast("Layer Mask: select a layer first"); return; }
-    if (l->kind != core::Kind::Pixel) { toast("Layer Mask: “" + l->name + "” is a group -- masks are on layers (for now)"); return; }
+    if (l->kind == core::Kind::Group) { toast("Layer Mask: “" + l->name + "” is a group -- masks are on layers (for now)"); return; }
     if (l->mask) { toast("Layer Mask: “" + l->name + "” has one already"); return; }
     if (m_doc.locked_all(id)) { toast("Layer Mask: “" + l->name + "” is locked"); return; }
     auto f = static_cast<L::MaskFrom>(from);
@@ -71,8 +71,8 @@ void Shell::on_gradient(core::select::Pt a, core::select::Pt b) {
     const auto id = m_layers.primary();
     const auto l = m_doc.get(id);
     if (!l) { toast("Gradient: select a layer first"); return; }
-    if (l->kind != core::Kind::Pixel) { toast("Gradient: “" + l->name + "” is a group -- pick a layer in it"); return; }
     const bool on_mask = l->mask && m_layers.mask_target() == id;
+    if (!on_mask && l->kind != core::Kind::Pixel) { toast("Gradient: " + L::not_pixels(m_doc, id)); return; }
     if (m_doc.locked_all(id) || (!on_mask && (l->locks & core::lock::Pixels))) { toast("Gradient: “" + l->name + "” is locked"); return; }
     const auto o = m_strip.gradient();
     auto c0 = m_rail.foreground(), c1 = m_rail.background();

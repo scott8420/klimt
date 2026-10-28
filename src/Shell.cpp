@@ -4,7 +4,8 @@
 #include "ShortcutsDialog.hpp"  // ditto
 #include "CommandPalette.hpp"   // ditto
 #include "NewDialog.hpp"        // ditto
-#include "NumberDialog.hpp"     // ditto
+#include "NumberDialog.hpp"
+#include "AdjustDialog.hpp"   // s013     // ditto
 #include "Log.hpp"
 
 // Shell.cpp -- GLUE. The ctor and the ordered build_ui() pass; every other

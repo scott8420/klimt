@@ -23,6 +23,7 @@
 // panel() and walk() hand back that order so the UI never flips it itself.
 // A structural verb renumbers the siblings it touches to 1..n, so positions
 // never run out of room between two neighbours.
+#include "core/Adjust.hpp"
 #include "core/Undo.hpp"
 #include "pixel/Blend.hpp"
 #include "pixel/Pixel.hpp"
@@ -52,7 +53,7 @@ std::string_view     blend_key(Blend b);
 std::string_view     blend_label(Blend b);
 std::optional<Blend> blend_from_key(std::string_view key);
 
-enum class Kind : std::uint8_t { Pixel, Group };   // Text, Adjustment come later
+enum class Kind : std::uint8_t { Pixel, Group, Adjustment };   // s013: Adjustment; Text later
 
 // Photoshop's four locks, as bits. Only All bites in the tree today: it
 // refuses opacity, fill, blend and clip on the layer and on everything inside
@@ -95,6 +96,9 @@ struct Layer {
     // map with no tiles: a mask that hides nothing. Pixel layers only.
     std::shared_ptr<const pixel::TileMap> mask;
     bool          mask_on = true;      // Shift-click the mask: off (it stays, shows nothing)
+    // s013: an ADJUSTMENT LAYER's settings (core/Adjust.hpp); kind None on
+    // every other layer. No pixels; it may have a mask.
+    Adjust        adjust;
     bool operator==(const Layer&) const = default;
 };
 
@@ -295,6 +299,26 @@ bool invert_mask(DocJournal& j, Document& d, const Id& id);
 bool set_mask_if(DocJournal& j, Document& d, const Id& id, const std::shared_ptr<const pixel::TileMap>& expect,
                  pixel::TileMap after, const std::string& label);
 
+// s013 -- ADJUSTMENT LAYERS (core/Adjust.hpp, docs/adjustments.md). A new
+// one sits above `above` like add_layer, named "Levels 1", "Curves 2" ...,
+// starting as an adjustment that changes nothing, with a mask: the selection
+// (revealed) when there is one, else Reveal All -- Photoshop's way. One step.
+Id   add_adjustment(DocJournal& j, Document& d, AdjustKind k, const Id& above = {});
+// Its settings (normalised). Refused on any other layer, for a different
+// kind, or under an All lock. Presses inside the merge window fold
+// (merge key "adjust:<id>").
+bool set_adjust(DocJournal& j, Document& d, const Id& id, const Adjust& a);
+// Dragging a slider or a curve point: ONE step for the whole drag.
+void adjust_begin(DocJournal& j, Document& d, const Id& id);
+void adjust_to(DocJournal& j, Document& d, const Id& id, const Adjust& a);
+bool adjust_end(DocJournal& j);
+// Image > Adjustments: `a` applied to a pixel layer's pixels for good,
+// through the selection. Refused on a group / adjustment layer, under an All
+// or a Pixels lock, on CMYK / Lab documents, or when it changes nothing.
+bool apply_adjust(DocJournal& j, Document& d, const Id& id, const Adjust& a);
+// "is a group" / "is an adjustment layer": why a pixel verb is refused.
+std::string not_pixels(const Document& d, const Id& id);
+
 // Who takes the selection when `id` goes: the row below it in the panel, else
 // the row above, else its group, else nobody.
 Id neighbour(const Document& d, const Id& id);
@@ -322,6 +346,9 @@ void load_fixture(Document& d);
 void load_selection(Document& d, const pixel::Rect& r);
 // s012: a layer mask (a verb's setup; tests).
 void load_mask(Document& d, const Id& id);
+// s013: an adjustment layer "L6" of kind k at the top, its mask hiding all
+// but (120, 110) 60 x 60, LOADED (a verb's setup; tests).
+void load_adjustment(Document& d, AdjustKind k);
 }  // namespace layers
 
 }  // namespace klimt::core

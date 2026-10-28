@@ -53,6 +53,13 @@ void Shell::bind_actions() {  // bindings
     // s012: layer masks (Shell_masks.cpp).
     m_layers.signal_mask_view().connect(sigc::mem_fun(*this, &Shell::on_mask_view));
     m_canvas.signal_gradient().connect(sigc::mem_fun(*this, &Shell::on_gradient));   // s012 m4
+    // s013: adjustments (Shell_adjust.cpp).
+    for (const auto k : core::adjust::kinds()) {
+        const std::string key(core::adjust::key(k));
+        m_layer_acts["adjust-new-" + key] = add_action("adjust-new-" + key, [this, k] { on_adjust_new(k); });
+        m_layer_acts["adjust-apply-" + key] = add_action("adjust-apply-" + key, [this, k] { on_adjust_apply(k); });
+    }
+    m_properties.signal_histogram_wanted().connect(sigc::mem_fun(*this, &Shell::on_histogram));
     m_layer_acts["mask-add"]         = add_action("mask-add", [this] { on_mask_add(-1); });
     m_layer_acts["mask-reveal-all"]  = add_action("mask-reveal-all", [this] { on_mask_add(int(core::layers::MaskFrom::RevealAll)); });
     m_layer_acts["mask-hide-all"]    = add_action("mask-hide-all", [this] { on_mask_add(int(core::layers::MaskFrom::HideAll)); });

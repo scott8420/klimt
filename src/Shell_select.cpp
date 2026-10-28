@@ -128,7 +128,7 @@ void Shell::run_pixel_job(const std::string& verb, bool fill, ToolRail::RGB colo
         });
         return;
     }
-    if (l->kind != core::Kind::Pixel) { toast(verb + ": “" + l->name + "” is a group -- pick a layer in it"); return; }
+    if (l->kind != core::Kind::Pixel) { toast(verb + ": " + core::layers::not_pixels(m_doc, id)); return; }
     if (m_doc.locked_all(id) || (l->locks & core::lock::Pixels)) { toast(verb + ": “" + l->name + "” is locked"); return; }
     const bool alpha_lock = (l->locks & core::lock::Alpha) != 0;
     if (!fill && alpha_lock && m_doc.image().format.alpha) {

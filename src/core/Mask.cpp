@@ -13,7 +13,7 @@ using MapPtr = std::shared_ptr<const pixel::TileMap>;
 
 bool maskable(const Document& d, const Id& id) {
     const auto l = d.get(id);
-    return l && l->kind == Kind::Pixel && !d.locked_all(id);
+    return l && l->kind != Kind::Group && !d.locked_all(id);   // s013: adjustment layers too
 }
 
 bool put_mask(DocJournal& j, Document& d, const Id& id, MapPtr mask, bool on, const std::string& label) {
@@ -46,7 +46,7 @@ bool delete_mask(DocJournal& j, Document& d, const Id& id) {
 }
 
 bool apply_mask(DocJournal& j, Document& d, const Id& id) {
-    if (!maskable(d, id)) return false;
+    if (!maskable(d, id) || d.get(id)->kind != Kind::Pixel) return false;   // nothing to bake into
     Layer l = *d.get(id);
     if (!l.mask || !d.image().format.alpha || (l.locks & (lock::Pixels | lock::Alpha))) return false;
     if (l.mask_on && l.pixels) {

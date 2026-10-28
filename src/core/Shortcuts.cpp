@@ -147,6 +147,10 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         // ── Image (s009 m2) -- the Crop tool's keys.
         {"Image", "win.image-size",  {"<Ctrl><Alt>i"}, "", "Image Size"},
         {"Image", "win.canvas-size", {"<Ctrl><Alt>c"}, "", "Canvas Size"},
+        // s013: Image > Adjustments (Photoshop's keys).
+        {"Image", "win.adjust-apply-levels", {"<Ctrl>l"}, "", "Levels -- on the layer's pixels"},
+        {"Image", "win.adjust-apply-curves", {"<Ctrl>m"}, "", "Curves -- on the layer's pixels"},
+        {"Image", "win.adjust-apply-hue-saturation", {"<Ctrl>u"}, "", "Hue/Saturation -- on the layer's pixels"},
         {"Image", "", {}, "Crop tool: Enter  /  double-click", "Crop to the box"},
         {"Image", "", {}, "Crop tool: Escape", "Drop the box"},
         {"Layer", "win.layer-new",       {"<Ctrl><Shift>n"}, "", "New layer above the selection"},

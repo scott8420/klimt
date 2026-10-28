@@ -26,6 +26,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -82,6 +83,7 @@ class AboutWindow;
 class CommandPalette;
 class NewDialog;
 class NumberDialog;
+class AdjustDialog;
 class ShortcutsDialog;
 class SizeDialog;
 
@@ -185,6 +187,11 @@ private:
     float mask_hide_of(ToolRail::RGB c) const;   // category: masks: a colour as what it hides
     void on_gradient(core::select::Pt a, core::select::Pt b);   // category: masks: the Gradient tool's drag (a job) (s012 m4)
 
+    // ── adjustments (s013) ─────────────────────────────────────────────────
+    void on_adjust_new(core::AdjustKind k);      // category: adjust: Layer > New Adjustment Layer (and the panel's button)
+    void on_adjust_apply(core::AdjustKind k);    // category: adjust: Image > Adjustments -- the dialog, then a job
+    void on_histogram(const core::Document::Id& id);   // category: adjust: what's below an adjustment layer, counted (a job)
+
     // ── helpers ────────────────────────────────────────────────────────────
     void load_demo();                             // category: helper: a demo document, LOADED (not undoable)
     void open_demo();                             // category: files: Help > Open Demo (asks about unsaved changes)
@@ -249,6 +256,7 @@ private:
     std::unique_ptr<SizeDialog>      m_image_size, m_canvas_size;   // s009
     std::unique_ptr<NumberDialog>    m_rotate_dialog;               // s011
     std::map<int, std::unique_ptr<NumberDialog>> m_modify_dialogs;  // s011 m4: one per Modify kind
+    std::unique_ptr<AdjustDialog>    m_adjust_dialog;               // s013: Image > Adjustments
 
     // ── the file (s007) ────────────────────────────────────────────────────
     std::string        m_path;                 // the .klimt this document saves to; "" = never saved
@@ -304,6 +312,10 @@ private:
     // What the render shows in place of a layer's pixels (the preview).
     std::map<core::Document::Id, std::shared_ptr<const pixel::TileMap>> m_preview;
     std::string        m_mask_view;              // s012: the layer whose mask the canvas shows ("" : the image)
+    // s013: Image > Adjustments' live preview -- the adjustment shown on the
+    // layer it will change (a stand-in adjustment layer clipped to it).
+    core::Document::Id m_adjust_target;
+    std::optional<core::Adjust> m_adjust_preview;
 
     // ── the ants (s008) ────────────────────────────────────────────────────
     std::shared_ptr<const pixel::TileMap> m_ants_for;   // the mask the canvas's ants are of

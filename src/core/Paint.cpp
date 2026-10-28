@@ -215,7 +215,7 @@ pixel::TileMap apply(const pixel::TileMap& original, const pixel::TileMap& curre
 std::string refusal(const Document& d, const Document::Id& id, const Brush& b) {
     const auto l = d.get(id);
     if (!l) return "pick a layer to paint on";
-    if (l->kind != Kind::Pixel) return "“" + l->name + "” is a group -- pick a layer in it";
+    if (l->kind != Kind::Pixel) return layers::not_pixels(d, id);
     if (d.locked_all(id) || (l->locks & lock::Pixels)) return "“" + l->name + "” is locked";
     if (b.erase && (l->locks & lock::Alpha) && d.image().format.alpha) return "“" + l->name + "” has its transparent pixels locked";
     if (!l->visible || !d.shown(id)) return "“" + l->name + "” is hidden";

@@ -8,6 +8,7 @@
 //
 // Writes nothing itself: every control is one call into core::layers (the
 // journal's one door). A repaint sets fields under m_painting -- not a choice.
+#include "AdjustEditor.hpp"
 #include "widgets/Widgets.hpp"
 #include "core/Document.hpp"
 
@@ -26,6 +27,11 @@ public:
     PropertiesPanel(core::Document& doc, core::DocJournal& journal);
     // What is selected (panel order). Repaints the fields from the document.
     void show(const std::vector<Id>& selection);
+    // s013: an adjustment layer's controls (Levels / Curves draw the
+    // histogram of what is below it -- the Shell makes it on a worker when
+    // asked, and hands it back for that layer).
+    sigc::signal<void(const Id&)>& signal_histogram_wanted() { return m_hist_wanted; }
+    void set_histogram(const Id& id, const core::adjust::Histogram& h);
 
 private:
     void paint();
@@ -47,6 +53,11 @@ private:
     widgets::Scale        m_opacity;
     widgets::Scale        m_fill;
     widgets::ToggleButton m_lock_alpha, m_lock_pixels, m_lock_position, m_lock_all;
+    widgets::Label        m_later;
+    AdjustEditor          m_adjust;     // s013
+    Id                    m_adjust_id;  // the layer m_adjust shows
+    Id                    m_hist_id;    // the layer whose histogram m_adjust has (or was asked for)
+    sigc::signal<void(const Id&)> m_hist_wanted;
 };
 
 }  // namespace klimt

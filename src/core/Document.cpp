@@ -241,8 +241,12 @@ std::string Document::check() const {
             if (!(l.mask->format() == mask_format()) || l.mask->width() != m_image.width || l.mask->height() != m_image.height)
                 return id + ": a mask not at the image's size in the mask format";
         }
+        if ((l.kind == Kind::Adjustment) != (l.adjust.kind != AdjustKind::None))
+            return id + ": an adjustment where there is no adjustment layer, or none where there is";
+        if (l.kind == Kind::Adjustment && !adjust::refusal(l.adjust).empty())
+            return id + ": an adjustment out of range (" + adjust::refusal(l.adjust) + ")";
         if (l.pixels) {
-            if (l.kind == Kind::Group) return id + ": a group with pixels";
+            if (l.kind != Kind::Pixel) return id + ": a group or an adjustment layer with pixels";
             if (!(l.pixels->format() == m_image.format) || l.pixels->width() != m_image.width ||
                 l.pixels->height() != m_image.height)
                 return id + ": pixels not at the image's size and format";
@@ -337,7 +341,8 @@ std::string count_label(const std::string& verb, const Document& d, const std::v
     return verb + " " + std::to_string(ids.size()) + " Layers";
 }
 
-Id add_kind(DocJournal& j, Document& d, Kind kind, const std::string& name, const Id& above) {
+Id add_kind(DocJournal& j, Document& d, Kind kind, const std::string& name, const Id& above,
+            const std::function<void(Layer&)>& extra = {}, const std::string& label_in = {}) {
     Id parent;
     std::size_t at = 0;   // panel index in parent
     if (const auto a = d.get(above)) {
@@ -353,11 +358,12 @@ Id add_kind(DocJournal& j, Document& d, Kind kind, const std::string& name, cons
     l.kind  = kind;
     l.name  = name;
     l.blend = kind == Kind::Group ? Blend::PassThrough : Blend::Normal;
+    if (extra) extra(l);
     std::map<Id, Layer> next{{made, l}};
     auto sibs = d.panel(parent);
     sibs.insert(sibs.begin() + static_cast<long>(at), made);
     place(d, next, parent, sibs);
-    const std::string label = kind == Kind::Group ? "New Group" : "New Layer";
+    const std::string label = !label_in.empty() ? label_in : kind == Kind::Group ? "New Group" : "New Layer";
     return apply(j, d, label + " " + "“" + name + "”", diff(d, next)) ? made : Id{};
 }
 
@@ -377,6 +383,36 @@ Id add_layer(DocJournal& j, Document& d, const std::string& name, const Id& abov
 }
 Id add_group(DocJournal& j, Document& d, const std::string& name, const Id& above) {
     return add_kind(j, d, Kind::Group, name, above);
+}
+
+// s013: an adjustment layer, with its mask, as one step.
+Id add_adjustment(DocJournal& j, Document& d, AdjustKind k, const Id& above) {
+    if (k == AdjustKind::None) return {};
+    const std::string base(adjust::label(k));
+    int n = 1;   // "Levels 1", "Levels 2" ...: one past the highest of its kind
+    for (const auto& [id, l] : d.snapshot())
+        if (l.kind == Kind::Adjustment && l.name.rfind(base + " ", 0) == 0) {
+            const std::string tail = l.name.substr(base.size() + 1);
+            if (!tail.empty() && tail.size() < 6 && std::all_of(tail.begin(), tail.end(), [](char c) { return c >= '0' && c <= '9'; }))
+                n = std::max(n, std::stoi(tail) + 1);
+        }
+    const std::string name = base + " " + std::to_string(n);
+    const auto* sel = d.selection();
+    const int w = d.image().width, h = d.image().height;
+    return add_kind(j, d, Kind::Adjustment, name, above, [&](Layer& l) {
+        l.adjust = adjust::fresh(k);
+        l.mask = std::make_shared<const pixel::TileMap>(sel ? select::inverted(sel, d.mask_format(), w, h)
+                                                            : pixel::TileMap(d.mask_format(), w, h));
+    }, "New Adjustment Layer");
+}
+
+std::string not_pixels(const Document& d, const Id& id) {
+    const auto l = d.get(id);
+    if (!l) return "no layer";
+    const std::string q = "“" + l->name + "”";
+    if (l->kind == Kind::Group) return q + " is a group -- pick a layer in it";
+    if (l->kind == Kind::Adjustment) return q + " is an adjustment layer -- it has no pixels";
+    return {};
 }
 
 Id group(DocJournal& j, Document& d, const std::vector<Id>& ids, const std::string& name) {
@@ -796,6 +832,19 @@ void load_mask(Document& d, const Id& id) {
     d.put(id, l);
 }
 
+void load_adjustment(Document& d, AdjustKind k) {
+    {
+        Document::Loading load(d);
+        Layer l;
+        l.kind = Kind::Adjustment;
+        l.name = std::string(adjust::label(k)) + " 1";
+        l.pos = 4;
+        l.adjust = adjust::fresh(k);
+        d.put("L6", l);
+    }
+    load_mask(d, "L6");
+}
+
 // A selection already there (a verb's setup): LOADED, not a step.
 void load_selection(Document& d, const pixel::Rect& r) {
     Document::Loading load(d);
@@ -947,6 +996,27 @@ const std::vector<Verb>& verbs() {
                  d.put("L4", l);
              }},
         {"resolution",    [](DocJournal& j, Document& d) { canvas::image_size(j, d, 600, 400, 300); }},
+        // s013: adjustment layers -- made, edited (a press, a drag), carried
+        // by the canvas verbs; and Image > Adjustments on the pixels.
+        {"add_adjustment", [](DocJournal& j, Document& d) { add_adjustment(j, d, AdjustKind::Levels, "L4"); },
+             [](Document& d) { load_selection(d, {120, 110, 60, 60}); }},
+        {"add_adjustment_top", [](DocJournal& j, Document& d) { add_adjustment(j, d, AdjustKind::Curves); }},
+        {"set_adjust",    [](DocJournal& j, Document& d) {
+             Adjust a = adjust::fresh(AdjustKind::HueSat); a.hue = 120; a.saturation = -30; set_adjust(j, d, "L6", a); },
+             [](Document& d) { load_adjustment(d, AdjustKind::HueSat); }},
+        {"adjust_drag",   [](DocJournal& j, Document& d) {
+             Adjust a = adjust::fresh(AdjustKind::Curves);
+             adjust_begin(j, d, "L6");
+             for (double y = 0.5; y <= 0.8; y += 0.1) { a.curves[0] = {{0, 0}, {0.5, y}, {1, 1}}; adjust_to(j, d, "L6", a); }
+             adjust_end(j); },
+             [](Document& d) { load_adjustment(d, AdjustKind::Curves); }},
+        {"crop_adjustment", [](DocJournal& j, Document& d) { canvas::crop(j, d, {50, 40, 400, 300}, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_adjustment(d, AdjustKind::Levels); }},
+        {"turn_adjustment", [](DocJournal& j, Document& d) { xform::turn(j, d, xform::Turn::Clockwise); },
+             [](Document& d) { load_adjustment(d, AdjustKind::BrightCon); }},
+        {"apply_adjust",  [](DocJournal& j, Document& d) {
+             Adjust a = adjust::fresh(AdjustKind::HueSat); a.hue = 120; a.lightness = 20; apply_adjust(j, d, "L4", a); },
+             [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
         {"move_nudge",    [](DocJournal& j, Document& d) {
              move::by(j, d, {"L4"}, 1, 0, pixel::rgba(1, 1, 1, 1), "nudge");
              move::by(j, d, {"L4"}, 0, 10, pixel::rgba(1, 1, 1, 1), "nudge"); }},

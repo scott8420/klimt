@@ -59,6 +59,15 @@ const std::vector<Command>& commands() {
             {"Border Selection", "Select", "win.select-border", "", "modify edge band outline ring", ""},
             {"Smooth Selection", "Select", "win.select-smooth", "", "modify clean specks holes round", ""},
             {"Open Demo", "Help", "win.open-demo", "", "sample example portrait", ""},
+            // s013: adjustments.
+            {"New Adjustment Layer: Brightness/Contrast", "Layer", "win.adjust-new-brightness-contrast", "", "adjustment layer light dark", ""},
+            {"New Adjustment Layer: Levels", "Layer", "win.adjust-new-levels", "", "adjustment layer histogram black white point gamma", ""},
+            {"New Adjustment Layer: Curves", "Layer", "win.adjust-new-curves", "", "adjustment layer tone contrast", ""},
+            {"New Adjustment Layer: Hue/Saturation", "Layer", "win.adjust-new-hue-saturation", "", "adjustment layer colour colorize tint", ""},
+            {"Brightness/Contrast", "Image", "win.adjust-apply-brightness-contrast", "", "adjustments light dark pixels", ""},
+            {"Levels", "Image", "win.adjust-apply-levels", "", "adjustments histogram black white point gamma pixels", ""},
+            {"Curves", "Image", "win.adjust-apply-curves", "", "adjustments tone contrast pixels", ""},
+            {"Hue/Saturation", "Image", "win.adjust-apply-hue-saturation", "", "adjustments colour colorize tint pixels", ""},
             // s012: layer masks.
             {"Add Layer Mask", "Layer", "win.mask-add", "", "mask reveal selection hide", ""},
             {"Layer Mask: Reveal All", "Layer", "win.mask-reveal-all", "", "mask add white", ""},

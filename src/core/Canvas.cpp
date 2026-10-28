@@ -417,11 +417,10 @@ Before before(const Document& d) {
     Before b;
     b.image = d.image_ptr();
     b.mask = d.selection_ptr();
-    for (const auto& [id, l] : d.snapshot())
-        if (l.kind == Kind::Pixel) {
-            b.pixels[id] = l.pixels;
-            if (l.mask) b.masks[id] = l.mask;
-        }
+    for (const auto& [id, l] : d.snapshot()) {
+        if (l.kind == Kind::Pixel) b.pixels[id] = l.pixels;
+        if (l.mask) b.masks[id] = l.mask;   // s013: an adjustment layer's mask too
+    }
     return b;
 }
 
@@ -548,6 +547,8 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
         return false;
     std::vector<Id> ids{kImageId};
     for (const auto& [id, p] : r.pixels) ids.push_back(id);
+    for (const auto& [id, m] : r.masks)   // s013: a mask on a layer with no pixels
+        if (!r.pixels.count(id)) ids.push_back(id);
     ids.push_back(kSelectionId);
     return j.run(label, ids, [&] {
         Layer im;
@@ -559,6 +560,13 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
             if (!l) continue;
             l->pixels = p;
             if (const auto m = r.masks.find(id); m != r.masks.end()) l->mask = m->second;   // s012
+            d.put(id, *l);
+        }
+        for (const auto& [id, m] : r.masks) {   // s013: adjustment layers' masks
+            if (r.pixels.count(id)) continue;
+            auto l = d.get(id);
+            if (!l) continue;
+            l->mask = m;
             d.put(id, *l);
         }
         if (r.mask) {

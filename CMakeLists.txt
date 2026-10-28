@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s012")
+set(KLIMT_BUILD "s013")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -106,6 +106,8 @@ add_library(klimt_core STATIC
     src/core/Transform.cpp # s011 m1: Free Transform, flips, rotations
     src/core/Mask.cpp      # s012 m2: layer masks
     src/core/Gradient.cpp  # s012 m4: the Gradient tool
+    src/core/Adjust.cpp       # s013: adjustments -- the maths
+    src/core/Adjustments.cpp  # s013: adjustment layer verbs
 )
 target_include_directories(klimt_core PUBLIC include)
 target_link_libraries(klimt_core PUBLIC klimt_pixel klimt_formats)
@@ -119,6 +121,7 @@ if(KLIMT_FAST_PIXELS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(klimt_pixel PRIVATE -O2)
     set_source_files_properties(src/core/Composite.cpp src/core/Paint.cpp src/core/Canvas.cpp
                                 src/core/Move.cpp src/core/Selection.cpp src/core/Transform.cpp src/core/Gradient.cpp
+                                src/core/Adjust.cpp
                                 PROPERTIES COMPILE_OPTIONS "-O2")
 endif()
 # s007: libzip writes and reads the .klimt container (Fedora: libzip-devel).
@@ -133,7 +136,7 @@ add_executable(klimt_bench src/bench.cpp)
 target_link_libraries(klimt_bench PRIVATE klimt_core Threads::Threads)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp)
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads)
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -182,6 +185,7 @@ add_executable(klimt
     src/Shell_canvas.cpp
     src/Shell_transform.cpp
     src/Shell_masks.cpp
+    src/Shell_adjust.cpp      # s013: adjustment layers, Image > Adjustments
     src/SizeDialog.cpp
     src/NewDialog.cpp
     src/NumberDialog.cpp
@@ -194,6 +198,8 @@ add_executable(klimt
     src/ContextStrip.cpp
     src/CanvasView.cpp
     src/PropertiesPanel.cpp
+    src/AdjustEditor.cpp      # s013: the adjustment controls
+    src/AdjustDialog.cpp      # s013: Image > Adjustments
     src/StatusLine.cpp
     src/HistoryPanel.cpp
     src/CommandPalette.cpp

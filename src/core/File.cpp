@@ -79,6 +79,72 @@ bool good_id(const std::string& id) {
 }
 
 // The tree a file holds must be a tree Klimt can hold: Document::check.
+// s013: an adjustment layer's settings as JSON, and back. A file is trusted
+// only after Document::check() (adjust::refusal) has passed it.
+json adjust_json(const Adjust& a) {
+    json j = {{"kind", std::string(adjust::key(a.kind))}};
+    switch (a.kind) {
+        case AdjustKind::Levels: {
+            json ch = json::array();
+            for (const auto& c : a.levels) ch.push_back({c.in_black, c.in_white, c.gamma, c.out_black, c.out_white});
+            j["levels"] = std::move(ch);
+            break;
+        }
+        case AdjustKind::Curves: {
+            json ch = json::array();
+            for (const auto& c : a.curves) {
+                json pts = json::array();
+                for (const auto& p : c) pts.push_back({p.x, p.y});
+                ch.push_back(std::move(pts));
+            }
+            j["curves"] = std::move(ch);
+            break;
+        }
+        case AdjustKind::HueSat:
+            j["hue"] = a.hue; j["saturation"] = a.saturation; j["lightness"] = a.lightness; j["colorize"] = a.colorize;
+            break;
+        case AdjustKind::BrightCon:
+            j["brightness"] = a.brightness; j["contrast"] = a.contrast;
+            break;
+        case AdjustKind::None: break;
+    }
+    return j;
+}
+
+std::optional<Adjust> adjust_from(const json& j) {
+    const auto k = adjust::from_key(j.at("kind").get<std::string>());
+    if (!k) return std::nullopt;
+    Adjust a = adjust::fresh(*k);
+    if (j.contains("levels")) {
+        const auto& ch = j.at("levels");
+        if (!ch.is_array() || ch.size() != static_cast<std::size_t>(kAdjustChannels)) return std::nullopt;
+        for (std::size_t i = 0; i < ch.size(); ++i) {
+            const auto& v = ch[i];
+            if (!v.is_array() || v.size() != 5) return std::nullopt;
+            a.levels[i] = {v[0].get<double>(), v[1].get<double>(), v[2].get<double>(), v[3].get<double>(), v[4].get<double>()};
+        }
+    }
+    if (j.contains("curves")) {
+        const auto& ch = j.at("curves");
+        if (!ch.is_array() || ch.size() != static_cast<std::size_t>(kAdjustChannels)) return std::nullopt;
+        for (std::size_t i = 0; i < ch.size(); ++i) {
+            if (!ch[i].is_array() || ch[i].size() > 16) return std::nullopt;
+            a.curves[i].clear();
+            for (const auto& p : ch[i]) {
+                if (!p.is_array() || p.size() != 2) return std::nullopt;
+                a.curves[i].push_back({p[0].get<double>(), p[1].get<double>()});
+            }
+        }
+    }
+    a.hue = j.value("hue", 0);
+    a.saturation = j.value("saturation", 0);
+    a.lightness = j.value("lightness", 0);
+    a.colorize = j.value("colorize", false);
+    a.brightness = j.value("brightness", 0);
+    a.contrast = j.value("contrast", 0);
+    return a;
+}
+
 std::string check_tree(const Contents& c) {
     Document d;
     Document::Loading load(d);
@@ -214,6 +280,12 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             const std::string kind = l.at("kind").get<std::string>();
             if (kind == "pixel") L.kind = Kind::Pixel;
             else if (kind == "group") L.kind = Kind::Group;
+            else if (kind == "adjustment") {   // s013
+                L.kind = Kind::Adjustment;
+                const auto a = adjust_from(l.at("adjust"));
+                if (!a) { error = "an adjustment this Klimt doesn't know"; return std::nullopt; }
+                L.adjust = *a;
+            }
             else { error = "a layer kind this Klimt doesn't know (" + kind + ")"; return std::nullopt; }
             L.name = l.value("name", std::string{});
             L.parent = l.value("parent", std::string{});
@@ -232,7 +304,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 L.pixels = std::make_shared<const P::TileMap>(std::move(m));
             }
             // s012: the layer mask (stored as what it hides), and whether it's on.
-            if (l.contains("mask") && L.kind == Kind::Pixel) {
+            if (l.contains("mask") && L.kind != Kind::Group) {
                 P::TileMap m;
                 if (!read_map(l, "mask", "mask_outside", P::Format{f.depth, P::Mode::Gray, false}, m)) return std::nullopt;
                 L.mask = std::make_shared<const P::TileMap>(std::move(m));
@@ -313,7 +385,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
     json layers = json::array();
     int next_tile = 0;
     for (const auto& [id, L] : c.layers) {
-        json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : "pixel"}, {"name", L.name},
+        json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : L.kind == Kind::Adjustment ? "adjustment" : "pixel"}, {"name", L.name},
                   {"parent", L.parent}, {"pos", L.pos}, {"visible", L.visible}, {"locks", L.locks},
                   {"opacity", L.opacity}, {"fill", L.fill}, {"blend", std::string(blend_key(L.blend))},
                   {"clipped", L.clipped}};
@@ -355,7 +427,8 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
             return true;
         };
         if (L.pixels && L.kind == Kind::Pixel && !write_map(*L.pixels, "tiles", "outside")) return false;
-        if (L.mask && L.kind == Kind::Pixel) {   // s012: the layer mask
+        if (L.kind == Kind::Adjustment) l["adjust"] = adjust_json(L.adjust);   // s013
+        if (L.mask && L.kind != Kind::Group) {   // s012: the layer mask
             if (!write_map(*L.mask, "mask", "mask_outside")) return false;
             l["mask_on"] = L.mask_on;
         }

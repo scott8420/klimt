@@ -6,6 +6,7 @@
 #include <gtkmm/textview.h>
 #include <glibmm/main.h>
 #include "core/Composite.hpp"
+#include "core/Selection.hpp"   // s013: the preview's mask
 
 #include <cmath>
 
@@ -109,9 +110,18 @@ void Shell::update_layer_actions() {
     {
         const auto pl = m_doc.get(m_layers.primary());
         const bool pixel_layer = pl && pl->kind == core::Kind::Pixel;
-        const bool masked = pixel_layer && pl->mask;
-        for (const char* a : {"mask-add", "mask-reveal-all", "mask-hide-all", "mask-reveal-sel", "mask-hide-sel"}) on(a, pixel_layer && !masked);
-        for (const char* a : {"mask-delete", "mask-apply", "mask-toggle", "mask-invert", "mask-edit"}) on(a, masked);
+        const bool maskable = pl && pl->kind != core::Kind::Group;   // s013: adjustment layers too
+        const bool masked = maskable && pl->mask;
+        for (const char* a : {"mask-add", "mask-reveal-all", "mask-hide-all", "mask-reveal-sel", "mask-hide-sel"}) on(a, maskable && !masked);
+        for (const char* a : {"mask-delete", "mask-toggle", "mask-invert"}) on(a, masked);
+        on("mask-apply", masked && pixel_layer);
+        on("mask-edit", masked && pixel_layer);
+        // s013: Image > Adjustments wants a pixel layer; new adjustment layers, an image.
+        for (const auto k : core::adjust::kinds()) {
+            const std::string key(core::adjust::key(k));
+            on(("adjust-apply-" + key).c_str(), img && pixel_layer && pl->pixels);
+            on(("adjust-new-" + key).c_str(), img);
+        }
     }
     on("layer-duplicate", any);
     on("layer-group", any);
@@ -226,6 +236,26 @@ void Shell::queue_render() {
         // s011: a transform's preview shows in place of the real pixels.
         for (const auto& [id, px] : m_preview)
             if (auto it = layers.find(id); it != layers.end()) it->second.pixels = px;
+        // s013: Image > Adjustments' preview -- the adjustment as a layer
+        // clipped to its target, just above it, through the selection.
+        if (m_adjust_preview && !core::adjust::identity(*m_adjust_preview))
+            if (const auto it = layers.find(m_adjust_target); it != layers.end()) {
+                const auto& t = it->second;
+                double next = t.pos + 1;
+                for (const auto& [oid, o] : layers)
+                    if (o.parent == t.parent && o.pos > t.pos) next = std::min(next, o.pos);
+                core::Layer p;
+                p.kind = core::Kind::Adjustment;
+                p.name = "Preview";
+                p.parent = t.parent;
+                p.pos = (t.pos + next) / 2;
+                p.clipped = true;
+                p.adjust = *m_adjust_preview;
+                if (const auto* sel = m_doc.selection())
+                    p.mask = std::make_shared<const pixel::TileMap>(
+                        core::select::inverted(sel, m_doc.mask_format(), im.width, im.height));
+                layers["@adjust-preview"] = std::move(p);
+            }
         const bool fresh = im.width != m_shown_image.width || im.height != m_shown_image.height ||
                            !(im.format == m_shown_image.format) || m_dirty.cols == 0;
         if (fresh) {

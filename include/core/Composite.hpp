@@ -7,7 +7,8 @@
 // alone, then blends the result); opacity x fill; clipping (a clipped layer
 // shows only where its base has pixels, and not at all if the base is
 // hidden); the blend modes of libs/pixel. RGB documents; other modes wait on
-// colour management. Layer styles, masks and adjustments come later.
+// colour management. s012: layer masks; s013: adjustment layers (applied
+// to what is below them, in their group). Layer styles come later.
 #include "core/Document.hpp"
 
 #include <cstdint>
@@ -67,6 +68,15 @@ struct TileSet {
 };
 TileSet tiles_of(const Image& im);       // the empty set on the image's grid
 TileSet changed_tiles(const Image& before_im, const Layers& before, const Image& after_im, const Layers& after);
+
+// s013: the layers as they are BELOW `id` -- `id` and everything painted
+// after it (its later siblings, and its groups' later siblings, up to the
+// top) hidden. What an adjustment layer's histogram is made from.
+Layers below(const Layers& all, const Document::Id& id);
+// s013: the histogram of the composite of `layers` -- every tile when there
+// are few, else an even spread of `max_tiles` of them.
+adjust::Histogram histogram_of(const Image& im, const Layers& layers, int max_tiles = 64,
+                               const std::function<bool()>& cancelled = {});
 
 // One tile of the composite for the screen: Cairo ARGB32 (premultiplied,
 // native-endian), `w` x `h` = the tile's part inside the image (an edge

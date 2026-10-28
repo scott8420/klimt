@@ -1,4 +1,5 @@
 #include "core/Composite.hpp"
+#include "core/Adjust.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -139,6 +140,48 @@ struct Walker {
         return nullptr;
     }
 
+    // s013: an ADJUSTMENT LAYER changes what is already in dst (what's below
+    // it here), seen through its mask and clip, at strength k (opacity x
+    // fill), in its blend mode (the adjusted colour blended onto the
+    // original). Alpha never changes.
+    void adjust_into(const Document::Id& id, const Layer& l, std::vector<float>& dst, float k) const {
+        if (k <= 0.f || adjust::identity(l.adjust)) return;
+        pixel::TileMap::TileRef mt;
+        if (l.mask && l.mask_on) {
+            mt = l.mask->tile(col, row);
+            if (mt && mt->is_uniform() && mt->get(0, 0).c[0] >= 1.f) return;   // wholly hidden here
+        }
+        thread_local std::vector<float> hide, clip, adj, mixed;
+        const float* hp = nullptr;
+        if (mt) { mt->premultiplied(hide); hp = hide.data(); }
+        const float* cp = nullptr;
+        if (l.clipped) {
+            if (const Layer* base = clip_base(id)) {
+                if (!base->visible || !pixels_of(*base, clip)) return;   // nothing to show through
+                cp = clip.data();
+            }
+        }
+        adj = dst;
+        adjust::run(*adjust::compile(l.adjust), adj.data(), kPx);
+        const float* res = adj.data();
+        if (l.blend != pixel::Blend::Normal && l.blend != pixel::Blend::PassThrough) {
+            mixed = dst;
+            blend_into(l.blend, adj, mixed, 1.f);
+            res = mixed.data();
+        }
+        float* d = dst.data();
+        for (std::size_t i = 0; i < kPx; ++i, d += 4) {
+            float w = k;
+            if (hp) w *= 1.f - std::clamp(hp[i], 0.f, 1.f);
+            if (cp) w *= cp[i * 4 + 3];
+            if (w <= 0.f) continue;
+            const float* r = res + i * 4;
+            d[0] += (r[0] - d[0]) * w;
+            d[1] += (r[1] - d[1]) * w;
+            d[2] += (r[2] - d[2]) * w;
+        }
+    }
+
     void group(const Document::Id& parent, std::vector<float>& dst) const {
         const auto it = kids.find(parent);
         if (it == kids.end()) return;
@@ -157,6 +200,10 @@ struct Walker {
                     group(id, tmp);
                     blend_into(l.blend, tmp, dst, op);
                 }
+                continue;
+            }
+            if (l.kind == Kind::Adjustment) {
+                adjust_into(id, l, dst, op * static_cast<float>(l.fill) / 100.f);
                 continue;
             }
             // s010 m3: one opaque colour at full strength, Normal, unclipped:
@@ -318,6 +365,7 @@ TileSet tiles_of(const Image& im) {
 namespace {
 // Every tile a layer's map holds (its footprint).
 void add_held(TileSet& t, const Layer* l) {
+    if (l && l->kind == Kind::Adjustment) { t.add_all(); return; }   // s013: it changes what's below, anywhere
     if (!l || !l->pixels) return;
     for (int row = 0; row < l->pixels->rows(); ++row)
         for (int col = 0; col < l->pixels->cols(); ++col)
@@ -388,6 +436,36 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
         add_related(t, after, id);
     }
     return t;
+}
+
+Layers below(const Layers& all, const Document::Id& id) {
+    Layers out = all;
+    for (Document::Id at = id; !at.empty();) {
+        const auto it = all.find(at);
+        if (it == all.end()) break;
+        const Layer& me = it->second;
+        for (auto& [oid, l] : out)
+            if (l.parent == me.parent && (oid == at || l.pos > me.pos)) l.visible = false;
+        at = me.parent;
+    }
+    return out;
+}
+
+adjust::Histogram histogram_of(const Image& im, const Layers& layers, int max_tiles, const std::function<bool()>& cancelled) {
+    adjust::Histogram h{};
+    const int cols = (im.width + kTile - 1) / kTile, rows = (im.height + kTile - 1) / kTile, n = cols * rows;
+    if (n <= 0) return h;
+    const int step = std::max(1, n / std::max(1, max_tiles));
+    std::vector<std::uint32_t> px;
+    for (int i = 0; i < n; i += step) {
+        if (cancelled && cancelled()) return h;
+        int w = 0, ht = 0;
+        composite_tile_argb(im, layers, i % cols, i / cols, px, w, ht);
+        const auto one = adjust::histogram(px);
+        for (std::size_t c = 0; c < h.size(); ++c)
+            for (std::size_t b = 0; b < 256; ++b) h[c][b] += one[c][b];
+    }
+    return h;
 }
 
 bool composite_argb(const Image& im, const Layers& layers, std::vector<std::uint32_t>& out,

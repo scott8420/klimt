@@ -16,6 +16,7 @@
     <!-- s005: the tool rail's icons -- made from scripts/icons-src/ by
          scripts/make_icons.sh (strokes -> filled outlines, so GTK can recolour) -->
     <file preprocess="xml-stripblanks" alias="klimt-layer-mask-symbolic.svg">icons/scalable/apps/klimt-layer-mask-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="klimt-adjustment-symbolic.svg">icons/scalable/apps/klimt-adjustment-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-subject-symbolic.svg">icons/scalable/apps/klimt-subject-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-brush-symbolic.svg">icons/scalable/apps/klimt-tool-brush-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-clone-symbolic.svg">icons/scalable/apps/klimt-tool-clone-symbolic.svg</file>

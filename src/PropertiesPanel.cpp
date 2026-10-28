@@ -22,7 +22,8 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
       m_lock_alpha("properties.lock.alpha"),
       m_lock_pixels("properties.lock.pixels"),
       m_lock_position("properties.lock.position"),
-      m_lock_all("properties.lock.all") {
+      m_lock_all("properties.lock.all"),
+      m_later("properties.later") {
     set_margin(12);
 
     auto head = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
@@ -107,15 +108,28 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
     grid->attach(*locks, 1, 3);
     m_fields.append(*grid);
 
-    // Where adjustments, filters and styles will be edited -- live, no dialogs.
-    auto later = Gtk::make_managed<Gtk::Label>(
-        "Adjustments, live filters and styles are edited here, on the layer, "
-        "with the canvas updating -- they arrive with pixels.");
-    later->set_wrap(true);
-    later->set_xalign(0.0f);
-    later->add_css_class("dim-label");
-    later->add_css_class("caption");
-    m_fields.append(*later);
+    // s013: an adjustment layer's controls -- live, no dialog. A drag on a
+    // slider or the graph is ONE step; presses fold.
+    m_adjust.set_visible(false);
+    m_adjust.signal_begin().connect([this] {
+        if (!m_adjust_id.empty()) L::adjust_begin(m_journal, m_doc, m_adjust_id);
+    });
+    m_adjust.signal_changed().connect([this](const core::Adjust& a) {
+        if (m_painting || m_adjust_id.empty()) return;
+        if (m_journal.in_gesture()) L::adjust_to(m_journal, m_doc, m_adjust_id, a);
+        else L::set_adjust(m_journal, m_doc, m_adjust_id, a);
+    });
+    m_adjust.signal_end().connect([this] { L::adjust_end(m_journal); });
+    m_fields.append(m_adjust);
+
+    // Where live filters and styles will be edited -- no dialogs.
+    m_later.set_text("Live filters and layer styles will be edited here too, on the layer, "
+                     "with the canvas updating.");
+    m_later.set_wrap(true);
+    m_later.set_xalign(0.0f);
+    m_later.add_css_class("dim-label");
+    m_later.add_css_class("caption");
+    m_fields.append(m_later);
     append(m_fields);
 
     paint();
@@ -137,8 +151,9 @@ void PropertiesPanel::paint() {
         return;
     }
     m_title.set_text(l->name.empty() ? "Untitled" : l->name);
-    std::string sub = l->kind == core::Kind::Group
-        ? "group of " + std::to_string(m_doc.panel(primary()).size()) : std::string("pixel layer");
+    std::string sub = l->kind == core::Kind::Group ? "group of " + std::to_string(m_doc.panel(primary()).size())
+                    : l->kind == core::Kind::Adjustment ? std::string("adjustment layer")
+                    : std::string("pixel layer");
     if (m_sel.size() > 1) sub += " · +" + std::to_string(m_sel.size() - 1) + " more";
     m_subtitle.set_text(sub);
 
@@ -157,7 +172,29 @@ void PropertiesPanel::paint() {
     m_lock_pixels.set_active(l->locks & core::lock::Pixels);
     m_lock_position.set_active(l->locks & core::lock::Position);
     m_lock_all.set_active(l->locks & core::lock::All);
+    // s013: one adjustment layer picked: its controls.
+    const bool adj = l->kind == core::Kind::Adjustment && m_sel.size() == 1;
+    m_adjust.set_visible(adj);
+    m_later.set_visible(!adj);
+    if (adj && primary() != m_adjust_id) m_adjust.set(core::Adjust{});   // another layer: fresh controls
+    m_adjust_id = adj ? primary() : Id{};
+    if (adj) {
+        m_adjust.set_sensitive(!m_doc.locked_all(primary()));
+        if (!m_journal.in_gesture()) m_adjust.set(l->adjust);   // mid-drag the editor is ahead of the document
+        const bool wants = l->adjust.kind == core::AdjustKind::Levels || l->adjust.kind == core::AdjustKind::Curves;
+        if (wants && m_hist_id != primary()) {
+            m_hist_id = primary();
+            m_adjust.set_histogram(std::nullopt);
+            m_hist_wanted.emit(primary());
+        }
+    } else {
+        m_hist_id.clear();
+    }
     m_painting = false;
+}
+
+void PropertiesPanel::set_histogram(const Id& id, const core::adjust::Histogram& h) {
+    if (id == m_hist_id && id == m_adjust_id) m_adjust.set_histogram(h);
 }
 
 void PropertiesPanel::on_blend() {
