@@ -97,6 +97,7 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     strip_scroll->set_propagate_natural_height(true);
     strip_scroll->set_child(m_strip);
     strip_box->append(*strip_scroll);
+    build_tabs(m_centre);   // s020: the document tabs, over the strip
     m_strip_box = strip_box;
     m_centre.append(*strip_box);
     m_centre.append(m_canvas);
@@ -246,11 +247,13 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     file->append("Save", "win.save");
     file->append("Save As…", "win.save-as");
     file->append("Export…", "win.export");
+    file->append("Close Tab", "win.tab-close");   // s020
     menu->append_section(file);
 
     m_edit_menu = Gio::Menu::create();
     m_edit_menu->append("Undo", "win.undo");
     m_edit_menu->append("Redo", "win.redo");
+    m_edit_menu->append("Fade…", "win.fade");   // s020: relabelled with the step it fades
     menu->append_section(m_edit_menu);
     auto edit = Gio::Menu::create();
     edit->append("Fill with Foreground", "win.fill-fg");

@@ -154,6 +154,10 @@ void Shell::update_undo_ui() {
         m_edit_menu->append(u.empty() ? "Undo" : "Undo " + u, "win.undo");
         m_edit_menu->append(r.empty() ? "Redo" : "Redo " + r, "win.redo");
     }
+    // s020: Edit > Fade follows the last step too.
+    const auto fade = core::fade::source(m_journal, m_doc);
+    if (m_act_fade) m_act_fade->set_enabled(fade.has_value());
+    if (m_edit_menu) m_edit_menu->append(fade ? "Fade " + fade->what + "…" : "Fade…", "win.fade");
 }
 
 // The document in a line: the title's subtitle and the status line.

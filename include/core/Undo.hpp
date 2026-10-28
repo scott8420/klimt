@@ -226,6 +226,32 @@ public:
     // A different document / folder: no step carries over.
     void clear() { m_steps.clear(); m_at = 0; m_base = ++m_serial; notify(); }
 
+    // s020 -- DOCUMENT TABS: each tab keeps its own history. A parked one
+    // is its steps and where it stands; swap_history() trades the live one
+    // with it (the window's tab switch, alongside Document::swap_parked).
+    // Serials stay ONE counter for the whole window, so a mark from one tab
+    // can never match another's state. Refused (false) inside the door or a
+    // gesture: a switch waits for the stroke to end.
+    struct History {
+        std::vector<Step> steps;
+        std::size_t       at = 0;
+        std::uint64_t     base = 0;
+    };
+    // A fresh history (a new tab) -- its own base state, never matched by
+    // another tab's mark.
+    History fresh_history() { History h; h.base = ++m_serial; return h; }
+    bool swap_history(History& h) {
+        if (m_depth > 0 || m_gesture) return false;
+        std::swap(m_steps, h.steps);
+        std::swap(m_at, h.at);
+        std::swap(m_base, h.base);
+        notify();
+        return true;
+    }
+    // s020 -- Edit > Fade reads the step it fades: the last one done, or
+    // nullptr. (Its entries' before / after are the record values.)
+    const Step* last_done() const { return m_at > 0 ? &m_steps[m_at - 1] : nullptr; }
+
     // s007 -- WHICH STATE the document is in, as far as the journal knows: a
     // number that differs whenever the steps done differ. A save remembers
     // it; "unsaved changes" is mark() != the saved one. Undo back to the save

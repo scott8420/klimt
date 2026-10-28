@@ -9,6 +9,8 @@
 #include "core/Canvas.hpp"     // s009: Crop, Image / Canvas Size
 #include "core/Transform.hpp"  // s011: Free Transform
 #include "core/Prefs.hpp"      // s014 m4: settings remembered between runs
+#include "core/Tabs.hpp"       // s020: several documents in one window
+#include "core/Fade.hpp"       // s020: Edit > Fade
 #include "CanvasView.hpp"
 #include "ContextStrip.hpp"
 #include "EdgeTab.hpp"
@@ -29,6 +31,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -37,6 +40,9 @@
 typedef struct _AdwOverlaySplitView AdwOverlaySplitView;
 typedef struct _AdwToastOverlay AdwToastOverlay;
 typedef struct _AdwWindowTitle AdwWindowTitle;
+typedef struct _AdwTabView AdwTabView;   // s020
+typedef struct _AdwTabBar AdwTabBar;
+typedef struct _AdwTabPage AdwTabPage;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shell -- the Klimt window (s005: the frame of docs/ui.md), AND the
@@ -70,6 +76,8 @@ typedef struct _AdwWindowTitle AdwWindowTitle;
 //   Canvas   -- Crop, Image Size, Canvas Size (jobs).    src/Shell_canvas.cpp (s009)
 //   Transform-- Free Transform, flips, quarter turns.    src/Shell_transform.cpp (s011)
 //   Masks    -- the Layer Mask menu, the mask view.     src/Shell_masks.cpp (s012)
+//   Tabs     -- document tabs: switch, close, the bar.  src/Shell_tabs.cpp (s020)
+//   Fade     -- Edit > Fade: the dialog, its preview.   src/Shell_fade.cpp (s020)
 //   Glue     -- the ctor + build_ui().                   src/Shell.cpp
 //
 // Finding things
@@ -87,6 +95,7 @@ class NewDialog;
 class NumberDialog;
 class AdjustDialog;
 class FilterDialog;
+class FadeDialog;
 class ShortcutsDialog;
 class SizeDialog;
 
@@ -97,6 +106,7 @@ public:
 
     void build_ui();                             // category: glue
     void open_path(const std::string& path);     // category: files: open a file (the command line, Open)
+    void open_paths(const std::vector<std::string>& paths);   // category: files: s020 -- several, one tab each, in turn
     void start();                                // category: files: launched with no file -- the New dialog (s009)
 
 private:
@@ -133,9 +143,23 @@ private:
     void save_to(const std::string& path, std::function<void()> then = {});   // category: files: a save JOB
     void adopt(core::file::Contents c, const std::string& path, const std::string& name);   // category: files: the document becomes c
     void ask_unsaved(const std::string& doing, std::function<void()> go);   // category: files: Save / Discard / Cancel
-    bool dirty() const { return m_journal.mark() != m_saved_mark; }
+    bool dirty() const { return m_tabs.dirty(m_tabs.live()); }
     bool file_job_busy();                        // category: files: one open / save / export at a time
     void update_title();                         // category: files: the name, and a dot when unsaved
+
+    // ── tabs (s020) ────────────────────────────────────────────────────────
+    void build_tabs(Gtk::Box& into);             // category: tabs: the bar (over the strip) and its view
+    bool doc_busy(bool say);                     // category: tabs: a job / stroke / preview on the live document?
+    bool tab_reusable() const;                   // category: tabs: the live tab is empty and clean -- New / Open fill it
+    bool new_tab();                              // category: tabs: an empty tab after the live one, shown
+    bool show_tab(std::size_t i);                // category: tabs: tab i becomes the live document
+    void after_switch();                         // category: tabs: everything that follows the document, again
+    void remember_tab();                         // category: tabs: the live tab's view, kept while it is parked
+    void close_tab(std::size_t i);               // category: tabs: Ctrl+W / the tab's x -- asks if unsaved
+    void close_all_then(std::function<void()> done, std::set<std::uint64_t> answered = {});   // category: tabs: quitting -- each unsaved tab asks
+    void sync_tabs();                            // category: tabs: the pages follow the model (titles, order, selection)
+    void step_tab(int by);                       // category: tabs: Ctrl+Tab / Ctrl+Shift+Tab
+    AdwTabPage* page_of(std::uint64_t key) const;   // category: tabs: the bar's page of a tab
 
     // ── selection (s008) ───────────────────────────────────────────────────
     void on_shape(const CanvasView::Shape& shape);   // category: select: a marquee / lasso finished
@@ -212,6 +236,10 @@ private:
     void filter_preview_stop();                  // category: filter: drop the preview and its job
     void on_live_edit(const core::Document::Id& id, std::size_t i);
     void on_style(const std::string& verb);      // category: layer: s019 -- Layer > Layer Style   // category: filter: s018 -- a live filter's dialog
+    void on_fade();                              // category: fade: s020 -- Edit > Fade (the dialog)
+    void fade_preview_soon();                    // category: fade: the preview, a moment after the last change
+    void fade_preview_stop();                    // category: fade: drop the preview and its job
+    void fade_run();                             // category: fade: OK -- a job, ONE step
     void on_histogram(const core::Document::Id& id);   // category: adjust: what's below an adjustment layer, counted (a job)
 
     // ── helpers ────────────────────────────────────────────────────────────
@@ -242,6 +270,7 @@ private:
     // holds a reference to it, then the panels that hold both.
     core::Document     m_doc;
     core::DocJournal   m_journal{m_doc};
+    core::Tabs         m_tabs{m_doc, m_journal};   // s020: the live pair + the parked tabs
     LayersPanel        m_layers{m_doc, m_journal};
     PropertiesPanel    m_properties{m_doc, m_journal};
     HistoryPanel       m_history{m_journal};
@@ -281,13 +310,17 @@ private:
     std::map<int, std::unique_ptr<NumberDialog>> m_modify_dialogs;  // s011 m4: one per Modify kind
     std::unique_ptr<AdjustDialog>    m_adjust_dialog;               // s013: Image > Adjustments
     std::unique_ptr<FilterDialog>    m_filter_dialog;               // s014: the Filter menu
+    std::unique_ptr<FadeDialog>      m_fade_dialog;                 // s020: Edit > Fade
 
     // ── the file (s007) ────────────────────────────────────────────────────
-    std::string        m_path;                 // the .klimt this document saves to; "" = never saved
-    std::string        m_name = "No Image";    // what the title says ("photo.png", "Untitled"); s009: none at start
+    // s020: the live tab's file (the .klimt it saves to, its name, its saved
+    // mark) lives in m_tabs.live_info(); these name it.
+    std::string&       path_() { return m_tabs.live_info().path; }
+    std::string&       name_() { return m_tabs.live_info().name; }
     std::string        m_folder;               // where the last chooser was (view state)
-    std::uint64_t      m_saved_mark = 0;       // m_journal.mark() when it last matched a file
     core::Jobs::Id     m_file_job = 0;         // the open / save / export in flight
+    std::vector<std::string> m_open_queue;     // s020: files still to open (the command line, a second launch)
+    void open_next();                          // category: files: the queue's next, once no file job runs
 
     // ── the stroke in progress (s008 m4) ───────────────────────────────────
     struct Stroke {
@@ -377,11 +410,31 @@ private:
     std::optional<core::Styles> m_style_clip;            // s019: Copy Layer Style   // s018: the dialog's Live box, remembered
     std::optional<std::size_t>  m_filter_edit;           // s018: the live filter the dialog edits
     core::Jobs::Id              m_filter_landing = 0;   // OK's job: the preview stays until it lands
+    // s020: Edit > Fade -- what it fades, the preview's timer and job, OK's job.
+    std::optional<core::fade::Source> m_fade_src;
+    sigc::connection            m_fade_soon;
+    core::Jobs::Id              m_fade_job = 0, m_fade_landing = 0;
+    Glib::RefPtr<Gio::SimpleAction> m_act_fade;
     // s014 m4: the app's settings (~/.config/klimt/prefs.json); saved a moment
     // after a change (the divider dragged).
     core::Prefs                 m_prefs;
     std::string                 m_prefs_file;
     sigc::connection            m_prefs_soon;
+
+    // ── the tabs (s020) ────────────────────────────────────────────────────
+    AdwTabView*        m_tab_view = nullptr;     // pages with empty children: the bar's model
+    AdwTabBar*         m_tab_bar = nullptr;
+    bool               m_tab_sync = false;       // the pages are being set from the model
+    std::map<std::uint64_t, AdwTabPage*> m_pages;   // a tab's key -> its page
+    struct TabView {                             // what a parked tab keeps of the window
+        CanvasView::View view;
+        std::vector<core::Document::Id> selection;
+        std::string      mask_view;
+        bool             quick_mask = false;
+        core::paint::CloneSource clone;
+        bool             known = false;
+    };
+    std::map<std::uint64_t, TabView> m_tab_views;
 
     // ── the ants (s008) ────────────────────────────────────────────────────
     std::shared_ptr<const pixel::TileMap> m_ants_for;   // the mask the canvas's ants are of

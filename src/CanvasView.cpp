@@ -428,6 +428,16 @@ void CanvasView::fit() {
     queue_draw();
 }
 
+void CanvasView::set_view(const View& v) {
+    if (v.fit || v.zoom <= 0) { fit(); return; }
+    m_fit = false;
+    m_zoom = v.zoom;
+    m_cx = v.cx;
+    m_cy = v.cy;
+    tell_zoom();
+    queue_draw();
+}
+
 void CanvasView::actual_size() { zoom_at(1.0, m_vw / 2.0, m_vh / 2.0); }
 
 void CanvasView::zoom_in() {

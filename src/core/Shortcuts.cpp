@@ -128,6 +128,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Edit", "", {}, "Alt+Backspace", "Fill the selection (or the layer) with the foreground colour"},
         {"Edit", "", {}, "Ctrl+Backspace", "Fill with the background colour"},
         {"Edit", "", {}, "Delete  /  Backspace  (on the canvas)", "Delete the selected pixels"},
+        {"Edit", "win.fade", {"<Ctrl><Shift>f"}, "", "Fade the last filter / stroke / fill -- opacity and mode"},
 
         // ── File (s007) ───────────────────────────────────────────────────────
         {"File", "win.new",     {"<Ctrl>n"}, "", "New image"},
@@ -135,6 +136,10 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"File", "win.save",    {"<Ctrl>s"}, "", "Save (.klimt)"},
         {"File", "win.save-as", {"<Ctrl><Shift>s"}, "", "Save As (.klimt)"},
         {"File", "win.export",  {"<Ctrl><Shift>e"}, "", "Export a flat PNG, JPEG or TIFF"},
+        // s020: document tabs.
+        {"File", "win.tab-close", {"<Ctrl>w"}, "", "Close the tab (asks if unsaved)"},
+        {"File", "win.tab-next",  {"<Ctrl>Tab", "<Ctrl>Page_Down"}, "", "Next tab"},
+        {"File", "win.tab-prev",  {"<Ctrl><Shift>Tab", "<Ctrl><Shift>ISO_Left_Tab", "<Ctrl>Page_Up"}, "", "Previous tab"},
 
         // ── General ───────────────────────────────────────────────────────────
         // s014: the Filter menu (Photoshop's classic keys).

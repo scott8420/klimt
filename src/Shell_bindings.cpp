@@ -23,6 +23,11 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["save-as"] = add_action("save-as", sigc::mem_fun(*this, &Shell::on_save_as));
     m_layer_acts["export"]  = add_action("export",  sigc::mem_fun(*this, &Shell::on_export));
     add_action("open-demo", sigc::mem_fun(*this, &Shell::open_demo));   // s009: Help > Open Demo
+    // s020: document tabs (Shell_tabs.cpp).
+    add_action("tab-close", [this] { close_tab(m_tabs.live()); });
+    add_action("tab-next",  [this] { step_tab(+1); });
+    add_action("tab-prev",  [this] { step_tab(-1); });
+    m_act_fade = add_action("fade", sigc::mem_fun(*this, &Shell::on_fade));   // s020: Edit > Fade
     // s007 m4: the view (view state: not steps).
     add_action("zoom-in",     [this] { m_canvas.zoom_in(); });
     add_action("zoom-out",    [this] { m_canvas.zoom_out(); });
@@ -184,7 +189,6 @@ void Shell::bind_actions() {  // bindings
     // s009 (Scott, s008 -> s009, answer 3): Klimt starts with NO image -- the
     // New dialog comes up (App::on_activate -> start()); the demo is under
     // Help > Open Demo.
-    m_saved_mark = m_journal.mark();
     update_title();
 
     // ── the window's own keys ───────────────────────────────────────────────

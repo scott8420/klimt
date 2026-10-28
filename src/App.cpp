@@ -55,7 +55,10 @@ void App::on_activate() {
 void App::on_open(const type_vec_files& files, const Glib::ustring&) {
     Shell* shell = ensure_shell();
     shell->present();
-    if (!files.empty() && !files.front()->get_path().empty()) shell->open_path(files.front()->get_path());
+    // s020: every file, each in a tab of its own.
+    std::vector<std::string> paths;
+    for (const auto& f : files) if (f && !f->get_path().empty()) paths.push_back(f->get_path());
+    shell->open_paths(paths);
 }
 
 Shell* App::ensure_shell() {

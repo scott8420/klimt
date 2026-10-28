@@ -203,6 +203,22 @@ public:
     // groups only.
     std::string check() const;
 
+    // s020 -- DOCUMENT TABS. A document not on screen is PARKED: its records
+    // moved out whole (O(1): maps and shared pixels). swap_parked() trades
+    // this document's contents with a parked one -- the window's other tab
+    // comes in, this one goes out. Only under Loading (not a step: each tab
+    // keeps its own journal history, swapped alongside). The door and the
+    // change callback stay: they belong to the window, not the document.
+    struct Parked {
+        std::map<Id, Layer>          items;
+        std::optional<Layer>         selection;
+        std::map<Id, Layer>          channels;
+        Image                        image;
+        std::shared_ptr<const Image> image_ptr = std::make_shared<const Image>();
+        int                          next = 1;
+    };
+    void swap_parked(Parked& p);
+
     // ── the one-door guard ──────────────────────────────────────────────────
     void set_door(std::function<bool()> open) { m_door = std::move(open); }
     int  strays() const { return m_strays; }

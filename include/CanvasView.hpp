@@ -57,6 +57,10 @@ public:
     void zoom_out();
     double zoom() const { return m_zoom; }
     bool   fitting() const { return m_fit; }
+    // s020: a document tab keeps its view (zoom, centre, fit) while parked.
+    struct View { double zoom = 1, cx = 0, cy = 0; bool fit = true; };
+    View   view() const { return {m_zoom, m_cx, m_cy, m_fit}; }
+    void   set_view(const View& v);
     // The tile the view's centre is on, for ordering work (visible first).
     void   view_centre(double& x, double& y) const { x = m_cx; y = m_cy; }
     // s014: the image pixels the view shows (clipped to the image) -- what a

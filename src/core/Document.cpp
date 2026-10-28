@@ -1,4 +1,5 @@
 #include "core/Document.hpp"
+#include "core/Fade.hpp"   // s020: the verb table's fade
 #include "core/Selection.hpp"   // s008: the verb table carries the selection verbs
 #include "core/Paint.hpp"       // s008 m4: and the brush
 #include "core/Move.hpp"        // s009 m1: and the Move tool
@@ -225,6 +226,18 @@ void Document::replace(const Image& im, std::map<Id, Layer> layers, int next) {
         if (id.size() > 1 && id[0] == 'L' && id.size() < 10 &&
             std::all_of(id.begin() + 1, id.end(), [](char c) { return c >= '0' && c <= '9'; }))
             m_next = std::max(m_next, std::stoi(id.substr(1)) + 1);
+    if (m_changed) m_changed();
+}
+
+void Document::swap_parked(Parked& p) {
+    if (m_loading == 0) ++m_strays;   // not a user choice: a tab switch, under Loading
+    std::swap(m_items, p.items);
+    std::swap(m_selection, p.selection);
+    std::swap(m_channels, p.channels);
+    std::swap(m_image, p.image);
+    std::swap(m_image_ptr, p.image_ptr);
+    if (!m_image_ptr) m_image_ptr = std::make_shared<const Image>(m_image);
+    std::swap(m_next, p.next);
     if (m_changed) m_changed();
 }
 
@@ -1009,6 +1022,9 @@ const std::vector<Verb>& verbs() {
              styles_end(j); }},
         {"paste_styles",  [](DocJournal& j, Document& d) {
              Styles s; s.outer.on = true; set_styles_on(j, d, {"L4", "L5", "L2"}, s, "Paste Layer Style"); }},
+        // s020: Edit > Fade -- the square half-way back to nothing.
+        {"fade",          [](DocJournal& j, Document& d) {
+             layers::fade(j, d, "L4", nullptr, d.get("L4")->pixels, 0.5, Blend::Multiply, "Brush"); }},
         // s016: saved selections -- save, load (adding), delete.
         {"save_channel",  [](DocJournal& j, Document& d) { select::save_channel(j, d); },
              [](Document& d) { load_selection(d, {100, 100, 80, 60}); }},

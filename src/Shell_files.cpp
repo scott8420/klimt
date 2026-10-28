@@ -48,9 +48,10 @@ formats::Progress progress_of(core::Jobs::Token& t) {
 }  // namespace
 
 void Shell::update_title() {
-    const std::string t = (dirty() ? "• " : "") + m_name;
+    const std::string t = (dirty() ? "• " : "") + name_();
     if (m_title) adw_window_title_set_title(m_title, t.c_str());
-    set_title(m_name + " — Klimt");
+    set_title(name_() + " — Klimt");
+    sync_tabs();   // s020: the tab says it too
 }
 
 bool Shell::file_job_busy() {
@@ -73,9 +74,9 @@ void Shell::adopt(core::file::Contents c, const std::string& path, const std::st
         m_doc.replace_channels(std::move(c.channels));   // s016
     }
     m_journal.clear();
-    m_saved_mark = m_journal.mark();
-    m_path = path;
-    m_name = name;
+    m_tabs.live_info().saved_mark = m_journal.mark();
+    path_() = path;
+    name_() = name;
     m_layers.forget_view();
     const auto top = m_doc.panel("");
     if (!top.empty()) m_layers.select({top.front()}, false);
@@ -94,7 +95,7 @@ void Shell::adopt(core::file::Contents c, const std::string& path, const std::st
 // Save / Discard / Cancel, then `go` (unless Cancel). Nothing unsaved: `go`.
 void Shell::ask_unsaved(const std::string& doing, std::function<void()> go) {
     if (!dirty()) { go(); return; }
-    auto a = Gtk::AlertDialog::create("Save changes to “" + m_name + "” before " + doing + "?");
+    auto a = Gtk::AlertDialog::create("Save changes to “" + name_() + "” before " + doing + "?");
     a->set_detail("Changes not saved are lost.");
     a->set_buttons({"Cancel", "Discard", "Save"});
     a->set_cancel_button(0);
@@ -104,11 +105,11 @@ void Shell::ask_unsaved(const std::string& doing, std::function<void()> go) {
         try { i = a->choose_finish(res); } catch (const Glib::Error&) { return; }
         if (i == 1) { go(); return; }
         if (i != 2) return;
-        if (!m_path.empty()) { save_to(m_path, go); return; }
+        if (!path_().empty()) { save_to(path_(), go); return; }
         // Never saved: Save As first, then go.
         auto dlg = Gtk::FileDialog::create();
         dlg->set_title("Save As");
-        dlg->set_initial_name(stem_of(m_name) + ".klimt");
+        dlg->set_initial_name(stem_of(name_()) + ".klimt");
         if (!m_folder.empty()) dlg->set_initial_folder(Gio::File::create_for_path(m_folder));
         dlg->save(*this, [this, dlg, go](Glib::RefPtr<Gio::AsyncResult>& r) {
             Glib::RefPtr<Gio::File> f;
@@ -121,11 +122,16 @@ void Shell::ask_unsaved(const std::string& doing, std::function<void()> go) {
     });
 }
 
+// s020: every tab with unsaved changes asks, in turn (each shown first).
 bool Shell::on_close_request() {
     if (m_closing) return false;
     if (file_job_busy()) return true;
-    if (!dirty()) return false;
-    ask_unsaved("closing", [this] { m_closing = true; close(); });
+    bool any = false;
+    for (std::size_t i = 0; i < m_tabs.count(); ++i) any = any || m_tabs.dirty(i);
+    if (!any) return false;
+    // From idle: closing inside the dialog's own callback left GLib criticals
+    // on the way out (seen under Xvfb, s019 too).
+    close_all_then([this] { Glib::signal_idle().connect_once([this] { m_closing = true; close(); }); });
     return true;
 }
 
@@ -139,7 +145,9 @@ void Shell::start() {
 // s009: Help > Open Demo -- the demo document in place of this one.
 void Shell::open_demo() {
     if (file_job_busy()) return;
-    ask_unsaved("opening the demo", [this] {
+    // s020: in a tab of its own (the live one when it is empty).
+    if (!tab_reusable() && !new_tab()) return;
+    {
         {
             core::Document::Loading load(m_doc);
             m_doc.replace({}, {}, 1);
@@ -147,35 +155,36 @@ void Shell::open_demo() {
         m_layers.forget_view();
         load_demo();
         m_journal.clear();
-        m_saved_mark = m_journal.mark();
-        m_path.clear();
-        m_name = "Demo";
+        m_tabs.live_info().saved_mark = m_journal.mark();
+        path_().clear();
+        name_() = "Demo";
         m_canvas.set_document(m_doc.image().width, m_doc.image().height);
         m_dirty = {};
         m_canvas.fit();
         update_title();
         update_summary();
         update_layer_actions();
-    });
+    }
 }
 
+// s020: New and Open make a TAB (the live one when it is empty and clean);
+// nothing is replaced, so nothing asks.
 void Shell::on_new() {
     if (file_job_busy()) return;
-    ask_unsaved("making a new image", [this] {
-        if (!m_new) {
-            m_new = std::make_unique<NewDialog>(*this);
-            m_new->signal_create().connect([this](const core::file::NewSpec& s) {
-                adopt(core::file::make_new(s), "", "Untitled");
-            });
-        }
-        m_new->open();
-    });
+    if (!m_new) {
+        m_new = std::make_unique<NewDialog>(*this);
+        m_new->signal_create().connect([this](const core::file::NewSpec& s) {
+            if (!tab_reusable() && !new_tab()) return;
+            adopt(core::file::make_new(s), "", "Untitled");
+        });
+    }
+    m_new->open();
 }
 
 // ── Open ────────────────────────────────────────────────────────────────────
 void Shell::on_open() {
     if (file_job_busy()) return;
-    ask_unsaved("opening another", [this] {
+    {
         auto dlg = Gtk::FileDialog::create();
         dlg->set_title("Open");
         auto filters = Gio::ListStore<Gtk::FileFilter>::create();
@@ -193,37 +202,71 @@ void Shell::on_open() {
             try { f = dlg->open_finish(res); } catch (const Glib::Error&) { return; }
             if (f && !f->get_path().empty()) open_path(f->get_path());
         });
-    });
+    }
+}
+
+// s020: several files -- each in its own tab, one open job at a time.
+void Shell::open_paths(const std::vector<std::string>& paths) {
+    m_open_queue.insert(m_open_queue.end(), paths.begin(), paths.end());
+    open_next();
+}
+
+void Shell::open_next() {
+    using S = core::Jobs::State;
+    if (m_open_queue.empty()) return;
+    if (m_file_job) {
+        const auto st = m_jobs.state(m_file_job);
+        if (st == S::Queued || st == S::Running || st == S::Done) return;   // its landing calls again
+    }
+    const std::string p = m_open_queue.front();
+    m_open_queue.erase(m_open_queue.begin());
+    open_path(p);
+    if (!m_file_job || m_jobs.state(m_file_job) == S::Landed) open_next();   // nothing started (already open)
 }
 
 void Shell::open_path(const std::string& path) {
     if (file_job_busy()) return;
     const std::string name = fs::path(path).filename().string();
     m_folder = fs::path(path).parent_path().string();
-    // The command line comes straight here: unsaved changes still ask.
-    ask_unsaved("opening “" + name + "”", [this, path, name] {
+    // s020: already open in a tab? That tab, not a second copy.
+    std::error_code ec;
+    const std::string canon = fs::weakly_canonical(path, ec).string();
+    for (std::size_t i = 0; i < m_tabs.count(); ++i) {
+        const auto& p = m_tabs.info(i).path;
+        if (!p.empty() && (p == path || fs::weakly_canonical(p, ec).string() == canon)) {
+            if (show_tab(i)) toast("“" + name + "” is open here already");
+            return;
+        }
+    }
+    {
         m_file_job = start_job("Open " + name, [this, path, name](core::Jobs::Token& t) -> core::Jobs::Landing {
             std::string err;
             auto c = core::file::open(path, err, progress_of(t));
             if (!c) {
                 if (t.cancelled()) return [] {};
-                return [this, name, err] { toast("Couldn't open “" + name + "”: " + err); };
+                return [this, name, err] {
+                    toast("Couldn't open “" + name + "”: " + err);
+                    Glib::signal_idle().connect_once([this] { open_next(); });
+                };
             }
             auto shared = std::make_shared<core::file::Contents>(std::move(*c));
             return [this, shared, path, name] {
                 const bool native = shared->kind == formats::Kind::Klimt;
+                // s020: a tab of its own -- made now, when there is something to show.
+                if (!tab_reusable() && !new_tab()) { toast("“" + name + "” opened, but the image can't be shown now -- try again"); return; }
                 adopt(std::move(*shared), native ? path : std::string{}, name);
+                Glib::signal_idle().connect_once([this] { open_next(); });
             };
         });
-    });
+    }
 }
 
 // ── Save ────────────────────────────────────────────────────────────────────
 void Shell::on_save() {
     if (!has_image()) { toast("No image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
-    if (m_path.empty()) { on_save_as(); return; }
+    if (path_().empty()) { on_save_as(); return; }
     if (file_job_busy()) return;
-    save_to(m_path);
+    save_to(path_());
 }
 
 void Shell::on_save_as() {
@@ -234,7 +277,7 @@ void Shell::on_save_as() {
     auto filters = Gio::ListStore<Gtk::FileFilter>::create();
     filters->append(filter("Klimt document (.klimt)", {"klimt"}));
     dlg->set_filters(filters);
-    dlg->set_initial_name(stem_of(m_name) + ".klimt");
+    dlg->set_initial_name(stem_of(name_()) + ".klimt");
     if (!m_folder.empty()) dlg->set_initial_folder(Gio::File::create_for_path(m_folder));
     dlg->save(*this, [this, dlg](Glib::RefPtr<Gio::AsyncResult>& res) {
         Glib::RefPtr<Gio::File> f;
@@ -260,20 +303,25 @@ void Shell::save_to(const std::string& path, std::function<void()> then) {
     const auto mark = m_journal.mark();
     const std::string name = fs::path(path).filename().string();
     m_folder = fs::path(path).parent_path().string();
-    m_file_job = start_job("Save " + name, [this, c = std::move(c), path, name, mark, then](core::Jobs::Token& t)
+    const auto key = m_tabs.live_info().key;   // s020: the landing finds its tab by key
+    m_file_job = start_job("Save " + name, [this, c = std::move(c), path, name, mark, then, key](core::Jobs::Token& t)
                                                -> core::Jobs::Landing {
         std::string err;
         if (!core::file::save_klimt(path, c, err, progress_of(t))) {
             if (t.cancelled()) return [this] { toast("Save cancelled -- the file is as it was"); };
             return [this, name, err] { toast("Couldn't save “" + name + "”: " + err); };
         }
-        return [this, path, name, mark, then] {
-            m_path = path;
-            m_name = name;
-            m_saved_mark = mark;
+        return [this, path, name, mark, then, key] {
+            const auto i = m_tabs.by_key(key);
+            if (!i) { toast("Saved “" + name + "”"); return; }   // its tab was closed meanwhile
+            auto& info = m_tabs.info(*i);
+            info.path = path;
+            info.name = name;
+            info.saved_mark = mark;
             update_title();
             toast("Saved “" + name + "”");
             if (then) then();
+            Glib::signal_idle().connect_once([this] { open_next(); });   // s020: a file waiting to open
         };
     });
 }
@@ -292,7 +340,7 @@ void Shell::on_export() {
     filters->append(filter("TIFF", {"tif", "tiff"}));
     dlg->set_filters(filters);
     dlg->set_default_filter(any);
-    dlg->set_initial_name(stem_of(m_name) + ".png");
+    dlg->set_initial_name(stem_of(name_()) + ".png");
     if (!m_folder.empty()) dlg->set_initial_folder(Gio::File::create_for_path(m_folder));
     dlg->save(*this, [this, dlg](Glib::RefPtr<Gio::AsyncResult>& res) {
         Glib::RefPtr<Gio::File> f;
