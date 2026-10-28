@@ -1,5 +1,6 @@
 // core::live -- live filters (s018). See core/Live.hpp.
 #include "core/Live.hpp"
+#include "core/StylesRender.hpp"   // s019
 
 #include <algorithm>
 #include <future>
@@ -12,6 +13,8 @@ struct Entry {
     std::shared_ptr<const pixel::TileMap> src;   // held: the pointer stays unique while cached
     std::shared_ptr<const pixel::TileMap> mask;  // m3: the filter mask (nullptr: none)
     std::vector<LiveFilter> stack;
+    Styles styles;   // s019 (and the fill, which styles keep off their effects)
+    int fill = 100;
     std::shared_future<std::shared_ptr<const pixel::TileMap>> result;
     std::uint64_t used = 0;
 };
@@ -80,6 +83,7 @@ pixel::TileMap masked(const pixel::TileMap& raw, const pixel::TileMap& filtered,
 
 bool active(const Layer& l) {
     if (l.kind != Kind::Pixel || !l.pixels) return false;
+    if (l.styles.any()) return true;   // s019
     for (const auto& f : l.filters) if (f.on && f.f.kind != FilterKind::None) return true;
     return false;
 }
@@ -104,7 +108,8 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
     {
         std::lock_guard g(g_mutex);
         for (auto& e : g_cache)
-            if (e.src == l.pixels && e.mask == l.filter_mask && e.stack == stack) { e.used = ++g_clock; fut = e.result; break; }
+            if (e.src == l.pixels && e.mask == l.filter_mask && e.stack == stack && e.styles == l.styles &&
+                (!l.styles.any() || e.fill == l.fill)) { e.used = ++g_clock; fut = e.result; break; }
         if (!fut.valid()) {
             if (g_cache.size() >= kKeep) {   // the least used, finished entry goes
                 auto victim = g_cache.end();
@@ -114,13 +119,14 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
                 if (victim != g_cache.end()) g_cache.erase(victim);
             }
             fut = mine.get_future().share();
-            g_cache.push_back({l.pixels, l.filter_mask, stack, fut, ++g_clock});
+            g_cache.push_back({l.pixels, l.filter_mask, stack, l.styles, l.fill, fut, ++g_clock});
             compute = true;
         }
     }
     if (compute) {
         auto out = run(*l.pixels, stack);
         if (out && l.filter_mask) out = masked(*l.pixels, *out, *l.filter_mask);
+        if (out && l.styles.any()) out = styles::drawn(*out, l.styles, l.fill);   // s019: the effects, the fill on the content
         mine.set_value(out ? std::make_shared<const pixel::TileMap>(std::move(*out)) : l.pixels);
     }
     return fut.get();
@@ -132,6 +138,8 @@ Layers effective(const Layers& ls) {
         if (active(l)) {
             l.pixels = look(l);
             l.filters.clear();
+            if (l.styles.any()) l.fill = 100;   // s019: the fill is in the look (the content's alone)
+            l.styles = Styles{};
         }
     return out;
 }
@@ -153,6 +161,47 @@ std::optional<Layer> stack_layer(const Document& d, const Id& id) {
 }
 std::string named(const Layer& l, const char* what) { return std::string(what) + " on “" + l.name + "”"; }
 }  // namespace
+
+namespace {
+std::optional<Layer> styled_layer(const Document& d, const Id& id, const Styles& s) {
+    const auto l = d.get(id);
+    if (!l || l->kind != Kind::Pixel || d.locked_all(id) || l->styles == s) return std::nullopt;
+    Layer v = *l;
+    v.styles = s;
+    return v;
+}
+}  // namespace
+
+bool set_styles(DocJournal& j, Document& d, const Id& id, const Styles& s, const std::string& label) {
+    const auto v = styled_layer(d, id, s);
+    if (!v) return false;
+    return j.run(label + " on “" + v->name + "”", {id}, [&] { d.put(id, *v); }, "styles:" + id);
+}
+
+bool set_styles_on(DocJournal& j, Document& d, const std::vector<Id>& ids, const Styles& s, const std::string& label) {
+    std::vector<std::pair<Id, Layer>> to;
+    for (const auto& id : ids)
+        if (const auto v = styled_layer(d, id, s)) to.emplace_back(id, *v);
+    if (to.empty()) return false;
+    std::vector<Id> touched;
+    for (const auto& [id, v] : to) touched.push_back(id);
+    return j.run(to.size() == 1 ? label + " on “" + to.front().second.name + "”" : label, touched, [&] {
+        for (const auto& [id, v] : to) d.put(id, v);
+    });
+}
+
+void styles_begin(DocJournal& j, Document& d, const Id& id) {
+    const auto l = d.get(id);
+    if (l && l->kind == Kind::Pixel && !d.locked_all(id)) j.begin("Layer Style on “" + l->name + "”", {id});
+}
+
+void styles_to(DocJournal& j, Document& d, const Id& id, const Styles& s) {
+    if (!j.in_gesture()) return;
+    const auto v = styled_layer(d, id, s);
+    if (v) j.run("Layer Style", {id}, [&] { d.put(id, *v); });
+}
+
+bool styles_end(DocJournal& j) { return j.commit(); }
 
 bool set_filter_mask(DocJournal& j, Document& d, const Id& id, std::shared_ptr<const pixel::TileMap> m, const std::string& label) {
     auto l = stack_layer(d, id);
@@ -207,11 +256,16 @@ bool move_live(DocJournal& j, Document& d, const Id& id, std::size_t from, std::
 
 bool bake_live(DocJournal& j, Document& d, const Id& id) {
     auto l = stack_layer(d, id);
-    if (!l || l->filters.empty()) return false;
+    if (!l || (l->filters.empty() && !l->styles.any())) return false;
+    const bool styled = l->styles.any();
     l->pixels = live::look(*l);
     l->filters.clear();
     l->filter_mask = nullptr;
-    return j.run(named(*l, "Rasterize Filters"), {id}, [&] { d.put(id, *l); });
+    if (styled) {   // s019: the effects into the pixels -- the fill is in them already
+        l->styles = Styles{};
+        l->fill = 100;
+    }
+    return j.run(named(*l, styled ? "Rasterize Layer Style" : "Rasterize Filters"), {id}, [&] { d.put(id, *l); });
 }
 
 }  // namespace klimt::core::layers

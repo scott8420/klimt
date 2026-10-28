@@ -111,6 +111,67 @@ json adjust_json(const Adjust& a) {
     return j;
 }
 
+// s019: layer styles -- each effect that is on, by name.
+json rgb_json(const Rgb& c) { return json::array({c.r, c.g, c.b}); }
+Rgb rgb_from(const json& j, Rgb dflt) {
+    if (!j.is_array() || j.size() != 3) return dflt;
+    return {std::clamp(j[0].get<float>(), 0.f, 1.f), std::clamp(j[1].get<float>(), 0.f, 1.f), std::clamp(j[2].get<float>(), 0.f, 1.f)};
+}
+json styles_json(const Styles& s) {
+    json o = json::object();
+    const auto shadow = [](const ShadowFx& f) {
+        return json{{"on", f.on}, {"colour", rgb_json(f.colour)}, {"opacity", f.opacity}, {"angle", f.angle},
+                    {"distance", f.distance}, {"spread", f.spread}, {"size", f.size}};
+    };
+    if (s.drop.on) o["drop_shadow"] = shadow(s.drop);
+    if (s.inner.on) o["inner_shadow"] = shadow(s.inner);
+    if (s.outer.on) o["outer_glow"] = {{"on", true}, {"colour", rgb_json(s.outer.colour)}, {"opacity", s.outer.opacity},
+                                       {"spread", s.outer.spread}, {"size", s.outer.size}};
+    if (s.overlay.on) o["colour_overlay"] = {{"on", true}, {"colour", rgb_json(s.overlay.colour)}, {"opacity", s.overlay.opacity}};
+    if (s.stroke.on) o["stroke"] = {{"on", true}, {"colour", rgb_json(s.stroke.colour)}, {"opacity", s.stroke.opacity},
+                                    {"size", s.stroke.size}, {"position", s.stroke.position}};
+    return o;
+}
+Styles styles_from(const json& o) {
+    Styles s;
+    const auto pct = [](const json& j, const char* k, int d) { return std::clamp(j.value(k, d), 0, 100); };
+    const auto shadow = [&](const json& j, ShadowFx f) {
+        f.on = j.value("on", true);
+        f.colour = rgb_from(j.value("colour", json()), f.colour);
+        f.opacity = pct(j, "opacity", f.opacity);
+        f.angle = std::clamp(j.value("angle", f.angle), -180, 180);
+        f.distance = std::clamp(j.value("distance", f.distance), 0, 1000);
+        f.spread = pct(j, "spread", f.spread);
+        f.size = std::clamp(j.value("size", f.size), 0, 250);
+        return f;
+    };
+    if (o.contains("drop_shadow")) s.drop = shadow(o.at("drop_shadow"), s.drop);
+    if (o.contains("inner_shadow")) s.inner = shadow(o.at("inner_shadow"), s.inner);
+    if (o.contains("outer_glow")) {
+        const auto& j = o.at("outer_glow");
+        s.outer.on = j.value("on", true);
+        s.outer.colour = rgb_from(j.value("colour", json()), s.outer.colour);
+        s.outer.opacity = pct(j, "opacity", s.outer.opacity);
+        s.outer.spread = pct(j, "spread", s.outer.spread);
+        s.outer.size = std::clamp(j.value("size", s.outer.size), 0, 250);
+    }
+    if (o.contains("colour_overlay")) {
+        const auto& j = o.at("colour_overlay");
+        s.overlay.on = j.value("on", true);
+        s.overlay.colour = rgb_from(j.value("colour", json()), s.overlay.colour);
+        s.overlay.opacity = pct(j, "opacity", s.overlay.opacity);
+    }
+    if (o.contains("stroke")) {
+        const auto& j = o.at("stroke");
+        s.stroke.on = j.value("on", true);
+        s.stroke.colour = rgb_from(j.value("colour", json()), s.stroke.colour);
+        s.stroke.opacity = pct(j, "opacity", s.stroke.opacity);
+        s.stroke.size = std::clamp(j.value("size", s.stroke.size), 1, 250);
+        s.stroke.position = std::clamp(j.value("position", s.stroke.position), 0, 2);
+    }
+    return s;
+}
+
 // s018: a live filter -- the stable key and every setting.
 json live_json(const LiveFilter& lf) {
     const Filter& f = lf.f;
@@ -319,6 +380,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                     if (!lf) { error = "a live filter this Klimt doesn't know"; return std::nullopt; }
                     L.filters.push_back(*lf);
                 }
+            if (l.contains("styles") && L.kind == Kind::Pixel) L.styles = styles_from(l.at("styles"));   // s019
             if (l.contains("filter_mask") && L.kind == Kind::Pixel) {   // s018 m3
                 P::TileMap m;
                 if (!read_map(l, "filter_mask", "filter_mask_outside", P::Format{f.depth, P::Mode::Gray, false}, m)) return std::nullopt;
@@ -481,6 +543,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
                   {"clipped", L.clipped}};
         if (L.pixels && L.kind == Kind::Pixel && !write_map(l, *L.pixels, "tiles", "outside")) return false;
         if (L.kind == Kind::Adjustment) l["adjust"] = adjust_json(L.adjust);   // s013
+        if (L.kind == Kind::Pixel && L.styles.any()) l["styles"] = styles_json(L.styles);   // s019
         if (L.kind == Kind::Pixel && !L.filters.empty()) {                      // s018: live filters
             json fs = json::array();
             for (const auto& lf : L.filters) fs.push_back(live_json(lf));

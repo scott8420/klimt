@@ -25,6 +25,7 @@
 // never run out of room between two neighbours.
 #include "core/Adjust.hpp"
 #include "core/Filter.hpp"
+#include "core/Styles.hpp"   // s019
 #include "core/Undo.hpp"
 #include "pixel/Blend.hpp"
 #include "pixel/Pixel.hpp"
@@ -107,6 +108,8 @@ struct Layer {
     // much they are HIDDEN (as a layer mask: 0 shows, 1 hides; painted white
     // reveals, black hides). nullptr: they show everywhere.
     std::shared_ptr<const pixel::TileMap> filter_mask;
+    // s019: LAYER STYLES (core/Styles.hpp) -- pixel layers only; drawn live.
+    Styles        styles;
     bool operator==(const Layer&) const = default;
 };
 

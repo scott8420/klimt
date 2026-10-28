@@ -48,10 +48,21 @@ bool toggle_live(DocJournal& j, Document& d, const Id& id, std::size_t i);
 bool remove_live(DocJournal& j, Document& d, const Id& id, std::size_t i);
 bool move_live(DocJournal& j, Document& d, const Id& id, std::size_t from, std::size_t to);
 // The stack baked into the pixels (Photoshop's Rasterize): the look becomes
-// the pixels, the stack goes.
+// the pixels, the stack goes. s019: with styles, they go into the pixels too
+// (Rasterize Layer Style) and the fill returns to 100 (it is in the look).
 bool bake_live(DocJournal& j, Document& d, const Id& id);
 // m3: the FILTER MASK set (nullptr: none) -- one step; refused without live
 // filters, or a map not the selection's format and the image's size.
 bool set_filter_mask(DocJournal& j, Document& d, const Id& id, std::shared_ptr<const pixel::TileMap> m,
                      const std::string& label = "Filter Mask");
+// s019 -- LAYER STYLES: set (presses fold into one step while they come
+// quickly, merge key "styles:<id>"); a drag on a slider is ONE step. Refused
+// on a group / adjustment layer, under an All lock.
+bool set_styles(DocJournal& j, Document& d, const Id& id, const Styles& s, const std::string& label = "Layer Style");
+void styles_begin(DocJournal& j, Document& d, const Id& id);
+void styles_to(DocJournal& j, Document& d, const Id& id, const Styles& s);
+bool styles_end(DocJournal& j);
+// Paste / Clear Layer Style on several layers as ONE step (those it can't
+// take -- groups, adjustment layers, All-locked -- are skipped).
+bool set_styles_on(DocJournal& j, Document& d, const std::vector<Id>& ids, const Styles& s, const std::string& label);
 }  // namespace klimt::core::layers

@@ -56,7 +56,7 @@ std::vector<Taps> make_taps(int src_n, int dst_n, Filter f) {
         Taps& t = out[static_cast<std::size_t>(i)];
         if (f == Filter::Nearest) {
             t.start = std::clamp(static_cast<int>(std::floor((i + 0.5) * scale)), 0, src_n - 1);
-            t.w = {1.f};
+            t.w.assign(1, 1.f);   // (not = {1.f}: GCC 13 + sanitizers warn falsely)
             continue;
         }
         const double centre = (i + 0.5) * scale - 0.5;

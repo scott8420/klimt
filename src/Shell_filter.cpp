@@ -172,4 +172,37 @@ void Shell::on_filter_last(bool dialog) {
     filter_run(f);
 }
 
+// s019: Layer > Layer Style -- an effect turned on (its defaults, or its
+// last settings on this layer), Properties showing it; or Copy / Paste /
+// Clear on the selected layers. Each a step (Copy: none).
+void Shell::on_style(const std::string& verb) {
+    const auto id = m_layers.primary();
+    const auto l = m_doc.get(id);
+    if (!l || l->kind != core::Kind::Pixel) { toast("Layer Style: pick a pixel layer"); return; }
+    if (verb == "copy") {
+        m_style_clip = l->styles;
+        update_layer_actions();
+        toast(l->styles.any() ? "Layer style copied" : "Copied: no style (pasting it clears)");
+        return;
+    }
+    if (verb == "paste" || verb == "clear") {
+        if (verb == "paste" && !m_style_clip) return;
+        const auto s = verb == "paste" ? *m_style_clip : core::Styles{};
+        if (!L::set_styles_on(m_journal, m_doc, m_layers.selection(), s, verb == "paste" ? "Paste Layer Style" : "Clear Layer Style"))
+            toast(verb == "paste" ? "Paste Layer Style: nothing to change" : "Clear Layer Style: no style here");
+        return;
+    }
+    if (verb == "rasterize") {
+        if (!L::bake_live(m_journal, m_doc, id)) toast("Rasterize Layer Style: no style or live filter here");
+        return;
+    }
+    core::Styles s = l->styles;
+    if (verb == "drop-shadow") s.drop.on = true;
+    else if (verb == "outer-glow") s.outer.on = true;
+    else if (verb == "inner-shadow") s.inner.on = true;
+    else if (verb == "colour-overlay") s.overlay.on = true;
+    else if (verb == "stroke") s.stroke.on = true;
+    if (!L::set_styles(m_journal, m_doc, id, s)) toast("Layer Style: already on -- its settings are in Properties");
+}
+
 }  // namespace klimt

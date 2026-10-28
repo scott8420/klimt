@@ -298,6 +298,22 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     for (const auto k : core::adjust::kinds())
         nal->append(std::string(core::adjust::label(k)) + "…", "win.adjust-new-" + std::string(core::adjust::key(k)));
     layer->append_submenu("New Adjustment Layer", nal);
+    // s019: Layer > Layer Style.
+    auto ls = Gio::Menu::create();
+    auto ls_fx = Gio::Menu::create();
+    ls_fx->append("Drop Shadow", "win.style-drop-shadow");
+    ls_fx->append("Outer Glow", "win.style-outer-glow");
+    ls_fx->append("Inner Shadow", "win.style-inner-shadow");
+    ls_fx->append("Color Overlay", "win.style-colour-overlay");
+    ls_fx->append("Stroke", "win.style-stroke");
+    ls->append_section(ls_fx);
+    auto ls_do = Gio::Menu::create();
+    ls_do->append("Copy Layer Style", "win.style-copy");
+    ls_do->append("Paste Layer Style", "win.style-paste");
+    ls_do->append("Clear Layer Style", "win.style-clear");
+    ls_do->append("Rasterize Layer Style", "win.style-rasterize");
+    ls->append_section(ls_do);
+    layer->append_submenu("Layer Style", ls);
     // s008: the Select menu, and Fill / Delete beside Undo.
     auto sel = Gio::Menu::create();
     sel->append("All", "win.select-all");

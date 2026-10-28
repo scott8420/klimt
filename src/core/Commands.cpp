@@ -80,6 +80,16 @@ const std::vector<Command>& commands() {
             {"Median", "Filter", "win.filter-median", "", "filter noise despeckle dust remove smooth", ""},
             {"Last Filter", "Filter", "win.filter-last", "", "filter again repeat", "Ctrl+F"},
             {"Last Filter's Settings", "Filter", "win.filter-last-dialog", "", "filter again repeat dialog", "Ctrl+Alt+F"},
+            // s019: layer styles.
+            {"Layer Style: Drop Shadow", "Layer", "win.style-drop-shadow", "", "effect fx shadow", ""},
+            {"Layer Style: Outer Glow", "Layer", "win.style-outer-glow", "", "effect fx glow halo", ""},
+            {"Layer Style: Inner Shadow", "Layer", "win.style-inner-shadow", "", "effect fx shadow inset", ""},
+            {"Layer Style: Color Overlay", "Layer", "win.style-colour-overlay", "", "effect fx colour fill tint", ""},
+            {"Layer Style: Stroke", "Layer", "win.style-stroke", "", "effect fx outline border", ""},
+            {"Copy Layer Style", "Layer", "win.style-copy", "", "effect fx styles", ""},
+            {"Paste Layer Style", "Layer", "win.style-paste", "", "effect fx styles", ""},
+            {"Clear Layer Style", "Layer", "win.style-clear", "", "effect fx styles remove", ""},
+            {"Rasterize Layer Style", "Layer", "win.style-rasterize", "", "effect fx styles bake flatten pixels", ""},
             // s012: layer masks.
             {"Add Layer Mask", "Layer", "win.mask-add", "", "mask reveal selection hide", ""},
             {"Layer Mask: Reveal All", "Layer", "win.mask-reveal-all", "", "mask add white", ""},

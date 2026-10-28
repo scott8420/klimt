@@ -130,6 +130,17 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
     m_adjust.signal_end().connect([this] { L::adjust_end(m_journal); });
     m_fields.append(m_adjust);
 
+    // s019: the layer's styles -- live; a slider drag is ONE step, presses fold.
+    m_styles.set_visible(false);
+    m_styles.signal_begin().connect([this] { if (!primary().empty()) L::styles_begin(m_journal, m_doc, primary()); });
+    m_styles.signal_changed().connect([this](const core::Styles& s) {
+        if (m_painting || primary().empty()) return;
+        if (m_journal.in_gesture()) L::styles_to(m_journal, m_doc, primary(), s);
+        else L::set_styles(m_journal, m_doc, primary(), s);
+    });
+    m_styles.signal_end().connect([this] { L::styles_end(m_journal); });
+    m_fields.append(m_styles);
+
     // s018: the live filters under a pixel layer.
     {
         auto head = Gtk::make_managed<Gtk::Label>();
@@ -142,8 +153,7 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
     m_fields.append(m_live);
 
     // Where layer styles will be edited -- no dialogs.
-    m_later.set_text("Live filters: tick Live in a Filter's dialog -- they show here, editable later. "
-                     "Layer styles will be edited here too.");
+    m_later.set_text("Live filters: tick Live in a Filter's dialog -- they show here, editable later.");
     m_later.set_wrap(true);
     m_later.set_xalign(0.0f);
     m_later.add_css_class("dim-label");
@@ -196,6 +206,13 @@ void PropertiesPanel::paint() {
     m_adjust.set_visible(adj);
     m_later.set_visible(!adj);
     paint_live(*l);   // s018
+    // s019: one pixel layer picked: its styles.
+    const bool styled = l->kind == core::Kind::Pixel && m_sel.size() == 1;
+    m_styles.set_visible(styled);
+    if (styled) {
+        m_styles.set_sensitive(!m_doc.locked_all(primary()));
+        if (!m_journal.in_gesture()) m_styles.set(l->styles);
+    }
     if (adj && primary() != m_adjust_id) m_adjust.set(core::Adjust{});   // another layer: fresh controls
     m_adjust_id = adj ? primary() : Id{};
     if (adj) {

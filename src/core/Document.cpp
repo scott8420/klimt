@@ -999,6 +999,16 @@ const std::vector<Verb>& verbs() {
                  Document::Loading load(d);
                  auto l = *d.get("L4"); l.filters.push_back({filter::fresh(FilterKind::GaussianBlur), true}); d.put("L4", l);
              }},
+        // s019: layer styles -- a drop shadow and a stroke on the square.
+        {"set_styles",    [](DocJournal& j, Document& d) {
+             Styles s; s.drop.on = true; s.stroke.on = true; set_styles(j, d, "L4", s); }},
+        {"styles_drag",   [](DocJournal& j, Document& d) {
+             Styles s; s.drop.on = true;
+             styles_begin(j, d, "L4");
+             for (int k = 5; k <= 25; k += 5) { s.drop.distance = k; styles_to(j, d, "L4", s); }
+             styles_end(j); }},
+        {"paste_styles",  [](DocJournal& j, Document& d) {
+             Styles s; s.outer.on = true; set_styles_on(j, d, {"L4", "L5", "L2"}, s, "Paste Layer Style"); }},
         // s016: saved selections -- save, load (adding), delete.
         {"save_channel",  [](DocJournal& j, Document& d) { select::save_channel(j, d); },
              [](Document& d) { load_selection(d, {100, 100, 80, 60}); }},

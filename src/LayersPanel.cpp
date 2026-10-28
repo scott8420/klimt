@@ -374,6 +374,7 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
         info += std::string(core::blend_label(l.blend));
     if (l.opacity < 100) info += (info.empty() ? "" : " · ") + std::to_string(l.opacity) + "%";
     if (l.fill < 100) info += (info.empty() ? "" : " · ") + std::string("fill ") + std::to_string(l.fill) + "%";
+    if (l.styles.any()) info += (info.empty() ? "" : " · ") + std::string("styles");   // s019
     if (!l.filters.empty()) {   // s018: live filters under it
         int on = 0;
         for (const auto& f : l.filters) on += f.on;
