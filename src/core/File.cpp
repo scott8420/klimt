@@ -1,4 +1,5 @@
 #include "core/File.hpp"
+#include "core/Transfer.hpp"   // s022: converted()
 #include "core/Composite.hpp"
 
 #include <zip.h>
@@ -466,9 +467,27 @@ void zip_progress(zip_t*, double f, void* ud) { static_cast<ZipState*>(ud)->p->a
 int  zip_cancel(zip_t*, void* ud) { return static_cast<ZipState*>(ud)->p->stop() ? 1 : 0; }
 }  // namespace
 
+// s022: every document HAS alpha. A flat file (a JPEG, a PNG / TIFF without
+// alpha) came in without it, and then no layer of it could hold
+// transparency: a stroke on a new layer filled its whole tile black. The
+// pixels gain an opaque alpha (the Background stays opaque); masks and
+// saved selections are untouched (they have none by design).
+void give_alpha(Contents& c) {
+    if (c.image.format.alpha) return;
+    P::Format to = c.image.format;
+    to.alpha = true;
+    for (auto& [id, l] : c.layers)
+        if (l.pixels) l.pixels = std::make_shared<const P::TileMap>(transfer::converted(*l.pixels, to));
+    c.image.format = to;
+}
+
 std::optional<Contents> open(const std::string& path, std::string& error, const formats::Progress& p) {
     const auto kind = formats::sniff(path);
-    if (kind == formats::Kind::Klimt) return open_klimt(path, error, p);
+    if (kind == formats::Kind::Klimt) {
+        auto k = open_klimt(path, error, p);
+        if (k) give_alpha(*k);
+        return k;
+    }
     auto r = formats::read_image(path, error, p);
     if (!r) return std::nullopt;
     Contents c;
@@ -485,6 +504,7 @@ std::optional<Contents> open(const std::string& path, std::string& error, const 
     bg.pixels = std::make_shared<const P::TileMap>(std::move(r->pixels));
     c.layers["L1"] = std::move(bg);
     c.next_id = 2;
+    give_alpha(c);
     return c;
 }
 

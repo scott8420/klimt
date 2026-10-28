@@ -27,7 +27,15 @@ void Shell::bind_actions() {  // bindings
     add_action("tab-close", [this] { close_tab(m_tabs.live()); });
     add_action("tab-next",  [this] { step_tab(+1); });
     add_action("tab-prev",  [this] { step_tab(-1); });
+    // s022: Layer > Duplicate To > a tab -- the selected layers copied there.
+    add_action_with_parameter("layer-to-tab", Glib::Variant<Glib::ustring>::variant_type(), [this](const Glib::VariantBase& v) {
+        try {
+            const auto key = std::stoull(Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(v).get());
+            copy_to_tab(key, m_layers.selection());
+        } catch (const std::exception&) {}
+    });
     m_act_fade = add_action("fade", sigc::mem_fun(*this, &Shell::on_fade));   // s020: Edit > Fade
+    build_file_drops();   // s022
     // s007 m4: the view (view state: not steps).
     add_action("zoom-in",     [this] { m_canvas.zoom_in(); });
     add_action("zoom-out",    [this] { m_canvas.zoom_out(); });

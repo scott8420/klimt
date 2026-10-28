@@ -275,6 +275,8 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     layer->append("New Layer", "win.layer-new");
     layer->append("New Group", "win.layer-new-group");
     layer->append("Duplicate", "win.layer-duplicate");
+    m_dup_to_menu = Gio::Menu::create();   // s022: the other tabs, kept by sync_duplicate_to()
+    layer->append_submenu("Duplicate To", m_dup_to_menu);
     layer->append("Group Layers", "win.layer-group");
     layer->append("Ungroup", "win.layer-ungroup");
     layer->append("Clip / Release", "win.layer-clip");

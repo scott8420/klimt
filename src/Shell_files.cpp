@@ -1,6 +1,7 @@
 #include "Shell.hpp"
 #include <glibmm/main.h>
 #include "NewDialog.hpp"
+#include "core/Transfer.hpp"   // s022: place
 #include "Log.hpp"
 
 #include <adwaita.h>
@@ -259,6 +260,88 @@ void Shell::open_path(const std::string& path) {
             };
         });
     }
+}
+
+// ── s022: files dropped from the file manager ──────────────────────────────
+namespace {
+std::vector<std::string> paths_of(const GValue* value) {
+    std::vector<std::string> out;
+    if (!G_VALUE_HOLDS(value, GDK_TYPE_FILE_LIST)) return out;
+    auto* list = static_cast<GdkFileList*>(g_value_get_boxed(value));
+    GSList* files = list ? gdk_file_list_get_files(list) : nullptr;
+    for (GSList* l = files; l; l = l->next)
+        if (char* p = g_file_get_path(G_FILE(l->data))) { out.emplace_back(p); g_free(p); }
+    g_slist_free(files);
+    return out;
+}
+}  // namespace
+
+// Onto the canvas with an image open: each file a layer (or, a .klimt, its
+// layers) in this document. Anywhere else, or no image: each file a tab.
+void Shell::build_file_drops() {
+    const auto make = [this](GtkWidget* on, bool place) {
+        auto* t = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+        g_object_set_data(G_OBJECT(t), "klimt-place", GINT_TO_POINTER(place ? 1 : 0));
+        g_signal_connect(t, "drop", G_CALLBACK(+[](GtkDropTarget* tg, const GValue* value, double, double, gpointer self) -> gboolean {
+            auto* sh = static_cast<Shell*>(self);
+            const auto paths = paths_of(value);
+            if (paths.empty()) return FALSE;
+            const bool place = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(tg), "klimt-place")) != 0 && sh->has_image();
+            if (auto lg = log::get(log::Area::Shell)) lg->info("files dropped: {} ({})", paths.size(), place ? "place" : "open");
+            Glib::signal_idle().connect_once([sh, paths, place] {
+                if (place) sh->place_paths(paths);
+                else sh->open_paths(paths);
+            });
+            return TRUE;
+        }), this);
+        gtk_widget_add_controller(on, GTK_EVENT_CONTROLLER(t));
+    };
+    make(GTK_WIDGET(m_canvas.gobj()), true);
+    make(GTK_WIDGET(gobj()), false);
+}
+
+void Shell::place_paths(const std::vector<std::string>& paths) {
+    if (file_job_busy() || doc_busy(true)) return;
+    const auto key = m_tabs.live_info().key;
+    m_file_job = start_job(paths.size() == 1 ? "Place " + fs::path(paths[0]).filename().string() : "Place " + std::to_string(paths.size()) + " files",
+                           [this, paths, key](core::Jobs::Token& t) -> core::Jobs::Landing {
+        auto got = std::make_shared<std::vector<std::pair<std::string, core::file::Contents>>>();
+        std::string errors;
+        for (const auto& p : paths) {
+            if (t.cancelled()) return [] {};
+            std::string err;
+            auto c = core::file::open(p, err, progress_of(t));
+            const auto name = fs::path(p).filename().string();
+            if (c) got->emplace_back(name, std::move(*c));
+            else errors += (errors.empty() ? "" : "; ") + name + ": " + err;
+        }
+        return [this, got, errors, key] {
+            if (!errors.empty()) toast("Couldn't place " + errors);
+            if (m_tabs.live_info().key != key) { toast("Place: the image changed tabs meanwhile -- nothing done"); return; }
+            std::vector<core::Document::Id> all;
+            for (auto& [name, c] : *got) {
+                // The file as a document of its own, then its layers carried in.
+                core::Document tmp;
+                {
+                    core::Document::Loading load(tmp);
+                    tmp.replace(c.image, std::move(c.layers), c.next_id);
+                }
+                auto b = core::transfer::take(tmp, tmp.panel(""));
+                if (b.layers.size() == 1 && c.kind != formats::Kind::Klimt) {   // a flat image: one layer, its file's name
+                    b.layers[0].second.name = name;
+                    b.name = name;
+                }
+                const auto why = core::transfer::refusal(b, m_doc.image());
+                if (!why.empty()) { toast("Can't place “" + name + "”: " + why); continue; }
+                const auto made = core::layers::paste(m_journal, m_doc, b, m_layers.primary());
+                all.insert(all.end(), made.begin(), made.end());
+            }
+            if (!all.empty()) {
+                m_journal.reselect(all);
+                m_layers.select(all, true);
+            }
+        };
+    });
 }
 
 // ── Save ────────────────────────────────────────────────────────────────────

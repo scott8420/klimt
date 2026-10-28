@@ -268,11 +268,19 @@ bool ungroup(DocJournal& j, Document& d, const Id& group);
 bool remove(DocJournal& j, Document& d, const std::vector<Id>& ids);
 // Copies (a group with its contents, fresh ids) each just above its original.
 std::vector<Id> duplicate(DocJournal& j, Document& d, const std::vector<Id>& ids);
+// s022: layers from elsewhere (core/Transfer.hpp makes them fit): values with
+// their OLD ids and parents, `roots` the tops (panel order); fresh ids, the
+// roots just above `above`; ONE step. The new roots' ids.
+std::vector<Id> insert(DocJournal& j, Document& d, const std::string& label,
+                       const std::vector<std::pair<Id, Layer>>& layers, const std::vector<Id>& roots, const Id& above = {});
 // THE DROP. `ids` (a multi-selection; a layer whose group is also selected
 // rides along with it) land contiguously, in their panel order, at `where`
 // relative to `target`. Refused: a group into itself or its own contents; a
 // target that is itself being moved; Inside on a layer that isn't a group.
 bool move(DocJournal& j, Document& d, const std::vector<Id>& ids, const Id& target, Where where);
+// s022: Alt- / Ctrl-drag in the panel -- copies landing where the drop says;
+// ONE step. The copies' ids (roots).
+std::vector<Id> copy_to(DocJournal& j, Document& d, const std::vector<Id>& ids, const Id& target, Where where);
 // Would that drop do anything? (Refused, or lands where it already is: false.)
 // Writes nothing -- the panel asks on every pointer motion.
 bool can_move(const Document& d, const std::vector<Id>& ids, const Id& target, Where where);

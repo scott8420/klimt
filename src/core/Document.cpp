@@ -1,5 +1,6 @@
 #include "core/Document.hpp"
 #include "core/Fade.hpp"   // s020: the verb table's fade
+#include "core/Transfer.hpp"   // s022: the verb table's paste
 #include "core/Selection.hpp"   // s008: the verb table carries the selection verbs
 #include "core/Paint.hpp"       // s008 m4: and the brush
 #include "core/Move.hpp"        // s009 m1: and the Move tool
@@ -545,6 +546,57 @@ std::vector<Id> duplicate(DocJournal& j, Document& d, const std::vector<Id>& ids
     return roots;
 }
 
+// s022: layers from elsewhere (another document), as values: each with its
+// OLD id and its old parent; `roots` the old ids of the tops, panel order.
+// They come in under fresh ids, the roots just above `above` (in its group;
+// a group: at its top; none: the document's top), as ONE step.
+namespace {
+// The roots go into `parent` at panel index `at`.
+std::vector<Id> insert_at(DocJournal& j, Document& d, const std::string& label,
+                          const std::vector<std::pair<Id, Layer>>& layers, const std::vector<Id>& roots,
+                          const Id& parent, std::size_t at) {
+    if (layers.empty() || roots.empty()) return {};
+    std::map<Id, Id> fresh;
+    for (const auto& [old, l] : layers) fresh[old] = d.fresh_id();
+    std::map<Id, Layer> next;
+    std::vector<Id> made_roots;
+    for (const auto& [old, l] : layers) {
+        Layer v = l;
+        const bool root = std::find(roots.begin(), roots.end(), old) != roots.end();
+        if (!root) {
+            const auto it = fresh.find(v.parent);
+            if (it == fresh.end()) return {};   // a child whose group didn't come
+            v.parent = it->second;
+        }
+        next[fresh.at(old)] = v;
+    }
+    for (const auto& r : roots) {
+        if (!fresh.count(r)) return {};
+        made_roots.push_back(fresh.at(r));
+    }
+    auto sibs = d.panel(parent);
+    sibs.insert(sibs.begin() + static_cast<std::ptrdiff_t>(std::min(at, sibs.size())), made_roots.begin(), made_roots.end());
+    place(d, next, parent, sibs);
+    if (!apply(j, d, label, diff(d, next))) return {};
+    return made_roots;
+}
+}  // namespace
+
+std::vector<Id> insert(DocJournal& j, Document& d, const std::string& label,
+                       const std::vector<std::pair<Id, Layer>>& layers, const std::vector<Id>& roots, const Id& above) {
+    Id parent;
+    std::size_t at = 0;
+    if (const auto a = d.get(above)) {
+        if (a->kind == Kind::Group) parent = above;
+        else {
+            parent = a->parent;
+            const auto sibs = d.panel(parent);
+            at = static_cast<std::size_t>(std::find(sibs.begin(), sibs.end(), above) - sibs.begin());
+        }
+    }
+    return insert_at(j, d, label, layers, roots, parent, at);
+}
+
 namespace {
 // The drop's plan, or nothing if it's refused. move() writes it; can_move()
 // only asks -- the panel asks on every pointer motion to show or refuse a drop.
@@ -583,6 +635,24 @@ bool move(DocJournal& j, Document& d, const std::vector<Id>& ids, const Id& targ
     const auto next = plan_move(d, ids, target, where);
     if (!next) return false;
     return apply(j, d, count_label("Move", d, tops(d, ids)), diff(d, *next));
+}
+
+// s022: Alt-drag -- copies of the layers (and what is inside them) where the
+// drop says, ONE step. Onto (or into) itself is fine: the copy lands beside.
+std::vector<Id> copy_to(DocJournal& j, Document& d, const std::vector<Id>& ids, const Id& target, Where where) {
+    const auto t = d.get(target);
+    if (!t || (where == Where::Inside && t->kind != Kind::Group)) return {};
+    auto b = transfer::take(d, ids);
+    if (b.roots.empty()) return {};
+    for (auto& [id, l] : b.layers)
+        if (std::find(b.roots.begin(), b.roots.end(), id) != b.roots.end()) l.name += " copy";
+    const Id parent = where == Where::Inside ? target : t->parent;
+    std::size_t at = 0;
+    if (where != Where::Inside) {
+        const auto sibs = d.panel(parent);
+        at = static_cast<std::size_t>(std::find(sibs.begin(), sibs.end(), target) - sibs.begin()) + (where == Where::Below ? 1 : 0);
+    }
+    return insert_at(j, d, count_label("Duplicate", d, b.roots), b.layers, b.roots, parent, at);
 }
 
 namespace {
@@ -1022,6 +1092,9 @@ const std::vector<Verb>& verbs() {
              styles_end(j); }},
         {"paste_styles",  [](DocJournal& j, Document& d) {
              Styles s; s.outer.on = true; set_styles_on(j, d, {"L4", "L5", "L2"}, s, "Paste Layer Style"); }},
+        // s022: layers from another document (here, a copy of this one's group).
+        {"paste",         [](DocJournal& j, Document& d) { paste(j, d, transfer::take(d, {"L2"}), "L5"); }},
+        {"copy_to",       [](DocJournal& j, Document& d) { copy_to(j, d, {"L4", "L5"}, "L1", Where::Above); }},
         // s020: Edit > Fade -- the square half-way back to nothing.
         {"fade",          [](DocJournal& j, Document& d) {
              layers::fade(j, d, "L4", nullptr, d.get("L4")->pixels, 0.5, Blend::Multiply, "Brush"); }},

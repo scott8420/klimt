@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <set>
+#include "core/Transfer.hpp"
+#include <giomm/menuitem.h>
 
 // Shell_tabs.cpp -- TABS (s020). Several documents in one window
 // (docs/tabs.md). The model is core::Tabs: ONE live document + journal (the
@@ -40,6 +42,12 @@ void Shell::build_tabs(Gtk::Box& into) {
     g_signal_connect(m_tab_view, "notify::selected-page", G_CALLBACK(+[](GObject*, GParamSpec*, gpointer self) {
         auto* sh = static_cast<Shell*>(self);
         if (sh->m_tab_sync) return;
+        // s022: a layer's drag hovering a tab: stay (a switch would rebuild
+        // the Layers panel under the drag and cancel it) -- the drop copies.
+        if (sh->m_layers.dragging()) {
+            Glib::signal_idle().connect_once([sh] { sh->sync_tabs(); });
+            return;
+        }
         auto* page = adw_tab_view_get_selected_page(sh->m_tab_view);
         const auto i = sh->m_tabs.by_key(key_of(sh->m_pages, page));
         if (!i || *i == sh->m_tabs.live()) return;
@@ -62,6 +70,27 @@ void Shell::build_tabs(Gtk::Box& into) {
         if (sh->m_tab_sync) return;
         if (const auto i = sh->m_tabs.by_key(key_of(sh->m_pages, page)); i && position >= 0)
             sh->m_tabs.reorder(*i, static_cast<std::size_t>(position));
+    }), this);
+    // s022: a layer row dropped on another tab -- copied into that document.
+    GType types[] = {G_TYPE_STRING};
+    adw_tab_bar_setup_extra_drop_target(m_tab_bar, static_cast<GdkDragAction>(GDK_ACTION_COPY | GDK_ACTION_MOVE), types, 1);
+    g_signal_connect(m_tab_bar, "extra-drag-drop", G_CALLBACK(+[](AdwTabBar*, AdwTabPage* page, GValue* value, gpointer self) -> gboolean {
+        auto* sh = static_cast<Shell*>(self);
+        const auto key = key_of(sh->m_pages, page);
+        if (!key || key == sh->m_tabs.live_info().key || !G_VALUE_HOLDS_STRING(value)) return FALSE;
+        std::vector<core::Document::Id> ids;
+        std::string all = g_value_get_string(value) ? g_value_get_string(value) : "";
+        for (std::size_t at = 0; at <= all.size();) {
+            const auto nl = all.find('\n', at);
+            const auto id = all.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+            if (!id.empty() && sh->m_doc.get(id)) ids.push_back(id);
+            if (nl == std::string::npos) break;
+            at = nl + 1;
+        }
+        if (ids.empty()) return FALSE;
+        // After the drag is over (the panel's row may go with the switch).
+        Glib::signal_idle().connect_once([sh, key, ids] { sh->copy_to_tab(key, ids); });
+        return TRUE;
     }), this);
     sync_tabs();
 }
@@ -96,6 +125,45 @@ void Shell::sync_tabs() {
     }
     if (auto* live = page_of(m_tabs.live_info().key)) adw_tab_view_set_selected_page(m_tab_view, live);
     m_tab_sync = false;
+    sync_duplicate_to();
+}
+
+void Shell::sync_duplicate_to() {
+    if (!m_dup_to_menu) return;
+    m_dup_to_menu->remove_all();
+    for (std::size_t i = 0; i < m_tabs.count(); ++i) {
+        if (i == m_tabs.live()) continue;
+        const auto& info = m_tabs.info(i);
+        auto item = Gio::MenuItem::create(info.name, "");
+        item->set_action_and_target("win.layer-to-tab", Glib::Variant<Glib::ustring>::create(std::to_string(info.key)));
+        m_dup_to_menu->append_item(item);
+    }
+    if (m_tabs.count() < 2) m_dup_to_menu->append("(no other image open)", "win.none");
+}
+
+// s022: the layers `ids` of the live document, copied into the tab `key` --
+// converted to its format, centred, above its selected layer: ONE step there
+// (and that tab shown). Photoshop's drag of a layer onto another document.
+void Shell::copy_to_tab(std::uint64_t key, const std::vector<core::Document::Id>& ids) {
+    const auto to = m_tabs.by_key(key);
+    if (!to || *to == m_tabs.live()) return;
+    if (ids.empty()) { toast("Select the layers to copy first"); return; }
+    auto bundle = core::transfer::take(m_doc, ids);
+    // A "Background" arrives under its image's name (two Backgrounds confuse).
+    for (auto& [id, l] : bundle.layers)
+        if (l.name == "Background" && std::find(bundle.roots.begin(), bundle.roots.end(), id) != bundle.roots.end()) {
+            l.name = m_tabs.live_info().name;
+            if (bundle.roots.size() == 1) bundle.name = l.name;
+        }
+    const auto why = core::transfer::refusal(bundle, m_tabs.image(*to));
+    const std::string where = m_tabs.info(*to).name;
+    if (!why.empty()) { toast("Can't copy to “" + where + "”: " + why); return; }
+    if (!show_tab(*to)) return;
+    const auto made = core::layers::paste(m_journal, m_doc, bundle, m_layers.primary());
+    if (made.empty()) { toast("Can't copy to “" + where + "”"); return; }
+    m_journal.reselect(made);
+    m_layers.select(made, true);
+    toast(m_journal.undo_label() + " -- from the other tab", true);
 }
 
 // A switch, a new tab or a close waits for anything working on the live

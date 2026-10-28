@@ -113,6 +113,7 @@ void selftest_styles(const std::function<void(const std::string&, bool, const st
 void selftest_fade(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_partly(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_presets(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_transfer(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_tabs(const std::function<void(const std::string&, bool, const std::string&)>& check);
 
 int main() {
@@ -1231,6 +1232,7 @@ int main() {
     selftest_fade([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_partly([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_presets([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_transfer([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
 
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";

@@ -41,6 +41,7 @@ public:
     // first) is the first.
     const std::vector<Id>& selection() const { return m_sel; }
     Id primary() const { return m_sel.empty() ? Id{} : m_sel.front(); }
+    bool dragging() const { return !m_dragging.empty(); }   // s022: a row's drag in flight
     // Select (after the repaint the last write queued); `keys` gives the
     // selected row the keyboard so the next key lands (a delete, an undo).
     void select(const std::vector<Id>& ids, bool keys);
@@ -90,7 +91,8 @@ private:
     void add_dnd(Gtk::ListBoxRow& row, const Id& id);       // source + target on a row
     core::layers::Where where_on(const Id& id, double y, int height) const;
     void mark_drop(Gtk::ListBoxRow* row, const char* css);  // the drop line; nullptr clears
-    bool drop(const Id& target, core::layers::Where where);
+    bool drop(const Id& target, core::layers::Where where, bool copy = false);
+    static bool copying(Gdk::ModifierType state);   // s022: Alt or Ctrl held -- a drag copies
 
     core::Document&   m_doc;
     core::DocJournal& m_journal;

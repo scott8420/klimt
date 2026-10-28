@@ -160,6 +160,8 @@ private:
     void sync_tabs();                            // category: tabs: the pages follow the model (titles, order, selection)
     void step_tab(int by);                       // category: tabs: Ctrl+Tab / Ctrl+Shift+Tab
     AdwTabPage* page_of(std::uint64_t key) const;   // category: tabs: the bar's page of a tab
+    void copy_to_tab(std::uint64_t key, const std::vector<core::Document::Id>& ids);   // category: tabs: s022 -- layers into another tab (one step there)
+    void sync_duplicate_to();                    // category: tabs: s022 -- Layer > Duplicate To lists the other tabs
 
     // ── selection (s008) ───────────────────────────────────────────────────
     void on_shape(const CanvasView::Shape& shape);   // category: select: a marquee / lasso finished
@@ -321,6 +323,8 @@ private:
     core::Jobs::Id     m_file_job = 0;         // the open / save / export in flight
     std::vector<std::string> m_open_queue;     // s020: files still to open (the command line, a second launch)
     void open_next();                          // category: files: the queue's next, once no file job runs
+    void place_paths(const std::vector<std::string>& paths);   // category: files: s022 -- files dropped on the canvas: layers here
+    void build_file_drops();                   // category: files: s022 -- drops from the file manager
 
     // ── the stroke in progress (s008 m4) ───────────────────────────────────
     struct Stroke {
@@ -426,6 +430,7 @@ private:
     AdwTabBar*         m_tab_bar = nullptr;
     bool               m_tab_sync = false;       // the pages are being set from the model
     std::map<std::uint64_t, AdwTabPage*> m_pages;   // a tab's key -> its page
+    Glib::RefPtr<Gio::Menu> m_dup_to_menu;          // s022: Layer > Duplicate To > the other tabs
     struct TabView {                             // what a parked tab keeps of the window
         CanvasView::View view;
         std::vector<core::Document::Id> selection;

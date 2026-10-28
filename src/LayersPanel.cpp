@@ -8,6 +8,9 @@
 #include <gtkmm/gesturedrag.h>
 #include <gtkmm/cssprovider.h>
 #include <gtkmm/dragsource.h>
+#include <gdkmm/display.h>
+#include <gdkmm/seat.h>
+#include <gdkmm/device.h>
 #include <gtkmm/droptarget.h>
 #include <gtkmm/stylecontext.h>
 #include <gtkmm/widgetpaintable.h>
@@ -108,17 +111,18 @@ LayersPanel::LayersPanel(core::Document& doc, core::DocJournal& journal)
     }, false);
     m_list.add_controller(rename_keys);
     // Dropped on the empty space under the rows: to the bottom of the document.
-    auto tail = Gtk::DropTarget::create(Glib::Value<Glib::ustring>::value_type(), Gdk::DragAction::MOVE);
-    tail->signal_motion().connect([this](double, double) {
+    auto tail = Gtk::DropTarget::create(Glib::Value<Glib::ustring>::value_type(), Gdk::DragAction::MOVE | Gdk::DragAction::COPY);
+    tail->signal_motion().connect([this, t = tail.get()](double, double) {
         const auto top = m_doc.panel({});
+        const bool copy = copying(t->get_current_event_state());
         if (m_dragging.empty() || top.empty() ||
-            !core::layers::can_move(m_doc, m_dragging, top.back(), core::layers::Where::Below))
+            (!copy && !core::layers::can_move(m_doc, m_dragging, top.back(), core::layers::Where::Below)))
             return Gdk::DragAction{};
-        return Gdk::DragAction::MOVE;
+        return copy ? Gdk::DragAction::COPY : Gdk::DragAction::MOVE;
     }, false);
-    tail->signal_drop().connect([this](const Glib::ValueBase&, double, double) {
+    tail->signal_drop().connect([this, t = tail.get()](const Glib::ValueBase&, double, double) {
         const auto top = m_doc.panel({});
-        return !top.empty() && drop(top.back(), core::layers::Where::Below);
+        return !top.empty() && drop(top.back(), core::layers::Where::Below, copying(t->get_current_event_state()));
     }, false);
     m_list.add_controller(tail);
     m_scroll.set_child(m_list);
@@ -411,7 +415,7 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
 // ─────────────────────────────────────────────────────────────────────────────
 void LayersPanel::add_dnd(Gtk::ListBoxRow& row, const Id& id) {
     auto src = Gtk::DragSource::create();
-    src->set_actions(Gdk::DragAction::MOVE);
+    src->set_actions(Gdk::DragAction::MOVE | Gdk::DragAction::COPY);   // s022: Alt / Ctrl copies
     src->signal_prepare().connect([this, id](double, double) -> Glib::RefPtr<Gdk::ContentProvider> {
         if (!m_renaming.empty()) return nullptr;
         // A selected row drags the whole selection; an unselected one, itself.
@@ -433,20 +437,24 @@ void LayersPanel::add_dnd(Gtk::ListBoxRow& row, const Id& id) {
     });
     row.add_controller(src);
 
-    auto tgt = Gtk::DropTarget::create(Glib::Value<Glib::ustring>::value_type(), Gdk::DragAction::MOVE);
-    tgt->signal_motion().connect([this, id, r = &row](double, double y) {
+    auto tgt = Gtk::DropTarget::create(Glib::Value<Glib::ustring>::value_type(), Gdk::DragAction::MOVE | Gdk::DragAction::COPY);
+    tgt->signal_motion().connect([this, id, r = &row, t = tgt.get()](double, double y) {
         const auto where = where_on(id, y, r->get_height());
-        if (m_dragging.empty() || !core::layers::can_move(m_doc, m_dragging, id, where)) {
+        // s022: Alt / Ctrl held -- a copy lands there (even beside itself).
+        const bool copy = copying(t->get_current_event_state());
+        const bool ok = copy ? (where != core::layers::Where::Inside || m_doc.is_group(id))
+                             : core::layers::can_move(m_doc, m_dragging, id, where);
+        if (m_dragging.empty() || !ok) {
             mark_drop(nullptr, nullptr);
             return Gdk::DragAction{};   // no drop here: the cursor says so
         }
         mark_drop(r, where == core::layers::Where::Above ? "drop-above"
                    : where == core::layers::Where::Below ? "drop-below" : "drop-inside");
-        return Gdk::DragAction::MOVE;
+        return copy ? Gdk::DragAction::COPY : Gdk::DragAction::MOVE;
     }, false);
     tgt->signal_leave().connect([this, r = &row] { if (m_drop_row == r) mark_drop(nullptr, nullptr); });
-    tgt->signal_drop().connect([this, id, r = &row](const Glib::ValueBase&, double, double y) {
-        return drop(id, where_on(id, y, r->get_height()));
+    tgt->signal_drop().connect([this, id, r = &row, t = tgt.get()](const Glib::ValueBase&, double, double y) {
+        return drop(id, where_on(id, y, r->get_height()), copying(t->get_current_event_state()));
     }, false);
     row.add_controller(tgt);
 }
@@ -475,10 +483,28 @@ void LayersPanel::mark_drop(Gtk::ListBoxRow* row, const char* css) {
     if (row && css) row->add_css_class(css);
 }
 
-bool LayersPanel::drop(const Id& target, core::layers::Where where) {
+bool LayersPanel::copying(Gdk::ModifierType state) {
+    // A drag's events may carry no modifiers (X11's drag and drop): ask the
+    // keyboard too.
+    if (auto display = Gdk::Display::get_default())
+        if (auto seat = display->get_default_seat())
+            if (auto kb = seat->get_keyboard()) state |= kb->get_modifier_state();
+    return (state & (Gdk::ModifierType::ALT_MASK | Gdk::ModifierType::CONTROL_MASK)) != Gdk::ModifierType{};
+}
+
+bool LayersPanel::drop(const Id& target, core::layers::Where where, bool copy) {
     const auto moving = m_dragging;
     m_dragging.clear();
     mark_drop(nullptr, nullptr);
+    if (copy) {   // s022: Alt- / Ctrl-drag -- copies, ONE step
+        const auto made = moving.empty() ? std::vector<Id>{} : core::layers::copy_to(m_journal, m_doc, moving, target, where);
+        if (made.empty()) return false;
+        if (where == core::layers::Where::Inside) m_collapsed.erase(target);
+        m_journal.reselect(made);
+        select(made, true);
+        if (auto lg = log::get(log::Area::Shell)) lg->info("drop (copy): {}", m_journal.undo_label());
+        return true;
+    }
     if (moving.empty() || !core::layers::move(m_journal, m_doc, moving, target, where)) return false;
     if (where == core::layers::Where::Inside) m_collapsed.erase(target);   // show where it went
     m_journal.reselect(moving);
