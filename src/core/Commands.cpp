@@ -68,6 +68,16 @@ const std::vector<Command>& commands() {
             {"Levels", "Image", "win.adjust-apply-levels", "", "adjustments histogram black white point gamma pixels", ""},
             {"Curves", "Image", "win.adjust-apply-curves", "", "adjustments tone contrast pixels", ""},
             {"Hue/Saturation", "Image", "win.adjust-apply-hue-saturation", "", "adjustments colour colorize tint pixels", ""},
+            // s014: the Filter menu.
+            {"Gaussian Blur", "Filter", "win.filter-gaussian-blur", "", "filter blur soften smooth", ""},
+            {"Unsharp Mask", "Filter", "win.filter-unsharp-mask", "", "filter sharpen crisp detail", ""},
+            {"High Pass", "Filter", "win.filter-high-pass", "", "filter other detail edges sharpen grey", ""},
+            {"Add Noise", "Filter", "win.filter-add-noise", "", "filter grain film speckle dither", ""},
+            {"Box Blur", "Filter", "win.filter-box-blur", "", "filter blur average square soften", ""},
+            {"Motion Blur", "Filter", "win.filter-motion-blur", "", "filter blur streak speed movement angle", ""},
+            {"Median", "Filter", "win.filter-median", "", "filter noise despeckle dust remove smooth", ""},
+            {"Last Filter", "Filter", "win.filter-last", "", "filter again repeat", "Ctrl+F"},
+            {"Last Filter's Settings", "Filter", "win.filter-last-dialog", "", "filter again repeat dialog", "Ctrl+Alt+F"},
             // s012: layer masks.
             {"Add Layer Mask", "Layer", "win.mask-add", "", "mask reveal selection hide", ""},
             {"Layer Mask: Reveal All", "Layer", "win.mask-reveal-all", "", "mask add white", ""},

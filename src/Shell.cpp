@@ -5,7 +5,8 @@
 #include "CommandPalette.hpp"   // ditto
 #include "NewDialog.hpp"        // ditto
 #include "NumberDialog.hpp"
-#include "AdjustDialog.hpp"   // s013     // ditto
+#include "AdjustDialog.hpp"
+#include "FilterDialog.hpp"   // s013     // ditto
 #include "Log.hpp"
 
 // Shell.cpp -- GLUE. The ctor and the ordered build_ui() pass; every other
@@ -28,7 +29,13 @@ Shell::Shell()
     set_name("shell.window");
 }
 
-Shell::~Shell() = default;
+Shell::~Shell() {
+    // s014 m4: a divider dragged just before quitting is still remembered.
+    if (m_prefs_soon.connected()) {
+        m_prefs_soon.disconnect();
+        core::save_prefs(m_prefs_file, m_prefs);
+    }
+}
 
 // The ordered pass: the frame, then the wiring (which loads the demo
 // document), then the first paint of everything that follows the document.

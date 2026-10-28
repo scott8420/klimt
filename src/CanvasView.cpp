@@ -967,4 +967,11 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     tell_zoom();
 }
 
+pixel::Rect CanvasView::visible() const {
+    if (m_zoom <= 0 || m_vw <= 0 || m_vh <= 0) return {0, 0, m_iw, m_ih};
+    const int x0 = static_cast<int>(std::floor(to_image_x(0))), y0 = static_cast<int>(std::floor(to_image_y(0)));
+    const int x1 = static_cast<int>(std::ceil(to_image_x(m_vw))), y1 = static_cast<int>(std::ceil(to_image_y(m_vh)));
+    return pixel::Rect{x0, y0, x1 - x0, y1 - y0}.intersect({0, 0, m_iw, m_ih});
+}
+
 }  // namespace klimt

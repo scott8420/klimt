@@ -6,6 +6,8 @@
 #include <gtkmm/headerbar.h>
 #include <gtkmm/overlay.h>
 #include <gtkmm/paned.h>
+#include <glibmm/main.h>
+#include <glibmm/miscutils.h>
 #include <gtkmm/scrolledwindow.h>
 
 #include <algorithm>
@@ -220,7 +222,22 @@ Gtk::Widget& Shell::build_dock() {  // zone
     split->set_resize_start_child(false);
     split->set_shrink_start_child(true);
     split->set_shrink_end_child(false);
-    split->set_position(360);
+    // s014 m4: where Scott left it last time (360 the first time).
+    m_prefs_file = Glib::build_filename(Glib::get_user_config_dir(), "klimt", "prefs.json");
+    m_prefs = core::load_prefs(m_prefs_file);
+    split->set_position(m_prefs.dock_split);
+    split->property_position().signal_changed().connect([this, split] {
+        if (!get_mapped()) return;   // GTK settling the layout, not a drag
+        const int at = split->get_position();
+        if (at < 120 || at == m_prefs.dock_split) return;
+        m_prefs.dock_split = at;
+        if (m_prefs_soon.connected()) m_prefs_soon.disconnect();
+        m_prefs_soon = Glib::signal_timeout().connect([this] {
+            if (!core::save_prefs(m_prefs_file, m_prefs))
+                if (auto lg = log::get(log::Area::Shell)) lg->warn("prefs: couldn't write {}", m_prefs_file);
+            return false;
+        }, 600);
+    });
     split->set_vexpand(true);
     m_dock.append(*split);
     return m_dock;
@@ -320,6 +337,21 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     for (const auto k : core::adjust::kinds())
         adj->append(std::string(core::adjust::label(k)) + "…", "win.adjust-apply-" + std::string(core::adjust::key(k)));
     image->append_submenu("Adjustments", adj);
+    // s014: the Filter menu -- on the pixels, for good (Photoshop's submenus).
+    auto filt = Gio::Menu::create();
+    auto again = Gio::Menu::create();
+    again->append("Last Filter", "win.filter-last");
+    again->append("Last Filter's Settings…", "win.filter-last-dialog");
+    filt->append_section(again);
+    auto groups = Gio::Menu::create();
+    for (const char* g : {"Blur", "Noise", "Sharpen", "Other"}) {
+        auto gm = Gio::Menu::create();
+        for (const auto k : core::filter::kinds())
+            if (core::filter::group(k) == g)
+                gm->append(std::string(core::filter::label(k)) + "…", "win.filter-" + std::string(core::filter::key(k)));
+        groups->append_submenu(g, gm);
+    }
+    filt->append_section(groups);
     auto view = Gio::Menu::create();
     view->append("Zoom In", "win.zoom-in");
     view->append("Zoom Out", "win.zoom-out");
@@ -329,6 +361,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto sub = Gio::Menu::create();
     sub->append_submenu("Image", image);
     sub->append_submenu("Layer", layer);
+    sub->append_submenu("Filter", filt);
     sub->append_submenu("Select", sel);
     sub->append_submenu("View", view);
     menu->append_section(sub);

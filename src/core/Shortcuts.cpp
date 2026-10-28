@@ -137,6 +137,9 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"File", "win.export",  {"<Ctrl><Shift>e"}, "", "Export a flat PNG, JPEG or TIFF"},
 
         // ── General ───────────────────────────────────────────────────────────
+        // s014: the Filter menu (Photoshop's classic keys).
+        {"Filter", "win.filter-last", {"<Ctrl>f"}, "", "Last Filter -- again, on the layer's pixels"},
+        {"Filter", "win.filter-last-dialog", {"<Ctrl><Alt>f"}, "", "Last Filter's settings -- its dialog"},
         {"General", "win.command-palette", {"<Ctrl>k"}, "", "Find a command (the palette)"},
         {"General", "win.shortcuts",     {"<Ctrl>question", "<Ctrl>slash"}, "",
          "Keyboard shortcuts (this window)"},

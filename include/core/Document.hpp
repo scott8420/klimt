@@ -24,6 +24,7 @@
 // A structural verb renumbers the siblings it touches to 1..n, so positions
 // never run out of room between two neighbours.
 #include "core/Adjust.hpp"
+#include "core/Filter.hpp"
 #include "core/Undo.hpp"
 #include "pixel/Blend.hpp"
 #include "pixel/Pixel.hpp"
@@ -316,6 +317,10 @@ bool adjust_end(DocJournal& j);
 // through the selection. Refused on a group / adjustment layer, under an All
 // or a Pixels lock, on CMYK / Lab documents, or when it changes nothing.
 bool apply_adjust(DocJournal& j, Document& d, const Id& id, const Adjust& a);
+// s014 -- the Filter menu: `f` applied to a pixel layer's pixels for good,
+// through the selection (a transparency lock keeps a blur off alpha). Refused
+// as apply_adjust is. docs/filters.md.
+bool apply_filter(DocJournal& j, Document& d, const Id& id, const Filter& f);
 // "is a group" / "is an adjustment layer": why a pixel verb is refused.
 std::string not_pixels(const Document& d, const Id& id);
 

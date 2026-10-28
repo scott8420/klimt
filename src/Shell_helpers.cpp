@@ -122,6 +122,11 @@ void Shell::update_layer_actions() {
             on(("adjust-apply-" + key).c_str(), img && pixel_layer && pl->pixels);
             on(("adjust-new-" + key).c_str(), img);
         }
+        // s014: the Filter menu wants a pixel layer with pixels (Last Filter: one run before).
+        const bool filterable = img && pixel_layer && pl->pixels;
+        for (const auto k : core::filter::kinds()) on(("filter-" + std::string(core::filter::key(k))).c_str(), filterable);
+        on("filter-last", filterable && m_last_filter);
+        on("filter-last-dialog", filterable && m_last_filter);
     }
     on("layer-duplicate", any);
     on("layer-group", any);
@@ -206,6 +211,11 @@ bool Shell::poll_jobs() {
         if (st == S::Failed) toast(m_jobs.label(id) + " failed: " + m_jobs.error(id));
         return st == S::Landed || st == S::Cancelled || st == S::Failed;
     });
+    // s014 m4: OK's filter job cancelled or failed -- its preview goes too.
+    if (m_filter_landing && (m_jobs.state(m_filter_landing) == S::Cancelled || m_jobs.state(m_filter_landing) == S::Failed)) {
+        m_filter_landing = 0;
+        if (m_preview.erase(m_filter_target)) queue_render();
+    }
     if (m_job_ids.empty()) {
         m_status.hide_job();
         if (m_job_poll.connected()) m_job_poll.disconnect();

@@ -1017,6 +1017,10 @@ const std::vector<Verb>& verbs() {
         {"apply_adjust",  [](DocJournal& j, Document& d) {
              Adjust a = adjust::fresh(AdjustKind::HueSat); a.hue = 120; a.lightness = 20; apply_adjust(j, d, "L4", a); },
              [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        // s014: the Filter menu on the pixels -- through a selection, and whole.
+        {"apply_filter_blur", [](DocJournal& j, Document& d) { apply_filter(j, d, "L4", filter::fresh(FilterKind::GaussianBlur)); },
+             [](Document& d) { load_selection(d, {50, 120, 100, 80}); }},   // across the square's edge
+        {"apply_filter_noise", [](DocJournal& j, Document& d) { apply_filter(j, d, "L4", filter::fresh(FilterKind::AddNoise)); }},
         {"move_nudge",    [](DocJournal& j, Document& d) {
              move::by(j, d, {"L4"}, 1, 0, pixel::rgba(1, 1, 1, 1), "nudge");
              move::by(j, d, {"L4"}, 0, 10, pixel::rgba(1, 1, 1, 1), "nudge"); }},

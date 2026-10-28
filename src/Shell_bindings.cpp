@@ -59,6 +59,12 @@ void Shell::bind_actions() {  // bindings
         m_layer_acts["adjust-new-" + key] = add_action("adjust-new-" + key, [this, k] { on_adjust_new(k); });
         m_layer_acts["adjust-apply-" + key] = add_action("adjust-apply-" + key, [this, k] { on_adjust_apply(k); });
     }
+    // s014: the Filter menu (Shell_filter.cpp).
+    for (const auto k : core::filter::kinds())
+        m_layer_acts["filter-" + std::string(core::filter::key(k))] =
+            add_action("filter-" + std::string(core::filter::key(k)), [this, k] { on_filter(k); });
+    m_layer_acts["filter-last"] = add_action("filter-last", [this] { on_filter_last(false); });
+    m_layer_acts["filter-last-dialog"] = add_action("filter-last-dialog", [this] { on_filter_last(true); });
     m_properties.signal_histogram_wanted().connect(sigc::mem_fun(*this, &Shell::on_histogram));
     m_layer_acts["mask-add"]         = add_action("mask-add", [this] { on_mask_add(-1); });
     m_layer_acts["mask-reveal-all"]  = add_action("mask-reveal-all", [this] { on_mask_add(int(core::layers::MaskFrom::RevealAll)); });

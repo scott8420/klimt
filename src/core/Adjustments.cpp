@@ -1,4 +1,4 @@
-// core -- ADJUSTMENT LAYER verbs (s013). docs/adjustments.md. (add_adjustment
+// core -- ADJUSTMENT LAYER verbs (s013); s014: apply_filter. docs/adjustments.md. (add_adjustment
 // is in Document.cpp, beside add_layer.)
 #include "core/Document.hpp"
 #include "core/Selection.hpp"
@@ -49,6 +49,16 @@ bool apply_adjust(DocJournal& j, Document& d, const Id& id, const Adjust& a) {
     auto out = adjust::applied(*l->pixels, n, d.selection());
     if (!out) return false;
     return set_pixels_if(j, d, id, l->pixels, std::move(*out), std::string(adjust::label(n.kind)));
+}
+
+bool apply_filter(DocJournal& j, Document& d, const Id& id, const Filter& f) {
+    const auto l = d.get(id);
+    if (!l || l->kind != Kind::Pixel || d.locked_all(id) || (l->locks & lock::Pixels) || !l->pixels) return false;
+    const auto n = filter::normalised(f);
+    if (filter::identity(n)) return false;
+    auto out = filter::filtered(*l->pixels, n, d.selection(), (l->locks & lock::Alpha) != 0);
+    if (!out) return false;
+    return set_pixels_if(j, d, id, l->pixels, std::move(*out), std::string(filter::label(n.kind)));
 }
 
 }  // namespace klimt::core::layers

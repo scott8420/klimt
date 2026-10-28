@@ -8,6 +8,7 @@
 #include "core/Move.hpp"       // s009: the Move tool
 #include "core/Canvas.hpp"     // s009: Crop, Image / Canvas Size
 #include "core/Transform.hpp"  // s011: Free Transform
+#include "core/Prefs.hpp"      // s014 m4: settings remembered between runs
 #include "CanvasView.hpp"
 #include "ContextStrip.hpp"
 #include "EdgeTab.hpp"
@@ -84,6 +85,7 @@ class CommandPalette;
 class NewDialog;
 class NumberDialog;
 class AdjustDialog;
+class FilterDialog;
 class ShortcutsDialog;
 class SizeDialog;
 
@@ -190,6 +192,13 @@ private:
     // ── adjustments (s013) ─────────────────────────────────────────────────
     void on_adjust_new(core::AdjustKind k);      // category: adjust: Layer > New Adjustment Layer (and the panel's button)
     void on_adjust_apply(core::AdjustKind k);    // category: adjust: Image > Adjustments -- the dialog, then a job
+    // s014: the Filter menu (Shell_filter.cpp).
+    void on_filter(core::FilterKind k);          // category: filter: Filter > ... -- the dialog, then a job
+    void on_filter_last(bool dialog);            // category: filter: Last Filter (Ctrl+F) / its settings (Ctrl+Alt+F)
+    bool filter_layer_ok(const std::string& verb);   // category: filter: the primary layer takes a filter? (toasts why not)
+    void filter_run(const core::Filter& f);      // category: filter: on m_filter_target's pixels, a job; one step
+    void filter_preview_soon();                  // category: filter: the preview, a moment after the last change
+    void filter_preview_stop();                  // category: filter: drop the preview and its job
     void on_histogram(const core::Document::Id& id);   // category: adjust: what's below an adjustment layer, counted (a job)
 
     // ── helpers ────────────────────────────────────────────────────────────
@@ -257,6 +266,7 @@ private:
     std::unique_ptr<NumberDialog>    m_rotate_dialog;               // s011
     std::map<int, std::unique_ptr<NumberDialog>> m_modify_dialogs;  // s011 m4: one per Modify kind
     std::unique_ptr<AdjustDialog>    m_adjust_dialog;               // s013: Image > Adjustments
+    std::unique_ptr<FilterDialog>    m_filter_dialog;               // s014: the Filter menu
 
     // ── the file (s007) ────────────────────────────────────────────────────
     std::string        m_path;                 // the .klimt this document saves to; "" = never saved
@@ -316,6 +326,19 @@ private:
     // layer it will change (a stand-in adjustment layer clipped to it).
     core::Document::Id m_adjust_target;
     std::optional<core::Adjust> m_adjust_preview;
+    // s014: the Filter menu -- its layer, the last one run (Ctrl+F), the
+    // preview's pending timer and job.
+    core::Document::Id          m_filter_target;
+    std::optional<core::Filter> m_last_filter;
+    sigc::connection            m_filter_soon;
+    core::Jobs::Id              m_filter_job = 0;
+    std::uint32_t               m_filter_seed = 0;
+    core::Jobs::Id              m_filter_landing = 0;   // OK's job: the preview stays until it lands
+    // s014 m4: the app's settings (~/.config/klimt/prefs.json); saved a moment
+    // after a change (the divider dragged).
+    core::Prefs                 m_prefs;
+    std::string                 m_prefs_file;
+    sigc::connection            m_prefs_soon;
 
     // ── the ants (s008) ────────────────────────────────────────────────────
     std::shared_ptr<const pixel::TileMap> m_ants_for;   // the mask the canvas's ants are of

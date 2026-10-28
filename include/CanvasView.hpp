@@ -59,6 +59,9 @@ public:
     bool   fitting() const { return m_fit; }
     // The tile the view's centre is on, for ordering work (visible first).
     void   view_centre(double& x, double& y) const { x = m_cx; y = m_cy; }
+    // s014: the image pixels the view shows (clipped to the image) -- what a
+    // filter's preview works on.
+    pixel::Rect visible() const;
     void set_tool(const std::string& id, int variant = 0) {
         if (id != "crop") m_crop = false;   // s009: the box belongs to the Crop tool
         m_tool = id; m_variant = variant; update_cursor(); queue_draw();
