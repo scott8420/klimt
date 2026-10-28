@@ -75,6 +75,7 @@ int reach(const Styles& s) {
     if (s.outer.on) r = std::max(r, blur_reach(s.outer.size) + s.outer.size);
     if (s.stroke.on) r = std::max(r, s.stroke.size + 2);
     if (s.inner.on) r = std::max(r, s.inner.distance + blur_reach(s.inner.size) + 1);
+    if (s.bevel.on) r = std::max(r, blur_reach(s.bevel.size) + blur_reach(s.bevel.soften) + 2);   // s021
     return r;
 }
 
@@ -193,6 +194,40 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
         float* o = O.data() + i * static_cast<std::size_t>(C);
         for (int k = 0; k < cc; ++k) o[k] = col[k] * ca + o[k] * (1 - ca);
         o[cc] = ca + o[cc] * (1 - ca);
+    }
+    // s021: Bevel & Emboss -- the content's alpha, softened over `size`, as a
+    // height field; its slope lit from (angle, altitude). Over the content,
+    // under the Stroke.
+    if (s.bevel.on) {
+        const auto& b = s.bevel;
+        std::vector<float> h = A;
+        const double sig = std::max(0.5, b.size / 2.0);
+        blur(h, W, H, sig);
+        // Slopes ~1 at a depth of 100 %: a blurred edge rises 1 over ~2.5 sigma.
+        const float k = static_cast<float>((b.up ? 1.0 : -1.0) * std::clamp(b.depth, 1, 1000) / 100.0 * 2.5 * sig);
+        const double ang = b.angle * M_PI / 180, alt = std::clamp(b.altitude, 0, 90) * M_PI / 180;
+        const float lx = static_cast<float>(std::cos(alt) * std::cos(ang)), ly = static_cast<float>(-std::cos(alt) * std::sin(ang));
+        const float lz = static_cast<float>(std::sin(alt));
+        std::vector<float> hi(N, 0.f), lo(N, 0.f);
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x) {
+                const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x);
+                const float gx = (at(h, x + 1, y) - at(h, x - 1, y)) * 0.5f * k, gy = (at(h, x, y + 1) - at(h, x, y - 1)) * 0.5f * k;
+                if (gx == 0.f && gy == 0.f) continue;
+                const float nl = std::sqrt(gx * gx + gy * gy + 1.f);
+                const float shade = (-gx * lx - gy * ly + lz) / nl;   // the normal (-gx, -gy, 1) . the light
+                const float dlt = shade - lz;
+                if (dlt > 0) hi[i] = std::min(1.f, dlt / std::max(0.05f, 1.f - lz));
+                else lo[i] = std::min(1.f, -dlt / std::max(0.05f, lz));
+            }
+        if (b.soften > 0) { blur(hi, W, H, b.soften / 2.0); blur(lo, W, H, b.soften / 2.0); }
+        const auto hc = colour_of(b.highlight), sc = colour_of(b.shadow);
+        const float ho = static_cast<float>(b.highlight_opacity) / 100.f, so = static_cast<float>(b.shadow_opacity) / 100.f;
+        for (std::size_t i = 0; i < N; ++i) {
+            const float where = b.style == 1 ? 1.f : A[i];   // Inner Bevel: only on the content
+            over(i, sc, lo[i] * so * where);
+            over(i, hc, hi[i] * ho * where);
+        }
     }
     if (s.stroke.on) {   // exact distances to the edge (alpha >= 1/2), anti-aliased
         std::vector<char> in(N), out(N);

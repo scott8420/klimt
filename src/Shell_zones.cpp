@@ -219,6 +219,7 @@ Gtk::Widget& Shell::build_dock() {  // zone
     // s014 m4: where Scott left it last time (360 the first time).
     m_prefs_file = Glib::build_filename(Glib::get_user_config_dir(), "klimt", "prefs.json");
     m_prefs = core::load_prefs(m_prefs_file);
+    m_strip.set_presets_file(Glib::build_filename(Glib::get_user_config_dir(), "klimt", "brushes.json"));   // s021
     split->set_position(m_prefs.dock_split);
     split->property_position().signal_changed().connect([this, split] {
         if (!get_mapped()) return;   // GTK settling the layout, not a drag
@@ -307,6 +308,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     ls_fx->append("Drop Shadow", "win.style-drop-shadow");
     ls_fx->append("Outer Glow", "win.style-outer-glow");
     ls_fx->append("Inner Shadow", "win.style-inner-shadow");
+    ls_fx->append("Bevel & Emboss", "win.style-bevel-emboss");   // s021
     ls_fx->append("Color Overlay", "win.style-colour-overlay");
     ls_fx->append("Stroke", "win.style-stroke");
     ls->append_section(ls_fx);

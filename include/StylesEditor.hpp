@@ -28,8 +28,9 @@ public:
 private:
     // One effect's section: an expander with a box in its label.
     Gtk::Box* section(const char* name, bool* on);
+    void choice(Gtk::Box& into, const char* label, std::vector<Glib::ustring> items, std::function<int()> get, std::function<void(int)> put);   // s021
     void slider(Gtk::Box& into, const char* label, int lo, int hi, const char* unit, int* field);
-    void colour(Gtk::Box& into, core::Rgb* field);
+    void colour(Gtk::Box& into, core::Rgb* field, const char* label = "Colour");
     void emit();
     void paint();
 

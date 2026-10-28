@@ -10,6 +10,11 @@
 // and the stack) -- tiles that ask at once wait for the one computation. So
 // the canvas, export, the histogram, the eyedropper and "All layers" sampling
 // all see the filtered layer with no change of their own.
+//
+// s021: a new look whose pixels share most tiles with a cached one of the
+// same stack (a stroke's next dab) is made IN PART: only the cells the change
+// can reach are worked (in a window wide enough that they come out as the
+// whole run makes them); the rest are the cached look's tiles.
 #include "core/Composite.hpp"   // Layers
 #include "core/Document.hpp"
 
@@ -36,6 +41,9 @@ pixel::TileMap masked(const pixel::TileMap& raw, const pixel::TileMap& filtered,
 // How far an active layer's look can reach past its pixels (the stack's reach).
 int reach(const Layer& l);
 void clear_cache();                       // tests
+// s021: how many looks were made in part (the change and its reach only) --
+// painting a live / styled layer. For the selftest.
+int partly_count();
 
 }  // namespace klimt::core::live
 

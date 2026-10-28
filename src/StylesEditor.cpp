@@ -72,7 +72,41 @@ StylesEditor::StylesEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 2) {
         row->append(*dd);
         b->append(*row);
     }
+    {   // s021: Bevel & Emboss
+        auto* b = section("Bevel & Emboss", &m_s.bevel.on);
+        choice(*b, "Style", {"Inner Bevel", "Emboss"}, [this] { return m_s.bevel.style; }, [this](int v) { m_s.bevel.style = v; });
+        slider(*b, "Depth", 1, 500, "%", &m_s.bevel.depth);
+        choice(*b, "Direction", {"Up", "Down"}, [this] { return m_s.bevel.up ? 0 : 1; }, [this](int v) { m_s.bevel.up = v == 0; });
+        slider(*b, "Size", 0, 100, "px", &m_s.bevel.size);
+        slider(*b, "Soften", 0, 16, "px", &m_s.bevel.soften);
+        slider(*b, "Angle", -180, 180, "°", &m_s.bevel.angle);
+        slider(*b, "Altitude", 0, 90, "°", &m_s.bevel.altitude);
+        colour(*b, &m_s.bevel.highlight, "Highlight");
+        slider(*b, "Opacity", 0, 100, "%", &m_s.bevel.highlight_opacity);
+        colour(*b, &m_s.bevel.shadow, "Shadow");
+        slider(*b, "Opacity", 0, 100, "%", &m_s.bevel.shadow_opacity);
+    }
     paint();
+}
+
+void StylesEditor::choice(Gtk::Box& into, const char* label, std::vector<Glib::ustring> items, std::function<int()> get,
+                          std::function<void(int)> put) {
+    auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto l = Gtk::make_managed<Gtk::Label>(label);
+    l->set_size_request(64, -1);
+    l->set_xalign(0.0f);
+    l->add_css_class("dim-label");
+    row->append(*l);
+    const auto n = static_cast<guint>(items.size());
+    auto dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(items));
+    dd->property_selected().signal_changed().connect([this, dd, put, n] {
+        if (m_painting) return;
+        put(static_cast<int>(std::min<guint>(dd->get_selected(), n - 1)));
+        emit();
+    });
+    m_painters.push_back([dd, get] { dd->set_selected(static_cast<guint>(get())); });
+    row->append(*dd);
+    into.append(*row);
 }
 
 Gtk::Box* StylesEditor::section(const char* name, bool* on) {
@@ -127,9 +161,9 @@ void StylesEditor::slider(Gtk::Box& into, const char* label, int lo, int hi, con
     into.append(*row);
 }
 
-void StylesEditor::colour(Gtk::Box& into, core::Rgb* field) {
+void StylesEditor::colour(Gtk::Box& into, core::Rgb* field, const char* label) {
     auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
-    auto l = Gtk::make_managed<Gtk::Label>("Colour");
+    auto l = Gtk::make_managed<Gtk::Label>(label);
     l->set_size_request(64, -1);
     l->set_xalign(0.0f);
     l->add_css_class("dim-label");

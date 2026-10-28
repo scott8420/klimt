@@ -167,4 +167,43 @@ void selftest_styles(const Check& check) {
         check("paste style: groups skipped, one step for the rest",
               L::set_styles_on(j, d, {"L5", "L2"}, s, "Paste Layer Style") && d.get("L5")->styles == s && !d.get("L2")->styles.any(), "");
     }
+    std::cout << "\n-- layer styles: bevel & emboss (s021) --\n";
+    {
+        const auto src = square();   // red 200 x 150 at (100, 100)
+        core::Styles s;
+        s.bevel.on = true;
+        s.bevel.size = 10;
+        const auto out = S::drawn(src, s, 100);
+        const auto lum = [&](int x, int y) { const auto p = out.get(x, y); return (p.c[0] + p.c[1] + p.c[2]) / 3; };
+        const float flat = lum(200, 175);
+        check("bevel: the middle untouched", near(out.get(200, 175).c[0], 1) && near(out.get(200, 175).c[1], 0), num(flat));
+        check("bevel up, light upper left: the top-left edge lit", lum(103, 175) > flat + 0.1 && lum(200, 103) > flat + 0.1, num(lum(103, 175)));
+        check("bevel up: the bottom-right edge shaded", lum(296, 175) < flat - 0.1 && lum(200, 246) < flat - 0.1, num(lum(296, 175)));
+        check("inner bevel: nothing outside", out.get(95, 175).c[3] == 0.f, "");
+        s.bevel.up = false;
+        const auto down = S::drawn(src, s, 100);
+        const auto dl = [&](int x, int y) { const auto p = down.get(x, y); return (p.c[0] + p.c[1] + p.c[2]) / 3; };
+        check("bevel down: turned over (top-left shaded)", dl(103, 175) < flat - 0.1 && dl(296, 175) > flat + 0.1, num(dl(103, 175)));
+        s.bevel.up = true;
+        s.bevel.style = 1;
+        const auto emb = S::drawn(src, s, 100);
+        check("emboss: either side of the edge (outside too)", emb.get(95, 175).c[3] > 0.05f, num(emb.get(95, 175).c[3]));
+        check("bevel: reach counts its size", S::reach(s) >= 10, num(S::reach(s)));
+        // In the file.
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        s.bevel.depth = 250; s.bevel.soften = 3; s.bevel.altitude = 45; s.bevel.highlight = {1, 0.9f, 0.5f}; s.bevel.shadow_opacity = 40;
+        L::set_styles(j, d, "L4", s);
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_bevel_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image(); c.layers = d.snapshot(); c.next_id = d.next_id();
+        std::string err;
+        core::file::save_klimt(path, c, err);
+        const auto back = core::file::open(path, err);
+        check("bevel: in the file", back && back->layers.at("L4").styles.bevel == s.bevel, err);
+        fs::remove(path);
+    }
 }

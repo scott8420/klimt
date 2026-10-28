@@ -3,6 +3,7 @@
 #include "core/StylesRender.hpp"   // s019
 
 #include <algorithm>
+#include <atomic>
 #include <future>
 #include <mutex>
 
@@ -19,6 +20,7 @@ struct Entry {
     std::uint64_t used = 0;
 };
 std::mutex g_mutex;
+std::atomic<int> g_partly{0};   // s021: looks made in part (the selftest reads it)
 std::vector<Entry> g_cache;
 std::uint64_t g_clock = 0;
 constexpr std::size_t kKeep = 8;
@@ -27,6 +29,79 @@ std::vector<LiveFilter> on_only(const std::vector<LiveFilter>& s) {
     std::vector<LiveFilter> v;
     for (const auto& f : s) if (f.on && f.f.kind != FilterKind::None) v.push_back(f);
     return v;
+}
+
+// The whole look of `src`: the stack, the filter mask, the styles.
+std::shared_ptr<const pixel::TileMap> whole(const pixel::TileMap& src, const std::vector<LiveFilter>& stack,
+                                            const pixel::TileMap* mask, const Styles& st, int fill) {
+    auto out = run(src, stack);
+    if (out && mask) out = masked(src, *out, *mask);
+    if (out && st.any()) out = styles::drawn(*out, st, fill);
+    return out ? std::make_shared<const pixel::TileMap>(std::move(*out)) : nullptr;
+}
+
+// s021 -- the cells [c0, c1) x [r0, r1) of `m` as a map of their own (the
+// same tiles, the grid starting at (c0, r0)); the last ones keep the image's
+// own edge.
+pixel::TileMap cells_of(const pixel::TileMap& m, int c0, int r0, int c1, int r1) {
+    const int w = std::min(c1 * pixel::kTile, m.width()) - c0 * pixel::kTile;
+    const int h = std::min(r1 * pixel::kTile, m.height()) - r0 * pixel::kTile;
+    std::vector<pixel::TileMap::TileRef> grid;
+    grid.reserve(static_cast<std::size_t>(c1 - c0) * static_cast<std::size_t>(r1 - r0));
+    for (int r = r0; r < r1; ++r)
+        for (int c = c0; c < c1; ++c) grid.push_back(m.tile(c, r));
+    return pixel::TileMap::from_tiles(m.format(), w, h, std::move(grid));
+}
+
+// s021 (WEAKNESSES 38) -- PAINTING A LIVE LAYER. A stroke changes a few
+// tiles; the look before it (`was`, of `was_src`) is right everywhere the
+// change can't reach. So: the cells that changed, grown by the look's reach
+// (the cells whose look may differ), worked in a WINDOW grown by the reach
+// again (so their every input is in it -- or the window meets the image's
+// own edge, where the whole run clamps the same way); the rest of the look
+// is `was`'s tiles, shared. nullptr: do it whole (too much changed, pixels
+// beyond the image, or a filter that depends on where it is -- Add Noise).
+std::shared_ptr<const pixel::TileMap> partly(const pixel::TileMap& src, const pixel::TileMap& was_src,
+                                             const pixel::TileMap& was, const std::vector<LiveFilter>& stack,
+                                             const pixel::TileMap* mask, const Styles& st, int fill) {
+    if (!(src.format() == was_src.format()) || src.width() != was_src.width() || src.height() != was_src.height() ||
+        was.width() != src.width() || was.height() != src.height())
+        return nullptr;
+    if (src.has_outside() || was_src.has_outside() || was.has_outside()) return nullptr;
+    for (const auto& f : stack) if (f.f.kind == FilterKind::AddNoise) return nullptr;
+    int reach_px = 0;
+    for (const auto& f : stack) reach_px += filter::reach(f.f);
+    if (st.any()) reach_px += styles::reach(st);
+    const int k = (reach_px + 8 + pixel::kTile - 1) / pixel::kTile;   // cells; the guard covers rounding at the edges
+    const int cols = src.cols(), rows = src.rows();
+    int changed = 0;
+    int c0 = cols, r0 = rows, c1 = -1, r1 = -1;
+    for (int r = 0; r < rows; ++r)
+        for (int c = 0; c < cols; ++c)
+            if (!src.same_tile(was_src, c, r)) {
+                ++changed;
+                c0 = std::min(c0, c); c1 = std::max(c1, c);
+                r0 = std::min(r0, r); r1 = std::max(r1, r);
+            }
+    if (changed == 0) return std::make_shared<const pixel::TileMap>(was);
+    // The cells whose look may change: the changed ones' box, grown by k.
+    const int a0 = std::max(0, c0 - k), a1 = std::min(cols, c1 + k + 1);
+    const int b0 = std::max(0, r0 - k), b1 = std::min(rows, r1 + k + 1);
+    if ((a1 - a0) * (b1 - b0) * 10 > cols * rows * 6) return nullptr;   // most of it: whole is as cheap
+    // The window: those, grown by k again.
+    const int w0 = std::max(0, a0 - k), w1 = std::min(cols, a1 + k);
+    const int v0 = std::max(0, b0 - k), v1 = std::min(rows, b1 + k);
+    const auto win_src = cells_of(src, w0, v0, w1, v1);
+    std::optional<pixel::TileMap> win_mask;
+    if (mask) win_mask = cells_of(*mask, w0, v0, w1, v1);
+    const auto look_win = whole(win_src, stack, win_mask ? &*win_mask : nullptr, st, fill);
+    if (!look_win || look_win->has_outside()) return nullptr;
+    std::vector<pixel::TileMap::TileRef> grid;
+    grid.reserve(static_cast<std::size_t>(cols) * static_cast<std::size_t>(rows));
+    for (int r = 0; r < rows; ++r)
+        for (int c = 0; c < cols; ++c)
+            grid.push_back(c >= a0 && c < a1 && r >= b0 && r < b1 ? look_win->tile(c - w0, r - v0) : was.tile(c, r));
+    return std::make_shared<const pixel::TileMap>(was.with_grid(std::move(grid)));
 }
 }  // namespace
 
@@ -105,6 +180,8 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
     std::shared_future<std::shared_ptr<const pixel::TileMap>> fut;
     std::promise<std::shared_ptr<const pixel::TileMap>> mine;
     bool compute = false;
+    std::shared_ptr<const pixel::TileMap> parent_src;
+    std::shared_future<std::shared_ptr<const pixel::TileMap>> parent;
     {
         std::lock_guard g(g_mutex);
         for (auto& e : g_cache)
@@ -118,16 +195,33 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
                         (victim == g_cache.end() || it->used < victim->used)) victim = it;
                 if (victim != g_cache.end()) g_cache.erase(victim);
             }
+            // s021: the latest look with this stack / mask / styles, of other
+            // pixels of the same size -- likely the same layer a dab ago.
+            std::uint64_t best = 0;
+            for (const auto& e : g_cache)
+                if (e.mask == l.filter_mask && e.stack == stack && e.styles == l.styles && (!l.styles.any() || e.fill == l.fill) &&
+                    e.src && e.src->width() == l.pixels->width() && e.src->height() == l.pixels->height() && e.used > best) {
+                    best = e.used;
+                    parent_src = e.src;
+                    parent = e.result;
+                }
             fut = mine.get_future().share();
             g_cache.push_back({l.pixels, l.filter_mask, stack, l.styles, l.fill, fut, ++g_clock});
             compute = true;
         }
     }
     if (compute) {
-        auto out = run(*l.pixels, stack);
-        if (out && l.filter_mask) out = masked(*l.pixels, *out, *l.filter_mask);
-        if (out && l.styles.any()) out = styles::drawn(*out, l.styles, l.fill);   // s019: the effects, the fill on the content
-        mine.set_value(out ? std::make_shared<const pixel::TileMap>(std::move(*out)) : l.pixels);
+        // s021: a look of the same stack, mask and styles over pixels that
+        // share most tiles with these (the stroke before) -- only the change
+        // and its reach are worked.
+        std::shared_ptr<const pixel::TileMap> out;
+        if (parent_src && parent.valid()) {
+            const auto was = parent.get();
+            if (was) out = partly(*l.pixels, *parent_src, *was, stack, l.filter_mask.get(), l.styles, l.fill);
+            if (out) g_partly.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (!out) out = whole(*l.pixels, stack, l.filter_mask.get(), l.styles, l.fill);   // s019: the effects, the fill on the content
+        mine.set_value(out ? out : l.pixels);
     }
     return fut.get();
 }
@@ -148,6 +242,8 @@ void clear_cache() {
     std::lock_guard g(g_mutex);
     g_cache.clear();
 }
+
+int partly_count() { return g_partly.load(); }
 
 }  // namespace klimt::core::live
 

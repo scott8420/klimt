@@ -15,6 +15,10 @@
 #include <gtkmm/eventcontrollerscroll.h>
 #include <gtkmm/gesturedrag.h>
 #include <gdkmm/cursor.h>
+#include <gtkmm/drawingarea.h>
+#include <gtkmm/listbox.h>
+#include <gtkmm/scrolledwindow.h>
+#include <cairomm/context.h>
 #include <glibmm/main.h>
 
 #include <algorithm>
@@ -106,6 +110,181 @@ void ContextStrip::set_brush_size(const std::string& tool, int size) {
     m_brush_signal.emit();
 }
 
+// ── s021: brush presets ─────────────────────────────────────────────────────
+namespace {
+core::BrushPreset preset_of(const ContextStrip::BrushOpts& o) {
+    core::BrushPreset p;
+    p.size = o.size; p.hardness = o.hardness; p.opacity = o.opacity; p.flow = o.flow; p.smoothing = o.smoothing;
+    p.tip = o.tip; p.angle = o.angle; p.roundness = o.roundness; p.strength = o.strength;
+    p.pressure_size = o.pressure_size; p.pressure_opacity = o.pressure_opacity; p.tilt = o.tilt;
+    return core::clamped(p);
+}
+ContextStrip::BrushOpts opts_of(const core::BrushPreset& p) {
+    ContextStrip::BrushOpts o;
+    o.size = p.size; o.hardness = p.hardness; o.opacity = p.opacity; o.flow = p.flow; o.smoothing = p.smoothing;
+    o.tip = p.tip; o.angle = p.angle; o.roundness = p.roundness; o.strength = p.strength;
+    o.pressure_size = p.pressure_size; o.pressure_opacity = p.pressure_opacity; o.tilt = p.tilt;
+    return o;
+}
+// The preset's tip, drawn: its shape, hardness, angle, roundness, in the
+// theme's foreground.
+void draw_tip(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h, const core::BrushPreset& p, const Gdk::RGBA& fg) {
+    const double r = std::min(w, h) * 0.42;
+    cr->save();
+    cr->translate(w / 2.0, h / 2.0);
+    cr->rotate(-p.angle * M_PI / 180.0);
+    cr->scale(1.0, std::max(0.05, p.roundness / 100.0));
+    const double hard = p.hardness / 100.0;
+    if (p.tip == 1) {   // square
+        cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.95);
+        cr->rectangle(-r * 0.85, -r * 0.85, r * 1.7, r * 1.7);
+        cr->fill();
+    } else {
+        auto g = Cairo::RadialGradient::create(0, 0, 0, 0, 0, r);
+        g->add_color_stop_rgba(0, fg.get_red(), fg.get_green(), fg.get_blue(), 0.95);
+        g->add_color_stop_rgba(std::clamp(hard * 0.95, 0.0, 0.95), fg.get_red(), fg.get_green(), fg.get_blue(), hard > 0.01 ? 0.95 : 0.6);
+        g->add_color_stop_rgba(1, fg.get_red(), fg.get_green(), fg.get_blue(), 0);
+        cr->set_source(g);
+        cr->arc(0, 0, r, 0, 2 * M_PI);
+        cr->fill();
+        if (p.tip == 2) {   // chalk: grain punched out
+            cr->set_operator(Cairo::Context::Operator::CLEAR);
+            unsigned seed = 7;
+            for (int k = 0; k < 40; ++k) {
+                seed = seed * 1103515245u + 12345u;
+                const double a = (seed % 628) / 100.0;
+                seed = seed * 1103515245u + 12345u;
+                const double d = (seed % 100) / 100.0 * r;
+                cr->arc(std::cos(a) * d, std::sin(a) * d, r * 0.07, 0, 2 * M_PI);
+                cr->fill();
+            }
+        }
+    }
+    cr->restore();
+}
+}  // namespace
+
+void ContextStrip::set_presets_file(const std::string& file) {
+    m_presets_file = file;
+    m_presets = core::load_presets(file);
+}
+
+void ContextStrip::store_presets() {
+    if (!m_presets_file.empty()) core::save_presets(m_presets_file, m_presets);
+}
+
+void ContextStrip::apply_preset(const std::string& tool, std::size_t i) {
+    if (i >= m_presets.size()) return;
+    m_brush[tool] = opts_of(m_presets[i]);
+    if (m_shown == tool)
+        if (const auto* t = core::find_tool(tool)) Glib::signal_idle().connect_once([this, t] { show_tool(*t); });
+    m_brush_signal.emit();
+}
+
+std::size_t ContextStrip::save_preset(const std::string& tool, const std::string& name) {
+    auto p = preset_of(brush(tool));
+    p.name = core::unique_preset_name(m_presets, name);
+    m_presets.push_back(p);
+    store_presets();
+    return m_presets.size() - 1;
+}
+
+void ContextStrip::delete_preset(std::size_t i) {
+    if (i >= m_presets.size()) return;
+    m_presets.erase(m_presets.begin() + static_cast<std::ptrdiff_t>(i));
+    store_presets();
+}
+
+Gtk::Widget* ContextStrip::presets_button(const std::string& tool) {
+    auto mb = Gtk::make_managed<Gtk::MenuButton>();
+    mb->set_name("strip.brush.presets");
+    const auto cur = preset_of(brush(tool));
+    std::string label = "Brushes";
+    for (const auto& p : m_presets) if (p.same_brush(cur)) { label = p.name; break; }
+    mb->set_label(label);
+    mb->set_tooltip_text("Brush presets: pick one, or save the brush as it is now");
+    auto pop = Gtk::make_managed<Gtk::Popover>();
+    auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
+    box->set_margin(8);
+    auto scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    scroll->set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
+    scroll->set_max_content_height(380);
+    scroll->set_propagate_natural_height(true);
+    auto list = Gtk::make_managed<Gtk::ListBox>();
+    list->set_name("strip.brush.presets.list");
+    list->add_css_class("navigation-sidebar");
+    list->set_selection_mode(Gtk::SelectionMode::NONE);
+    list->set_activate_on_single_click(true);
+    const Gdk::RGBA fg = mb->get_color();
+    for (std::size_t i = 0; i < m_presets.size(); ++i) {
+        const auto p = m_presets[i];
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 10);
+        row->set_margin_top(2);
+        row->set_margin_bottom(2);
+        auto glyph = Gtk::make_managed<Gtk::DrawingArea>();
+        glyph->set_content_width(30);
+        glyph->set_content_height(30);
+        glyph->set_draw_func([p, fg](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) { draw_tip(cr, w, h, p, fg); });
+        row->append(*glyph);
+        auto name = Gtk::make_managed<Gtk::Label>(p.name);
+        name->set_xalign(0.f);
+        name->set_hexpand(true);
+        if (p.same_brush(cur)) name->set_markup("<b>" + Glib::Markup::escape_text(p.name) + "</b>");
+        row->append(*name);
+        auto size = Gtk::make_managed<Gtk::Label>(std::to_string(p.size) + " px");
+        size->add_css_class("dim-label");
+        size->add_css_class("numeric");
+        row->append(*size);
+        auto del = Gtk::make_managed<Gtk::Button>();
+        del->set_icon_name("window-close-symbolic");
+        del->add_css_class("flat");
+        del->add_css_class("circular");
+        del->set_tooltip_text("Delete “" + p.name + "”");
+        del->signal_clicked().connect([this, pop, name = p.name, tool] {
+            for (std::size_t k = 0; k < m_presets.size(); ++k)
+                if (m_presets[k].name == name) { delete_preset(k); break; }
+            pop->popdown();
+            if (const auto* t = core::find_tool(tool)) Glib::signal_idle().connect_once([this, t] { show_tool(*t); });
+        });
+        row->append(*del);
+        list->append(*row);
+    }
+    list->signal_row_activated().connect([this, pop, tool](Gtk::ListBoxRow* r) {
+        if (!r) return;
+        pop->popdown();
+        apply_preset(tool, static_cast<std::size_t>(r->get_index()));
+    });
+    scroll->set_child(*list);
+    box->append(*scroll);
+    if (m_presets.empty()) {
+        auto none = Gtk::make_managed<Gtk::Label>("No presets -- save one below");
+        none->add_css_class("dim-label");
+        box->append(*none);
+    }
+    // Save the brush as it is now.
+    auto save_row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto entry = Gtk::make_managed<Gtk::Entry>();
+    entry->set_name("strip.brush.presets.name");
+    entry->set_placeholder_text("Name");
+    entry->set_hexpand(true);
+    auto save = Gtk::make_managed<Gtk::Button>("Save Brush");
+    save->set_name("strip.brush.presets.save");
+    save->set_tooltip_text("Save the brush as it is now as a preset");
+    const auto do_save = [this, pop, entry, tool] {
+        save_preset(tool, entry->get_text());
+        pop->popdown();
+        if (const auto* t = core::find_tool(tool)) Glib::signal_idle().connect_once([this, t] { show_tool(*t); });
+    };
+    save->signal_clicked().connect(do_save);
+    entry->signal_activate().connect(do_save);
+    save_row->append(*entry);
+    save_row->append(*save);
+    box->append(*save_row);
+    pop->set_child(*box);
+    mb->set_popover(*pop);
+    return mb;
+}
+
 void ContextStrip::show_tool(const core::ToolSpec& t) {
     m_shown = t.id;
     while (auto* c = get_first_child()) remove(*c);
@@ -161,6 +340,7 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
                          });
         };
         const auto o = brush(t.id);
+        append(*presets_button(t.id));   // s021
         // s017: the TIP -- a button whose popover holds the shape, angle,
         // roundness and pen tilt (Photoshop's brush picker, cut down): the
         // strip itself stays as long as it was.

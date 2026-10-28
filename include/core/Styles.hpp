@@ -60,13 +60,35 @@ struct OverlayFx {
     bool operator==(const OverlayFx&) const = default;
 };
 
+// s021 -- Bevel & Emboss (Smooth): the alpha as a height field, lit from
+// `angle` at `altitude` -- a highlight where the slope faces the light, a
+// shadow where it faces away. Inner Bevel: inside the content's edge;
+// Emboss: either side of it. `depth` (%) steepens the slopes; `up` false
+// turns them over (pressed in); `soften` blurs the shading.
+struct BevelFx {
+    bool on = false;
+    int  style = 0;        // 0 Inner Bevel, 1 Emboss
+    int  depth = 100;      // %, 1..1000
+    bool up = true;
+    int  size = 5;         // px, 0..250
+    int  soften = 0;       // px, 0..16
+    int  angle = 120;      // degrees
+    int  altitude = 30;    // degrees, 0..90
+    Rgb  highlight{1, 1, 1};
+    int  highlight_opacity = 75;
+    Rgb  shadow{0, 0, 0};
+    int  shadow_opacity = 75;
+    bool operator==(const BevelFx&) const = default;
+};
+
 struct Styles {
     ShadowFx  drop;
     GlowFx    outer;
     ShadowFx  inner{false, {0, 0, 0}, 75, 120, 5, 0, 5};
     OverlayFx overlay;
     StrokeFx  stroke;
-    bool any() const { return drop.on || outer.on || inner.on || overlay.on || stroke.on; }
+    BevelFx   bevel;   // s021
+    bool any() const { return drop.on || outer.on || inner.on || overlay.on || stroke.on || bevel.on; }
     bool operator==(const Styles&) const = default;
 };
 

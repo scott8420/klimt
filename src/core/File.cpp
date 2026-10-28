@@ -130,6 +130,13 @@ json styles_json(const Styles& s) {
     if (s.overlay.on) o["colour_overlay"] = {{"on", true}, {"colour", rgb_json(s.overlay.colour)}, {"opacity", s.overlay.opacity}};
     if (s.stroke.on) o["stroke"] = {{"on", true}, {"colour", rgb_json(s.stroke.colour)}, {"opacity", s.stroke.opacity},
                                     {"size", s.stroke.size}, {"position", s.stroke.position}};
+    if (s.bevel.on) {   // s021
+        const auto& b = s.bevel;
+        o["bevel_emboss"] = {{"on", true}, {"style", b.style == 1 ? "emboss" : "inner-bevel"}, {"depth", b.depth}, {"up", b.up},
+                             {"size", b.size}, {"soften", b.soften}, {"angle", b.angle}, {"altitude", b.altitude},
+                             {"highlight", rgb_json(b.highlight)}, {"highlight_opacity", b.highlight_opacity},
+                             {"shadow", rgb_json(b.shadow)}, {"shadow_opacity", b.shadow_opacity}};
+    }
     return o;
 }
 Styles styles_from(const json& o) {
@@ -168,6 +175,22 @@ Styles styles_from(const json& o) {
         s.stroke.opacity = pct(j, "opacity", s.stroke.opacity);
         s.stroke.size = std::clamp(j.value("size", s.stroke.size), 1, 250);
         s.stroke.position = std::clamp(j.value("position", s.stroke.position), 0, 2);
+    }
+    if (o.contains("bevel_emboss")) {   // s021
+        const auto& j = o.at("bevel_emboss");
+        auto& b = s.bevel;
+        b.on = j.value("on", true);
+        b.style = j.value("style", std::string("inner-bevel")) == "emboss" ? 1 : 0;
+        b.depth = std::clamp(j.value("depth", b.depth), 1, 1000);
+        b.up = j.value("up", b.up);
+        b.size = std::clamp(j.value("size", b.size), 0, 250);
+        b.soften = std::clamp(j.value("soften", b.soften), 0, 16);
+        b.angle = std::clamp(j.value("angle", b.angle), -180, 180);
+        b.altitude = std::clamp(j.value("altitude", b.altitude), 0, 90);
+        b.highlight = rgb_from(j.value("highlight", json()), b.highlight);
+        b.highlight_opacity = pct(j, "highlight_opacity", b.highlight_opacity);
+        b.shadow = rgb_from(j.value("shadow", json()), b.shadow);
+        b.shadow_opacity = pct(j, "shadow_opacity", b.shadow_opacity);
     }
     return s;
 }

@@ -6,6 +6,7 @@
 // pixels arrive with pixels; until then the strip says so instead of faking.
 #include "widgets/Widgets.hpp"
 #include "core/Tools.hpp"
+#include "core/BrushPresets.hpp"   // s021
 
 #include <map>
 #include <sigc++/signal.h>
@@ -42,6 +43,13 @@ public:
     sigc::signal<void()>& signal_clone_changed() { return m_clone_signal; }
     void set_brush_size(const std::string& tool, int size);   // [ and ] -- the strip follows
     sigc::signal<void()>& signal_brush_changed() { return m_brush_signal; }
+    // s021: BRUSH PRESETS -- the list (app settings, ~/.config/klimt/brushes.json),
+    // shown in the brush tools' strip; picking one sets the tool's options.
+    void set_presets_file(const std::string& file);
+    const std::vector<core::BrushPreset>& presets() const { return m_presets; }
+    void apply_preset(const std::string& tool, std::size_t i);   // the tool's options become preset i
+    std::size_t save_preset(const std::string& tool, const std::string& name);   // the tool's options as a new preset; its index
+    void delete_preset(std::size_t i);
     // s008: told when the user picks a variant (tool id, index).
     sigc::signal<void(const std::string&, int)>& signal_variant() { return m_variant_signal; }
 
@@ -53,6 +61,10 @@ private:
     CloneOpts m_clone;
     sigc::signal<void()> m_clone_signal;
     std::map<std::string, BrushOpts> m_brush;
+    std::vector<core::BrushPreset> m_presets = core::default_presets();
+    std::string m_presets_file;
+    void store_presets();
+    Gtk::Widget* presets_button(const std::string& tool);   // the strip's "Brushes" button and its popover
     std::string m_shown;                                      // the tool the strip shows
     sigc::signal<void()> m_brush_signal;
     sigc::signal<void(const std::string&, int)> m_variant_signal;
