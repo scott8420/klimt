@@ -93,6 +93,10 @@ public:
     // from the press in WHOLE image pixels (Shift: along one axis only).
     enum class MoveAt { Begin, Move, End };
     sigc::signal<void(MoveAt, int, int)>& signal_move() { return m_move_signal; }
+    // s016: the Heal tool's Patch -- a drag (image px offset) from the press.
+    sigc::signal<void(MoveAt, int, int)>& signal_patch() { return m_patch_signal; }
+    // s016: the ants drawn moved by (dx, dy) -- the patch being dragged.
+    void set_ants_offset(int dx, int dy) { m_ants_dx = dx; m_ants_dy = dy; queue_draw(); }
     // s009 m2: the Crop tool's box. A drag draws it; dragging inside moves
     // it, near an edge or corner resizes it (Shift: square). Enter or a
     // double-click inside commits -> signal_crop (whole image pixels, may
@@ -232,6 +236,9 @@ private:
     bool xf_inside(double sx, double sy) const;
     void draw_transform(const Cairo::RefPtr<Cairo::Context>& cr);
     sigc::signal<void(MoveAt, int, int)> m_move_signal;
+    sigc::signal<void(MoveAt, int, int)> m_patch_signal;   // s016
+    bool   m_patching = false;
+    int    m_ants_dx = 0, m_ants_dy = 0;
     double m_brush = 30;
 };
 

@@ -57,6 +57,8 @@ const std::vector<Command>& commands() {
             {"Expand Selection", "Select", "win.select-expand", "", "modify grow enlarge bigger", ""},
             {"Contract Selection", "Select", "win.select-contract", "", "modify shrink smaller", ""},
             {"Border Selection", "Select", "win.select-border", "", "modify edge band outline ring", ""},
+            {"Save Selection", "Select", "win.select-save", "", "channel alpha keep store remember", ""},
+            {"Quick Mask", "Select", "win.quick-mask", "", "paint selection mask red overlay brush", "Q"},
             {"Smooth Selection", "Select", "win.select-smooth", "", "modify clean specks holes round", ""},
             {"Open Demo", "Help", "win.open-demo", "", "sample example portrait", ""},
             // s013: adjustments.

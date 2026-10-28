@@ -105,6 +105,14 @@ bool none(DocJournal& j, Document& d);       // Ctrl+D -- Deselect
 bool invert(DocJournal& j, Document& d);     // Ctrl+Shift+I
 bool feather(DocJournal& j, Document& d, double radius);
 bool modify(DocJournal& j, Document& d, Modify k, double r);   // s011 m4: "Expand 8 px" ...
+// s016 -- SAVED SELECTIONS. Save: the selection as a new channel ("Alpha 1",
+// "Alpha 2" ... unless named), its id back ("" refused: nothing selected).
+// Load: the channel into the selection by `op`. Remove: the channel gone.
+// Rename: a new name (not empty). Each ONE step.
+Document::Id save_channel(DocJournal& j, Document& d, const std::string& name = {});
+bool load_channel(DocJournal& j, Document& d, const Document::Id& id, Op op = Op::Replace);
+bool remove_channel(DocJournal& j, Document& d, const Document::Id& id);
+bool rename_channel(DocJournal& j, Document& d, const Document::Id& id, const std::string& name);
 
 }  // namespace klimt::core::select
 

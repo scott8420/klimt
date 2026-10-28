@@ -125,6 +125,13 @@ struct Image {
 // undoes like any step, with no second journal (Scott, s007 -> s008, answer
 // 2). docs/selection.md.
 inline constexpr const char* kSelectionId = "@selection";
+// s016: SAVED SELECTIONS (Photoshop's alpha channels): records apart from the
+// tree, like the selection -- ids "@channel/<n>"; each a Layer whose `name`
+// is the channel's and whose `mask` is the saved selection (the selection's
+// format). The compositor and the Layers panel never see them; the canvas
+// verbs carry them as they carry layer masks; .klimt keeps them.
+inline constexpr const char* kChannelPrefix = "@channel/";
+inline bool is_channel(const std::string& id) { return id.rfind(kChannelPrefix, 0) == 0; }
 // s009: THE IMAGE (size, format, resolution) under this reserved id: a Layer
 // whose `image` carries it. Apart from the tree like the selection; it can be
 // replaced, never removed.
@@ -157,6 +164,10 @@ public:
     // A copy of the records -- what a worker composites from (s006). Cheap:
     // values, and the pixels are shared pointers to immutable maps.
     std::map<Id, Layer> snapshot() const { return m_items; }
+    // s016: the saved selections, by id ("@channel/<n>"); in their order (pos).
+    const std::map<Id, Layer>& channels() const { return m_channels; }
+    std::vector<Id> channel_order() const;
+    void replace_channels(std::map<Id, Layer> c);   // only under Loading (an opened document)
     std::vector<Id> children(const Id& parent) const;   // paint order (bottom first)
     std::vector<Id> panel(const Id& parent) const;      // panel order (top first)
     std::vector<Id> walk() const;          // whole tree, panel order, a group before its contents
@@ -195,6 +206,7 @@ public:
 private:
     std::map<Id, Layer>    m_items;
     std::optional<Layer>   m_selection;    // kSelectionId's record (s008)
+    std::map<Id, Layer>    m_channels;     // s016: the saved selections
     Image                  m_image;
     std::shared_ptr<const Image> m_image_ptr = std::make_shared<const Image>();   // kImageId's value (s009)
     int                    m_next = 1;

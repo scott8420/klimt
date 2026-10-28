@@ -205,6 +205,7 @@ add_executable(klimt
     src/AdjustEditor.cpp      # s013: the adjustment controls
     src/AdjustDialog.cpp      # s013: Image > Adjustments
     src/FilterDialog.cpp      # s014: the Filter menu
+    src/ChannelsPanel.cpp     # s016: saved selections
     src/StatusLine.cpp
     src/HistoryPanel.cpp
     src/CommandPalette.cpp

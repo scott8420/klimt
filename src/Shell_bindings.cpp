@@ -55,6 +55,20 @@ void Shell::bind_actions() {  // bindings
     m_canvas.signal_gradient().connect(sigc::mem_fun(*this, &Shell::on_gradient));   // s012 m4
     // s015: the Clone Stamp's source (Shell_paint.cpp).
     m_canvas.signal_source().connect(sigc::mem_fun(*this, &Shell::on_clone_source));
+    m_canvas.signal_patch().connect(sigc::mem_fun(*this, &Shell::on_patch));   // s016
+    m_layer_acts["quick-mask"] = add_action("quick-mask", sigc::mem_fun(*this, &Shell::on_quick_mask));
+    // s016: saved selections -- the Channels tab and Select > Save Selection.
+    m_layer_acts["select-save"] = add_action("select-save", sigc::mem_fun(*this, &Shell::on_save_selection));
+    m_channels.signal_save().connect(sigc::mem_fun(*this, &Shell::on_save_selection));
+    m_channels.signal_load().connect([this](const std::string& id, int op) {
+        core::select::load_channel(m_journal, m_doc, id, static_cast<core::select::Op>(op));
+    });
+    m_channels.signal_remove().connect([this](const std::string& id) {
+        if (core::select::remove_channel(m_journal, m_doc, id)) toast(m_journal.undo_label(), true);
+    });
+    m_channels.signal_rename().connect([this](const std::string& id, const std::string& name) {
+        core::select::rename_channel(m_journal, m_doc, id, name);
+    });
     m_strip.signal_clone_changed().connect([this] {
         if (m_clone.aligned != m_strip.clone().aligned) { m_clone.aligned = m_strip.clone().aligned; m_clone.fixed = false; }
         show_clone_marker();
@@ -148,7 +162,7 @@ void Shell::bind_actions() {  // bindings
     // UI when Undo / Redo change; the store's changes repaint the panel, whose
     // repaint (and any selection change) reaches Properties and the status.
     m_doc.set_door([this] { return m_journal.open(); });
-    m_doc.set_on_change([this] { m_layers.queue_repaint(); queue_render(); queue_ants(); });
+    m_doc.set_on_change([this] { m_layers.queue_repaint(); queue_render(); queue_ants(); update_channels(); });
     m_canvas.set_on_zoom([this](double z) {
         m_status.set_zoom(std::to_string(static_cast<int>(z * 100 + 0.5)) + "%");
     });
@@ -211,6 +225,7 @@ void Shell::bind_actions() {  // bindings
                 return true;
             }
             if (keyval == GDK_KEY_d) { m_rail.reset_colours(); return true; }
+            if (keyval == GDK_KEY_q) { activate_action("win.quick-mask"); return true; }   // s016
             // A tool's letter (the tool registry's keys).
             const gunichar ch = gdk_keyval_to_unicode(keyval);
             if (ch < 128)

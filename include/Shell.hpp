@@ -12,6 +12,7 @@
 #include "CanvasView.hpp"
 #include "ContextStrip.hpp"
 #include "EdgeTab.hpp"
+#include "ChannelsPanel.hpp"   // s016: saved selections
 #include "HistoryPanel.hpp"
 #include "LayersPanel.hpp"
 #include "PropertiesPanel.hpp"
@@ -197,6 +198,12 @@ private:
     void on_clone_source(core::select::Pt p);    // category: paint: Alt- / Ctrl-click with the Clone Stamp
     void show_clone_marker();                    // category: paint: the source's crosshair follows m_clone
     void heal_finish();                          // category: paint: a Heal stroke's last dab landed -- heal it (a job)
+    void on_quick_mask();                        // category: select: s016 -- Q: Quick Mask on / off (view state)
+    void on_save_selection();                    // category: select: s016 -- Select > Save Selection (a channel)
+    void update_channels();                      // category: select: s016 -- the Channels tab follows the document
+    void on_selection_stroke(const core::paint::Dab& p, bool erase, core::paint::Brush b, int smoothing);   // category: paint: s016 -- a Quick Mask stroke
+    void on_patch(CanvasView::MoveAt at, int dx, int dy);   // category: paint: s016 -- Heal > Patch, the drag
+    void patch_pump();                           // category: paint: one patch preview job at a time; the landing on release
     void on_filter(core::FilterKind k);          // category: filter: Filter > ... -- the dialog, then a job
     void on_filter_last(bool dialog);            // category: filter: Last Filter (Ctrl+F) / its settings (Ctrl+Alt+F)
     bool filter_layer_ok(const std::string& verb);   // category: filter: the primary layer takes a filter? (toasts why not)
@@ -236,6 +243,7 @@ private:
     LayersPanel        m_layers{m_doc, m_journal};
     PropertiesPanel    m_properties{m_doc, m_journal};
     HistoryPanel       m_history{m_journal};
+    ChannelsPanel      m_channels;                 // s016
 
     // ── the regions ────────────────────────────────────────────────────────
     ToolRail           m_rail;
@@ -289,6 +297,7 @@ private:
         core::paint::Dab    last;
         core::paint::Smoother smoother;             // s012: the stabiliser (Smoothing)
         bool                on_mask = false;        // s012: painting the layer's mask
+        bool                on_selection = false;   // s016: Quick Mask -- painting the selection
         double              carry = 0;
         core::Jobs::Id      job = 0;
         core::Jobs::Id      source_job = 0;          // s015: All Layers -- the flattened source, before any dab
@@ -301,6 +310,21 @@ private:
     };
     Stroke             m_stroke;
     core::paint::CloneSource m_clone;               // s015: where the Clone Stamp takes from
+    // s016: the Patch drag -- the selection healed from where it's dragged to,
+    // previewed (m_preview) one job at a time; release lands the last one.
+    struct Patch {
+        bool                active = false, ending = false, alpha_lock = false;
+        core::Document::Id  id;
+        std::shared_ptr<const pixel::TileMap> expect, original, ref, sel, result;   // expect: the layer's pixels at the press
+        int                 want_x = 0, want_y = 0, done_x = 0, done_y = 0;
+        core::Jobs::Id      job = 0, ref_job = 0;
+    };
+    Patch              m_patch;
+    // s016: Quick Mask -- the Brush and Eraser paint the selection; the
+    // unselected shows red. View state, not a step.
+    bool               m_quick_mask = false;
+    std::shared_ptr<const pixel::TileMap> m_shown_qm;   // the selection the red was drawn from
+    bool               m_shown_qm_on = false;
     core::select::Pt   m_stroke_last;              // Shift-click draws from here
     core::Document::Id m_stroke_last_id;
     bool               m_stroke_last_valid = false;

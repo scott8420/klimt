@@ -221,4 +221,49 @@ bool stroke(DocJournal& j, Document& d, const Document::Id& id, const std::vecto
     return layers::set_pixels_if(j, d, id, l0.pixels, out, spot ? "Spot Healing" : "Healing Brush");
 }
 
+pixel::TileMap coverage_of(const pixel::TileMap& sel) {
+    pixel::TileMap cov = paint::new_coverage(sel.width(), sel.height());
+    const Rect e = select::extent(sel).intersect({0, 0, sel.width(), sel.height()});
+    if (e.empty()) return cov;
+    return cov.paint(e, [&](int x, int y, const Px& o) {
+        const float k = select::coverage(sel, x, y);
+        if (k <= 0.f) return o;
+        Px p{};
+        p.c[0] = k;
+        return p;
+    });
+}
+
+std::optional<pixel::TileMap> patched(const Image& im, const pixel::TileMap& original, const pixel::TileMap& ref,
+                                      const pixel::TileMap& sel, int dx, int dy, bool alpha_lock,
+                                      const std::function<bool()>& cancelled) {
+    const auto cov = coverage_of(sel);
+    const Rect box = cov_box(cov);
+    if (box.empty()) return original;
+    // The blur bridges the patch's narrow way across.
+    const double across = std::max(8, std::min(box.w, box.h));
+    auto healed = healing_source(ref, dx, dy, cov, across, cancelled);
+    if (!healed) return std::nullopt;
+    paint::Brush b;
+    b.opacity = 1;
+    b.alpha_lock = alpha_lock;
+    b.source = std::make_shared<const pixel::TileMap>(std::move(*healed));
+    return paint::apply(original, original, cov, nullptr, b, covered(im, cov));
+}
+
+bool patch(DocJournal& j, Document& d, const Document::Id& id, int dx, int dy, bool all) {
+    const auto* sel = d.selection();
+    if (!sel || (dx == 0 && dy == 0)) return false;
+    paint::Brush probe;
+    if (!paint::refusal(d, id, probe).empty()) return false;
+    std::string why;
+    const auto ref = paint::clone_source(d, id, all, why);
+    if (!ref) return false;
+    const auto l0 = *d.get(id);
+    const pixel::TileMap original = l0.pixels ? *l0.pixels : d.blank();
+    auto out = patched(d.image(), original, *ref, *sel, dx, dy, (l0.locks & lock::Alpha) != 0);
+    if (!out) return false;
+    return layers::set_pixels_if(j, d, id, l0.pixels, std::move(*out), "Patch");
+}
+
 }  // namespace klimt::core::heal

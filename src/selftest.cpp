@@ -316,6 +316,8 @@ int main() {
             out.emplace_back(core::kSelectionId, d.get(core::kSelectionId).value_or(Layer{}));
             // s009: and so is the image (Crop, Canvas / Image Size).
             out.emplace_back(core::kImageId, *d.get(core::kImageId));
+            // s016: and the saved selections.
+            for (const auto& [id, c] : d.channels()) out.emplace_back(id, c);
             return out;
         };
         // The panel, flat: "Top,Group[A,B],Background" -- a group's contents in [].

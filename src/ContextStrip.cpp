@@ -132,7 +132,7 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
                         Glib::signal_idle().connect_once([this, tool] { show_tool(*tool); });
             });
             // s008: the variants that don't act yet say so instead of faking.
-            if ((t.id == "select" && i >= 4) || (t.id == "heal" && i == 2)) {   // s015: Patch later
+            if (t.id == "select" && i >= 4) {
                 b->set_sensitive(false);
                 b->set_tooltip_text("Arrives with a later milestone");
             }

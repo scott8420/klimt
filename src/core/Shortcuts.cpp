@@ -193,6 +193,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
     reg.push_back({"Select", "win.deselect", {"<Ctrl>d"}, "", "Deselect"});
     reg.push_back({"Select", "win.select-invert", {"<Ctrl><Shift>i"}, "", "Invert the selection"});
     reg.push_back({"Select", "win.select-feather", {"<Shift>F6"}, "", "Feather the selection"});
+    reg.push_back({"Select", "", {}, "Q", "Quick Mask: paint the selection (black masks, white selects)"});   // s016
     // ── Tools (s005): one row per tool, FROM the tool registry -- the rail,
     // the keys and this reference read one list. Doc-only: the window hears
     // the letter (an accelerator would take it from every text box).

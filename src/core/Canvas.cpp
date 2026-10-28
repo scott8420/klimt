@@ -421,6 +421,8 @@ Before before(const Document& d) {
         if (l.kind == Kind::Pixel) b.pixels[id] = l.pixels;
         if (l.mask) b.masks[id] = l.mask;   // s013: an adjustment layer's mask too
     }
+    for (const auto& [id, c] : d.channels())   // s016: saved selections go as masks do
+        if (c.mask) b.masks[id] = c.mask;
     return b;
 }
 

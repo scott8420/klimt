@@ -129,6 +129,14 @@ CanvasView::CanvasView() {
             }
             // s012: the pen's eraser end erases, whatever the tool (Photoshop's way).
             m_pen_eraser = button == GDK_BUTTON_PRIMARY && eraser_of(drag);
+            // s016: Heal > Patch drags the selection's outline to the source.
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "heal" && m_variant == 2 && m_iw > 0) {
+                m_patching = true;
+                m_press_x = x;
+                m_press_y = y;
+                m_patch_signal.emit(MoveAt::Begin, 0, 0);
+                return;
+            }
             // s015: Alt- or Ctrl-click with the Clone Stamp picks the source.
             if (!m_panning && button == GDK_BUTTON_PRIMARY && sourced() && !m_pen_eraser && m_iw > 0 &&
                 (drag->get_current_event_state() & (Gdk::ModifierType::ALT_MASK | Gdk::ModifierType::CONTROL_MASK)) != Gdk::ModifierType{}) {
@@ -181,10 +189,10 @@ CanvasView::CanvasView() {
                         (st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{});
                 return;
             }
-            if (m_moving) {
+            if (m_moving || m_patching) {
                 int ox = 0, oy = 0;
                 offset(dx, dy, ox, oy);
-                m_move_signal.emit(MoveAt::Move, ox, oy);
+                (m_patching ? m_patch_signal : m_move_signal).emit(MoveAt::Move, ox, oy);
                 return;
             }
             if (m_line) {
@@ -263,11 +271,12 @@ CanvasView::CanvasView() {
             queue_draw();
         });
         drag->signal_drag_end().connect([this, offset, drag](double dx, double dy) {
-            if (m_moving) {
-                m_moving = false;
+            if (m_moving || m_patching) {
+                const bool patching = m_patching;
+                m_moving = m_patching = false;
                 int ox = 0, oy = 0;
                 offset(dx, dy, ox, oy);
-                m_move_signal.emit(MoveAt::End, ox, oy);
+                (patching ? m_patch_signal : m_move_signal).emit(MoveAt::End, ox, oy);
                 return;
             }
             if (m_line) {
@@ -493,8 +502,8 @@ void CanvasView::draw_ants(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h
     cr->set_line_width(1);
     cr->set_antialias(Cairo::Antialias::ANTIALIAS_NONE);
     // On whole device pixels (+0.5: a 1 px line sits on the pixel, crisp).
-    const auto sx = [&](int x) { return std::round(to_screen_x(x)) + 0.5; };
-    const auto sy = [&](int y) { return std::round(to_screen_y(y)) + 0.5; };
+    const auto sx = [&](int x) { return std::round(to_screen_x(x + m_ants_dx)) + 0.5; };   // s016: + the patch's drag
+    const auto sy = [&](int y) { return std::round(to_screen_y(y + m_ants_dy)) + 0.5; };
     std::size_t n = 0;
     for (const auto& s : *m_ants) {
         const double x0 = sx(s.x0), y0 = sy(s.y0), x1 = sx(s.x1), y1 = sy(s.y1);

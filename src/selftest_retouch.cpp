@@ -3,6 +3,12 @@
 // transparency); m3: healing.
 #include "core/Document.hpp"
 #include "core/Heal.hpp"
+#include "core/Canvas.hpp"
+#include "core/File.hpp"
+#include "core/Transform.hpp"
+
+#include <filesystem>
+#include <unistd.h>
 #include "core/Paint.hpp"
 #include "core/Selection.hpp"
 
@@ -176,5 +182,109 @@ void selftest_retouch(const Check& check) {
         { core::Document::Loading load(f.d); f.d.put("L1", bg); }
         check("heal on an empty layer (All Layers): a step", core::heal::stroke(f.j, f.d, "L5", {{450, 300, 1.f}}, hard(20), false, 0, 0, true), "");
         check("heal on an empty layer: opaque, the white around", near(f.px("L5", 450, 300).c[3], 1) && near(f.px("L5", 450, 300).c[0], 1, 0.02), "");
+    }
+
+    std::cout << "\n-- retouching: Patch (s016) --\n";
+    {
+        Fix f;
+        const auto ramp = [](int x) { return 0.2f + 0.6f * static_cast<float>(x) / 599.f; };
+        auto bg = *f.d.get("L1");
+        bg.pixels = std::make_shared<const P::TileMap>(bg.pixels->paint({0, 0, 600, 400}, [&](int x, int y, const P::Px&) {
+            const bool spot = std::abs(x - 300) <= 10 && std::abs(y - 200) <= 6;
+            const float v = spot ? 0.f : ramp(x);
+            return P::rgba(v, v, v, 1);
+        }));
+        bg.locks = 0;
+        { core::Document::Loading load(f.d); f.d.put("L1", bg); }
+        check("patch: refused with no selection", !core::heal::patch(f.j, f.d, "L1", 100, 0), "");
+        L::load_selection(f.d, {280, 185, 40, 30});
+        const auto sel = f.d.selection_ptr();
+        check("patch: refused with no offset", !core::heal::patch(f.j, f.d, "L1", 0, 0), "");
+        check("patch: a step", core::heal::patch(f.j, f.d, "L1", 100, 0), "");
+        check("patch: its label", f.j.undo_label() == "Patch", f.j.undo_label());
+        check("patch: the spot takes the light from around it", near(f.px("L1", 300, 200).c[0], ramp(300), 0.03),
+              num(f.px("L1", 300, 200).c[0]) + " want " + num(ramp(300)));
+        check("patch: outside the selection untouched", f.px("L1", 270, 200) == bg.pixels->get(270, 200) &&
+                                                        f.px("L1", 400, 200) == bg.pixels->get(400, 200), "");
+        check("patch: the selection stays where it was", f.d.selection_ptr() == sel, "");
+        const auto cov = core::heal::coverage_of(*sel);
+        check("patch: the selection as coverage", near(cov.get(300, 200).c[0], 1) && cov.get(250, 200).c[0] == 0.f, "");
+    }
+
+    std::cout << "\n-- Quick Mask (s016) --\n";
+    {
+        Fix f;
+        Pa::Brush b = hard(40);
+        b.colour = P::Px{};   // black: masks
+        check("quick mask: with no selection, a black stroke", Pa::stroke_selection(f.j, f.d, {{300, 200, 1.f}}, b), "");
+        check("quick mask: its label", f.j.undo_label() == "Quick Mask: Paint", f.j.undo_label());
+        const auto* s1 = f.d.selection();
+        check("quick mask: everything else selected, the stroke not", s1 && core::select::coverage(*s1, 50, 50) == 1.f &&
+                                                                     core::select::coverage(*s1, 300, 200) == 0.f, "");
+        b.colour.c[0] = 1;    // white: selects
+        Pa::stroke_selection(f.j, f.d, {{300, 200, 1.f}}, b);
+        check("quick mask: white gives it back", core::select::coverage(*f.d.selection(), 300, 200) == 1.f, "");
+        f.j.undo();
+        check("quick mask: undo", core::select::coverage(*f.d.selection(), 300, 200) == 0.f, "");
+        L::load_selection(f.d, {0, 0, 100, 100});
+        b.colour.c[0] = 1;
+        Pa::stroke_selection(f.j, f.d, {{300, 200, 1.f}}, b);
+        check("quick mask: white adds to a selection", core::select::coverage(*f.d.selection(), 300, 200) == 1.f &&
+                                                      core::select::coverage(*f.d.selection(), 50, 50) == 1.f &&
+                                                      core::select::coverage(*f.d.selection(), 200, 50) == 0.f, "");
+    }
+
+    std::cout << "\n-- saved selections (s016) --\n";
+    {
+        namespace S = core::select;
+        Fix f;
+        check("save selection: nothing selected, refused", S::save_channel(f.j, f.d).empty(), "");
+        L::load_selection(f.d, {100, 100, 80, 60});
+        const auto a = S::save_channel(f.j, f.d);
+        check("save selection: a channel", a == "@channel/1" && f.d.get(a) && f.d.get(a)->name == "Alpha 1", a);
+        check("save selection: ONE step", f.j.undo_label() == "Save Selection", f.j.undo_label());
+        check("save selection: the mask is the selection's", f.d.get(a)->mask == f.d.selection_ptr(), "");
+        check("saved selections stay out of the tree", !f.d.snapshot().count(a) && f.d.channels().size() == 1, "");
+        L::load_selection(f.d, {400, 50, 50, 50});
+        const auto b = S::save_channel(f.j, f.d);
+        check("save selection: the next is Alpha 2", b == "@channel/2" && f.d.get(b)->name == "Alpha 2" &&
+                                                      f.d.channel_order() == std::vector<std::string>{a, b}, b);
+        S::none(f.j, f.d);
+        check("load selection: back", S::load_channel(f.j, f.d, a) && f.j.undo_label() == "Load Selection" &&
+                                      S::coverage(*f.d.selection(), 120, 120) == 1.f && S::coverage(*f.d.selection(), 420, 70) == 0.f, "");
+        check("load selection: adding", S::load_channel(f.j, f.d, b, S::Op::Add) && S::coverage(*f.d.selection(), 420, 70) == 1.f &&
+                                        S::coverage(*f.d.selection(), 120, 120) == 1.f, "");
+        check("rename channel", S::rename_channel(f.j, f.d, b, "Sky") && f.d.get(b)->name == "Sky" && f.j.undo_label() == "Rename Channel", "");
+        check("rename channel: empty refused", !S::rename_channel(f.j, f.d, b, ""), "");
+        check("delete channel", S::remove_channel(f.j, f.d, b) && !f.d.get(b) && f.d.channels().size() == 1, "");
+        f.j.undo();
+        check("delete channel: undo brings it back", f.d.get(b) && f.d.get(b)->name == "Sky", "");
+        // The canvas verbs carry them.
+        core::canvas::canvas_size(f.j, f.d, 800, 500, 0, 0, P::rgba(1, 1, 1, 1));
+        const auto& ma = *f.d.get(a)->mask;
+        check("canvas size: a channel grows, unselected where new", ma.width() == 800 && ma.height() == 500 &&
+                                                                  S::coverage(ma, 120, 120) == 1.f && S::coverage(ma, 700, 450) == 0.f, "");
+        core::xform::turn(f.j, f.d, core::xform::Turn::Clockwise);
+        check("rotate canvas: a channel turns", f.d.get(a)->mask->width() == 500 && f.d.get(a)->mask->height() == 800, "");
+        f.j.undo();
+        core::canvas::crop(f.j, f.d, {50, 50, 300, 200}, P::rgba(1, 1, 1, 1));
+        check("crop: a channel is cropped", f.d.get(a)->mask->width() == 300 && S::coverage(*f.d.get(a)->mask, 70, 70) == 1.f, "");
+        S::none(f.j, f.d);
+        check("load selection after a crop: within the canvas", S::load_channel(f.j, f.d, a) && f.d.selection()->outside_tiles().empty(), "");
+        // .klimt keeps them.
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_channels_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = f.d.image();
+        c.layers = f.d.snapshot();
+        c.channels = f.d.channels();
+        c.next_id = f.d.next_id();
+        std::string err;
+        check("file: saved with channels", core::file::save_klimt(path, c, err), err);
+        const auto back = core::file::open(path, err);
+        check("file: opened with them", back && back->channels.size() == 2 && back->channels.at(b).name == "Sky" &&
+                                        S::coverage(*back->channels.at(a).mask, 70, 70) == 1.f &&
+                                        back->channels.at(a).pos < back->channels.at(b).pos, err);
+        fs::remove(path);
     }
 }

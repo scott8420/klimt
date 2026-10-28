@@ -312,6 +312,22 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             }
             c.layers[id] = std::move(L);
         }
+        // s016: the saved selections.
+        if (doc.contains("channels"))
+            for (const auto& ch : doc.at("channels")) {
+                const std::string id = ch.at("id").get<std::string>();
+                if (!is_channel(id) || c.channels.count(id) || !ch.contains("mask")) {
+                    error = "a damaged Klimt file (channel \"" + id + "\")";
+                    return std::nullopt;
+                }
+                Layer C;
+                C.name = ch.value("name", std::string("Alpha"));
+                C.pos = ch.value("pos", 0.0);
+                P::TileMap m;
+                if (!read_map(ch, "mask", "mask_outside", P::Format{f.depth, P::Mode::Gray, false}, m)) return std::nullopt;
+                C.mask = std::make_shared<const P::TileMap>(std::move(m));
+                c.channels[id] = std::move(C);
+            }
     } catch (const json::exception& e) {
         error = std::string("a damaged Klimt file (") + e.what() + ")";
         return std::nullopt;
@@ -384,57 +400,68 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
     std::unordered_map<const P::Tile*, std::string> named;   // a shared tile, written once
     json layers = json::array();
     int next_tile = 0;
+// One map's tiles into `l` under in_key / out_key (s012: pixels, or
+    // the mask). false: the zip failed (error set).
+    const auto write_map = [&](json& l, const P::TileMap& m, const char* in_key, const char* out_key) -> bool {
+        const P::Format fm = m.format();
+        json tiles = json::array();
+        json outside = json::array();   // s010: the pixels beyond the image
+        std::vector<std::tuple<int, int, P::TileMap::TileRef, bool>> all;
+        for (int row = 0; row < m.rows(); ++row)
+            for (int col = 0; col < m.cols(); ++col)
+                if (auto t = m.tile(col, row)) all.emplace_back(col, row, t, false);
+        for (const auto& [cell, t] : m.outside_tiles()) all.emplace_back(cell.first, cell.second, t, true);
+        for (const auto& [col, row, t, out] : all) {
+            json& list = out ? outside : tiles;
+            if (t->is_uniform()) {
+                std::vector<std::uint8_t> px(t->data(), t->data() + t->bytes());
+                to_little(fm, px.data(), px.size());
+                list.push_back({col, row, "u:" + hex(px.data(), px.size())});
+                continue;
+            }
+            auto it = named.find(t.get());
+            if (it == named.end()) {
+                const std::string name = "tiles/" + std::to_string(next_tile++);
+                const std::uint8_t* data = t->data();
+                if constexpr (std::endian::native != std::endian::little) {
+                    swapped.emplace_back(t->data(), t->data() + t->bytes());
+                    to_little(fm, swapped.back().data(), swapped.back().size());
+                    data = swapped.back().data();
+                }
+                if (!add(name, data, t->bytes(), ZIP_CM_DEFLATE, 1)) { error = zip_strerror(z); return false; }
+                it = named.emplace(t.get(), name).first;
+            }
+            list.push_back({col, row, it->second});
+        }
+        l[in_key] = std::move(tiles);
+        if (!outside.empty()) l[out_key] = std::move(outside);
+        return true;
+    };
     for (const auto& [id, L] : c.layers) {
         json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : L.kind == Kind::Adjustment ? "adjustment" : "pixel"}, {"name", L.name},
                   {"parent", L.parent}, {"pos", L.pos}, {"visible", L.visible}, {"locks", L.locks},
                   {"opacity", L.opacity}, {"fill", L.fill}, {"blend", std::string(blend_key(L.blend))},
                   {"clipped", L.clipped}};
-        // One map's tiles into `l` under in_key / out_key (s012: pixels, or
-        // the mask). false: the zip failed (error set).
-        const auto write_map = [&](const P::TileMap& m, const char* in_key, const char* out_key) -> bool {
-            const P::Format fm = m.format();
-            json tiles = json::array();
-            json outside = json::array();   // s010: the pixels beyond the image
-            std::vector<std::tuple<int, int, P::TileMap::TileRef, bool>> all;
-            for (int row = 0; row < m.rows(); ++row)
-                for (int col = 0; col < m.cols(); ++col)
-                    if (auto t = m.tile(col, row)) all.emplace_back(col, row, t, false);
-            for (const auto& [cell, t] : m.outside_tiles()) all.emplace_back(cell.first, cell.second, t, true);
-            for (const auto& [col, row, t, out] : all) {
-                json& list = out ? outside : tiles;
-                if (t->is_uniform()) {
-                    std::vector<std::uint8_t> px(t->data(), t->data() + t->bytes());
-                    to_little(fm, px.data(), px.size());
-                    list.push_back({col, row, "u:" + hex(px.data(), px.size())});
-                    continue;
-                }
-                auto it = named.find(t.get());
-                if (it == named.end()) {
-                    const std::string name = "tiles/" + std::to_string(next_tile++);
-                    const std::uint8_t* data = t->data();
-                    if constexpr (std::endian::native != std::endian::little) {
-                        swapped.emplace_back(t->data(), t->data() + t->bytes());
-                        to_little(fm, swapped.back().data(), swapped.back().size());
-                        data = swapped.back().data();
-                    }
-                    if (!add(name, data, t->bytes(), ZIP_CM_DEFLATE, 1)) { error = zip_strerror(z); return false; }
-                    it = named.emplace(t.get(), name).first;
-                }
-                list.push_back({col, row, it->second});
-            }
-            l[in_key] = std::move(tiles);
-            if (!outside.empty()) l[out_key] = std::move(outside);
-            return true;
-        };
-        if (L.pixels && L.kind == Kind::Pixel && !write_map(*L.pixels, "tiles", "outside")) return false;
+        if (L.pixels && L.kind == Kind::Pixel && !write_map(l, *L.pixels, "tiles", "outside")) return false;
         if (L.kind == Kind::Adjustment) l["adjust"] = adjust_json(L.adjust);   // s013
         if (L.mask && L.kind != Kind::Group) {   // s012: the layer mask
-            if (!write_map(*L.mask, "mask", "mask_outside")) return false;
+            if (!write_map(l, *L.mask, "mask", "mask_outside")) return false;
             l["mask_on"] = L.mask_on;
         }
         layers.push_back(std::move(l));
     }
     doc["layers"] = std::move(layers);
+    // s016: the saved selections -- a name, an order, a mask.
+    if (!c.channels.empty()) {
+        json chans = json::array();
+        for (const auto& [id, C] : c.channels) {
+            if (!C.mask) continue;
+            json ch = {{"id", id}, {"name", C.name}, {"pos", C.pos}};
+            if (!write_map(ch, *C.mask, "mask", "mask_outside")) return false;
+            chans.push_back(std::move(ch));
+        }
+        doc["channels"] = std::move(chans);
+    }
     doc_text = doc.dump(1);
     if (!add("document.json", doc_text.data(), doc_text.size(), ZIP_CM_DEFLATE, 6)) { error = zip_strerror(z); return false; }
     if (c.image.icc && !c.image.icc->empty() &&

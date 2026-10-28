@@ -12,7 +12,7 @@ const std::vector<ToolSpec>& tools() {
         {"crop",       "Crop",        "klimt-tool-crop-symbolic",       'c', 0, {"Crop", "Straighten"},
          "Crop: drag a box, drag inside / its edges, Enter or double-click crops, Esc drops it. Straighten: drag along what should be level."},
         {"heal",       "Heal",        "klimt-tool-heal-symbolic",       'j', 1, {"Spot", "Healing", "Patch"},
-         "Spot: paint over a blemish -- it heals when you let go. Healing: Alt-click (or Ctrl-click) where to take from, then paint."},
+         "Spot: paint over a blemish -- it heals when you let go. Healing: Alt-click (or Ctrl-click) where to take from, then paint. Patch: drag a selection onto good pixels."},
         {"clone",      "Clone Stamp", "klimt-tool-clone-symbolic",      's', 1, {},
          "Alt-click (or Ctrl-click) where to take from, then paint."},
         {"brush",      "Brush",       "klimt-tool-brush-symbolic",      'b', 2, {},

@@ -129,6 +129,9 @@ std::string refusal(const Document& d, const Document::Id& id, const Brush& b);
 // A whole stroke, synchronously, as ONE step (the verb table; tests). The
 // app does the same in pieces on workers (Shell_paint.cpp).
 bool stroke(DocJournal& j, Document& d, const Document::Id& id, const std::vector<select::Pt>& path, Brush b);
+// s016: a QUICK MASK stroke -- the selection painted (b.colour.c[0]: 1 selects,
+// 0 masks), no selection counting as all selected. ONE step.
+bool stroke_selection(DocJournal& j, Document& d, const std::vector<Dab>& path, Brush b);
 // s009 m3: a stroke with the pen's pressure at each point.
 bool stroke_pen(DocJournal& j, Document& d, const Document::Id& id, const std::vector<Dab>& path, Brush b);
 

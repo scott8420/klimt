@@ -52,4 +52,19 @@ TileSet covered(const Image& im, const pixel::TileMap& cov);
 bool stroke(DocJournal& j, Document& d, const Document::Id& id, const std::vector<paint::Dab>& path, paint::Brush b,
             bool spot, int dx, int dy, bool all = false);
 
+// s016 -- PATCH (Photoshop's Patch tool, "Source"): the selection marks what
+// is wrong; dragging it to good pixels heals the selection from the same shape
+// moved by (dx, dy). The selection as a stroke's coverage (F32, the
+// paint::new_coverage format) -- a feathered selection heals softly at its edge.
+pixel::TileMap coverage_of(const pixel::TileMap& sel);
+// The layer patched: `original` with the selection healed from `ref` (the
+// layer, or the flattened picture) at the offset. nullopt when cancelled or
+// the format can't heal.
+std::optional<pixel::TileMap> patched(const Image& im, const pixel::TileMap& original, const pixel::TileMap& ref,
+                                      const pixel::TileMap& sel, int dx, int dy, bool alpha_lock,
+                                      const std::function<bool()>& cancelled = {});
+// As ONE step ("Patch"); refused with no selection, no offset, or a layer the
+// Brush would refuse. The selection stays where it was.
+bool patch(DocJournal& j, Document& d, const Document::Id& id, int dx, int dy, bool all = false);
+
 }  // namespace klimt::core::heal

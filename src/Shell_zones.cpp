@@ -200,15 +200,8 @@ Gtk::Widget& Shell::build_dock() {  // zone
     m_layers.set_margin_end(8);
     m_layers.set_margin_bottom(6);
     m_dock_stack.add(m_layers, "layers", "Layers");
-    const auto later = [this](const char* name, const char* title, const char* text) {
-        auto l = Gtk::make_managed<Gtk::Label>(text);
-        l->set_wrap(true);
-        l->set_margin(18);
-        l->set_valign(Gtk::Align::START);
-        l->add_css_class("dim-label");
-        m_dock_stack.add(*l, name, title);
-    };
-    later("channels", "Channels", "Channels, saved selections and spot inks arrive with pixels.");
+    // s016: the saved selections (colour channels and spot inks come later).
+    m_dock_stack.add(m_channels, "channels", "Channels");
     m_history.set_margin_start(8);
     m_history.set_margin_end(8);
     m_history.set_margin_bottom(8);
@@ -311,6 +304,8 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     sel->append("Deselect", "win.deselect");
     sel->append("Inverse", "win.select-invert");
     sel->append("Feather…", "win.select-feather");
+    sel->append("Edit in Quick Mask Mode", "win.quick-mask");   // s016
+    sel->append("Save Selection", "win.select-save");          // s016: to the Channels tab
     auto mod = Gio::Menu::create();   // s011 m4
     mod->append("Border…", "win.select-border");
     mod->append("Smooth…", "win.select-smooth");

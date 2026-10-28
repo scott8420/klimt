@@ -62,6 +62,11 @@ std::optional<Blend> blend_from_key(std::string_view key) {
 // ── the store ───────────────────────────────────────────────────────────────
 std::optional<Layer> Document::get(const Id& id) const {
     if (id == kSelectionId) return m_selection;
+    if (is_channel(id)) {   // s016: a saved selection
+        const auto c = m_channels.find(id);
+        if (c == m_channels.end()) return std::nullopt;
+        return c->second;
+    }
     if (id == kImageId) {   // s009: the image, as a record
         Layer v;
         v.name = "Image";
@@ -77,6 +82,12 @@ void Document::put(const Id& id, const std::optional<Layer>& v) {
     if (m_loading == 0 && m_door && !m_door()) ++m_strays;
     if (id == kSelectionId) {   // s008: the selection, apart from the tree
         m_selection = v;
+        if (m_changed) m_changed();
+        return;
+    }
+    if (is_channel(id)) {       // s016: a saved selection, apart from the tree
+        if (v) m_channels[id] = *v;
+        else   m_channels.erase(id);
         if (m_changed) m_changed();
         return;
     }
@@ -207,11 +218,25 @@ void Document::replace(const Image& im, std::map<Id, Layer> layers, int next) {
     m_image_ptr = std::make_shared<const Image>(im);
     m_items = std::move(layers);
     m_selection.reset();   // a new document starts with nothing selected
+    m_channels.clear();    // s016: and no saved selections (a file's come after: replace_channels)
     m_next = std::max(1, next);
     for (const auto& [id, l] : m_items)   // a loaded "L<n>" keeps fresh_id() ahead of it
         if (id.size() > 1 && id[0] == 'L' && id.size() < 10 &&
             std::all_of(id.begin() + 1, id.end(), [](char c) { return c >= '0' && c <= '9'; }))
             m_next = std::max(m_next, std::stoi(id.substr(1)) + 1);
+    if (m_changed) m_changed();
+}
+
+std::vector<Document::Id> Document::channel_order() const {
+    std::vector<Id> v;
+    for (const auto& [id, c] : m_channels) v.push_back(id);
+    std::stable_sort(v.begin(), v.end(), [this](const Id& a, const Id& b) { return m_channels.at(a).pos < m_channels.at(b).pos; });
+    return v;
+}
+
+void Document::replace_channels(std::map<Id, Layer> c) {
+    if (m_loading == 0) ++m_strays;   // not a user choice: only a load replaces
+    m_channels = std::move(c);
     if (m_changed) m_changed();
 }
 
@@ -942,6 +967,25 @@ const std::vector<Verb>& verbs() {
         {"heal_spot",     [](DocJournal& j, Document& d) {
              paint::Brush b; b.size = 30;
              heal::stroke(j, d, "L4", {{298, 150, 1.f}}, b, true, 0, 0, true); }},
+        // s016: Quick Mask -- a black stroke masks part of a selection.
+        {"quick_mask",    [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 40; b.colour = pixel::Px{};
+             paint::stroke_selection(j, d, {{120, 150, 1.f}, {200, 150, 1.f}}, b); },
+             [](Document& d) { load_selection(d, {100, 100, 200, 100}); }},
+        // s016: saved selections -- save, load (adding), delete.
+        {"save_channel",  [](DocJournal& j, Document& d) { select::save_channel(j, d); },
+             [](Document& d) { load_selection(d, {100, 100, 80, 60}); }},
+        {"load_channel",  [](DocJournal& j, Document& d) { select::load_channel(j, d, "@channel/1", select::Op::Add); },
+             [](Document& d) {
+                 load_selection(d, {10, 10, 50, 50});
+                 Document::Loading load(d);
+                 Layer c; c.name = "Alpha 1";
+                 c.mask = std::make_shared<const pixel::TileMap>(select::rect_mask(d.mask_format(), d.image().width, d.image().height, {200, 200, 90, 90}));
+                 d.put("@channel/1", c);
+             }},
+        // s016: Patch -- the selection healed from 120 px to the right.
+        {"patch",         [](DocJournal& j, Document& d) { heal::patch(j, d, "L4", 120, 0); },
+             [](Document& d) { load_selection(d, {100, 120, 60, 60}); }},
         // s009 m1: the Move tool -- a layer, a group's contents, a lifted selection.
         {"move_layer",    [](DocJournal& j, Document& d) { move::by(j, d, {"L4"}, 37, -20, pixel::rgba(1, 1, 1, 1)); }},
         {"move_group",    [](DocJournal& j, Document& d) { move::by(j, d, {"L2"}, -300, 5, pixel::rgba(1, 1, 1, 1)); }},

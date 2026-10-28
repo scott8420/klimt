@@ -102,7 +102,7 @@ void Shell::update_layer_actions() {
     };
     // s009: with no image, the verbs that need one grey.
     const bool img = has_image();
-    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all",
+    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save",
                           "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
                           "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate"})
         on(a, img);
@@ -275,6 +275,19 @@ void Shell::queue_render() {
         } else {
             m_dirty.merge(core::changed_tiles(m_shown_image, m_shown, im, layers));
         }
+        // s016: Quick Mask's red follows the selection -- on / off redraws all;
+        // a painted selection redraws the tiles whose mask changed.
+        const auto qm = m_quick_mask ? m_doc.selection_ptr() : nullptr;
+        if (m_quick_mask != m_shown_qm_on) m_dirty.add_all();
+        else if (m_quick_mask && qm != m_shown_qm) {
+            if (!qm || !m_shown_qm) m_dirty.add_all();
+            else
+                for (int row = 0; row < std::min(m_dirty.rows, qm->rows()); ++row)
+                    for (int col = 0; col < std::min(m_dirty.cols, qm->cols()); ++col)
+                        if (!qm->same_tile(*m_shown_qm, col, row)) m_dirty.add(col, row);
+        }
+        m_shown_qm = qm;
+        m_shown_qm_on = m_quick_mask;
         m_shown = layers;
         m_shown_image = im;
         for (const auto id : m_renders) m_jobs.cancel(id);
@@ -298,7 +311,7 @@ void Shell::queue_render() {
         for (std::size_t i = 0; i < owed.size(); i += kBatch) {
             std::vector<std::pair<int, int>> batch;
             for (std::size_t k = i; k < std::min(owed.size(), i + kBatch); ++k) batch.emplace_back(owed[k].col, owed[k].row);
-            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch, view = m_mask_view](core::Jobs::Token& t) -> core::Jobs::Landing {
+            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch, view = m_mask_view, qm, qm_on = m_quick_mask](core::Jobs::Token& t) -> core::Jobs::Landing {
                 auto out = std::make_shared<std::vector<CanvasView::Tile>>();
                 for (const auto& [col, row] : batch) {
                     if (t.cancelled()) return [] {};
@@ -310,6 +323,17 @@ void Shell::queue_render() {
                         core::mask_tile_argb(*shared->at(view).mask, col, row, *px, tile.w, tile.h);
                     else
                         core::composite_tile_argb(im, *shared, col, row, *px, tile.w, tile.h);
+                    // s016: Quick Mask -- the unselected under a half-strong red.
+                    if (qm_on && qm) {
+                        for (int y = 0; y < tile.h; ++y)
+                            for (int x = 0; x < tile.w; ++x) {
+                                const float a = 0.5f * (1.f - core::select::coverage(*qm, col * pixel::kTile + x, row * pixel::kTile + y));
+                                if (a <= 0.f) continue;
+                                auto& v = (*px)[static_cast<std::size_t>(y) * static_cast<std::size_t>(tile.w) + static_cast<std::size_t>(x)];
+                                const auto mix = [a](std::uint32_t c, std::uint32_t to) { return static_cast<std::uint32_t>(std::lround(c * (1 - a) + to * a)); };
+                                v = (mix(v >> 24, 255) << 24) | (mix((v >> 16) & 0xff, 255) << 16) | (mix((v >> 8) & 0xff, 0) << 8) | mix(v & 0xff, 0);
+                            }
+                    }
                     // s010 m4: its mips, here on the worker.
                     {
                         const std::vector<std::uint32_t>* from = px.get();

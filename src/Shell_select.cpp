@@ -169,6 +169,7 @@ void Shell::queue_ants() {
     Glib::signal_idle().connect_once([this] {
         m_ants_queued = false;
         if (m_xform.active) return;   // s011: no ants while a transform's box is up
+        if (m_quick_mask) { m_canvas.set_outline(nullptr); m_ants_known = false; return; }   // s016: the red shows it
         const auto sel = m_doc.selection_ptr();
         if (m_ants_known && sel == m_ants_for) return;
         m_ants_known = true;

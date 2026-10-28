@@ -831,6 +831,55 @@ bool feather(DocJournal& j, Document& d, double radius) {
     return set(j, d, std::move(*f), buf);
 }
 
+// ── s016: saved selections ──────────────────────────────────────────────────
+Document::Id save_channel(DocJournal& j, Document& d, const std::string& name) {
+    const auto sel = d.selection_ptr();
+    if (!sel) return {};
+    int n = 1;
+    double pos = 1;
+    for (const auto& [id, c] : d.channels()) {
+        n = std::max(n, std::atoi(id.c_str() + std::char_traits<char>::length(kChannelPrefix)) + 1);
+        pos = std::max(pos, c.pos + 1);
+    }
+    const Document::Id id = kChannelPrefix + std::to_string(n);
+    std::string label = name;
+    if (label.empty()) {   // "Alpha <k>": the first k not taken
+        for (int k = 1;; ++k) {
+            label = "Alpha " + std::to_string(k);
+            bool taken = false;
+            for (const auto& [cid, c] : d.channels()) taken = taken || c.name == label;
+            if (!taken) break;
+        }
+    }
+    Layer c;
+    c.name = label;
+    c.pos = pos;
+    c.mask = sel;
+    if (!j.run("Save Selection", {id}, [&] { d.put(id, c); })) return {};
+    return id;
+}
+
+bool load_channel(DocJournal& j, Document& d, const Document::Id& id, Op op) {
+    const auto c = d.get(id);
+    if (!is_channel(id) || !c || !c->mask) return false;
+    const auto& m = *c->mask;
+    if (!(m.format() == d.mask_format()) || m.width() != d.image().width || m.height() != d.image().height) return false;
+    const TileMap in = m.without_outside();   // a crop may have left some beyond the canvas
+    return set(j, d, combine(d.selection(), in, op), op == Op::Replace ? "Load Selection" : op_name(op));
+}
+
+bool remove_channel(DocJournal& j, Document& d, const Document::Id& id) {
+    if (!is_channel(id) || !d.get(id)) return false;
+    return j.run("Delete Channel", {id}, [&] { d.put(id, std::nullopt); });
+}
+
+bool rename_channel(DocJournal& j, Document& d, const Document::Id& id, const std::string& name) {
+    auto c = d.get(id);
+    if (!is_channel(id) || !c || name.empty() || c->name == name) return false;
+    c->name = name;
+    return j.run("Rename Channel", {id}, [&] { d.put(id, *c); });
+}
+
 }  // namespace klimt::core::select
 
 // ── layers: pixels through the selection ────────────────────────────────────

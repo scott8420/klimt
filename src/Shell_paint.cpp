@@ -56,6 +56,12 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         const auto fg = m_rail.foreground(), bg = m_rail.background();
         b.colour = core::from_srgb(fmt, fg.r, fg.g, fg.b);
         b.background = core::from_srgb(fmt, bg.r, bg.g, bg.b);
+        // s016: Quick Mask -- the Brush and Eraser paint the selection.
+        if (m_quick_mask && !sampled) {
+            on_selection_stroke(p, erase, b, o.smoothing);
+            return;
+        }
+        if (m_quick_mask) { toast(verb + ": leave Quick Mask first (Q)"); return; }
         const auto id = m_layers.primary();
         // s012: the layer's MASK is the target -- white shows, black hides; the
         // Eraser paints the background colour (Photoshop's way).
@@ -196,7 +202,12 @@ void Shell::paint_pump() {
             m_stroke.cov = cov2;
             const bool unchanged = same_tiles(*cur2, *m_stroke.current);
             m_stroke.current = cur2;
-            if (auto l = unchanged ? std::nullopt : m_doc.get(m_stroke.id)) {
+            if (m_stroke.on_selection && !unchanged) {   // s016: Quick Mask -- the selection record
+                core::Layer v;
+                v.name = "Selection";
+                v.pixels = cur2;
+                m_doc.put(core::kSelectionId, cur2->tile_count() ? std::optional<core::Layer>(v) : std::nullopt);
+            } else if (auto l = unchanged ? std::nullopt : m_doc.get(m_stroke.id)) {
                 if (m_stroke.on_mask) l->mask = cur2;   // s012: a mask stays a mask, even with no tiles
                 else l->pixels = cur2->tile_count() ? cur2 : nullptr;
                 m_doc.put(m_stroke.id, *l);   // inside the gesture: the door is open
@@ -239,6 +250,155 @@ void Shell::heal_finish() {
                 m_doc.put(m_stroke.id, *l);   // inside the gesture: the door is open
             }
             paint_pump();
+        };
+    });
+}
+
+// s016: a Quick Mask stroke -- the selection is the target (the Brush's own
+// engine on the mask-format map). No selection counts as all selected (no
+// red), so the first black stroke masks what it covers. One stroke, one step.
+void Shell::on_selection_stroke(const Pa::Dab& p, bool erase, Pa::Brush b, int smoothing) {
+    const auto fg = m_rail.foreground(), bg = m_rail.background();
+    b.erase = false;
+    b.alpha_lock = false;
+    b.colour = pixel::Px{};
+    b.colour.c[0] = 1.f - mask_hide_of(erase ? bg : fg);   // white selects, black masks
+    const auto im = m_doc.image();
+    m_stroke = {};
+    m_stroke.active = true;
+    m_stroke.id = core::kSelectionId;
+    m_stroke.brush = b;
+    m_stroke.on_selection = true;
+    const auto* sel = m_doc.selection();
+    m_stroke.original = std::make_shared<const pixel::TileMap>(
+        sel ? *sel : core::select::all_mask(m_doc.mask_format(), im.width, im.height));
+    m_stroke.current = m_stroke.original;
+    m_stroke.cov = std::make_shared<const pixel::TileMap>(Pa::new_coverage(im.width, im.height));
+    m_stroke.carry = 1e9;
+    m_journal.begin(erase ? "Quick Mask: Erase" : "Quick Mask: Paint", {core::kSelectionId});
+    const auto dabs = Pa::dabs_along(p, p, b, m_stroke.carry);
+    m_stroke.pending.insert(m_stroke.pending.end(), dabs.begin(), dabs.end());
+    m_stroke.last = p;
+    const double zoom = std::max(1e-3, m_canvas.zoom());
+    m_stroke.smoother = Pa::Smoother(smoothing / 100.0 * 60.0 / zoom);
+    m_stroke.smoother.push(p);
+    paint_pump();
+}
+
+// s016: Select > Save Selection -- a new channel in the Channels tab.
+void Shell::on_save_selection() {
+    if (!m_doc.selection()) { toast("Save Selection: select something first"); return; }
+    const auto id = core::select::save_channel(m_journal, m_doc);
+    if (!id.empty()) toast("Saved as “" + m_doc.get(id)->name + "” -- the Channels tab; click it to select it again");
+}
+
+void Shell::update_channels() {
+    std::vector<ChannelsPanel::Item> items;
+    for (const auto& id : m_doc.channel_order()) items.push_back({id, m_doc.get(id)->name});
+    m_channels.show(items, m_doc.selection() != nullptr);
+}
+
+// s016: Q -- Quick Mask on / off. View state: the strokes made in it are the steps.
+void Shell::on_quick_mask() {
+    if (!has_image()) return;
+    m_quick_mask = !m_quick_mask;
+    m_ants_known = false;   // the ants hide in Quick Mask, and come back
+    queue_ants();
+    queue_render();
+    toast(m_quick_mask ? "Quick Mask: paint black to mask (red), white to select -- Q to leave"
+                       : "Quick Mask off -- the selection is what you painted");
+}
+
+// s016: Heal > Patch. Begin: the selection, the layer and its source (All
+// layers: flattened on a worker first); Move: where to take from; End: the
+// last preview lands as ONE step ("Patch") once it matches the release.
+void Shell::on_patch(CanvasView::MoveAt at, int dx, int dy) {
+    using M = CanvasView::MoveAt;
+    if (at == M::Begin) {
+        if (m_patch.active) return;
+        const auto id = m_layers.primary();
+        const auto sel = m_doc.selection_ptr();
+        if (!sel) { toast("Patch: select what's wrong first, then drag it onto good pixels"); return; }
+        Pa::Brush probe;
+        if (const auto why = Pa::refusal(m_doc, id, probe); !why.empty()) { toast("Patch: " + why); return; }
+        const auto mode = m_doc.image().format.mode;
+        const bool all = m_strip.clone().all_layers;
+        if (mode != pixel::Mode::RGB && (all || mode != pixel::Mode::Gray)) { toast("Patch: RGB and Gray documents only, for now"); return; }
+        const auto l = *m_doc.get(id);
+        m_patch = {};
+        m_patch.active = true;
+        m_patch.id = id;
+        m_patch.sel = sel;
+        m_patch.alpha_lock = (l.locks & core::lock::Alpha) != 0;
+        m_patch.expect = l.pixels;
+        m_patch.original = std::make_shared<const pixel::TileMap>(l.pixels ? *l.pixels : m_doc.blank());
+        if (!all) m_patch.ref = m_patch.original;
+        else {
+            const auto im = m_doc.image();
+            auto layers = std::make_shared<const core::Layers>(m_doc.snapshot());
+            m_patch.ref_job = m_jobs.submit("Patch source", [this, im, layers](core::Jobs::Token&) -> core::Jobs::Landing {
+                auto flat = core::file::flatten(im, *layers);
+                auto src = flat ? std::make_shared<const pixel::TileMap>(std::move(*flat)) : nullptr;
+                return [this, src] {
+                    m_patch.ref_job = 0;
+                    if (!m_patch.active) return;
+                    m_patch.ref = src;
+                    patch_pump();
+                };
+            });
+        }
+        return;
+    }
+    if (!m_patch.active) return;
+    m_patch.want_x = dx;
+    m_patch.want_y = dy;
+    m_canvas.set_ants_offset(dx, dy);
+    if (at == M::End) m_patch.ending = true;
+    patch_pump();
+}
+
+void Shell::patch_pump() {
+    if (!m_patch.active || m_patch.job || m_patch.ref_job) return;
+    if (!m_patch.ref) { m_patch = {}; m_canvas.set_ants_offset(0, 0); return; }   // flattening failed
+    const bool current = m_patch.done_x == m_patch.want_x && m_patch.done_y == m_patch.want_y;
+    if (current && m_patch.ending) {
+        // Released: the last preview is the step (none when it didn't move).
+        const auto id = m_patch.id;
+        const auto result = m_patch.result;
+        const auto expect = m_patch.expect;
+        m_canvas.set_ants_offset(0, 0);
+        m_preview.erase(id);
+        m_patch = {};
+        if (result && !core::layers::set_pixels_if(m_journal, m_doc, id, expect, *result, "Patch")) {
+            const auto now = m_doc.get(id);
+            toast(now && now->pixels == expect ? "Patch: nothing to change here" : "Patch: the layer changed meanwhile -- nothing done");
+        }
+        queue_render();
+        return;
+    }
+    if (current) return;
+    const int dx = m_patch.want_x, dy = m_patch.want_y;
+    if (dx == 0 && dy == 0) {   // back where it started: no patch
+        m_patch.done_x = m_patch.done_y = 0;
+        m_patch.result.reset();
+        if (m_preview.erase(m_patch.id)) queue_render();
+        patch_pump();
+        return;
+    }
+    const auto im = m_doc.image();
+    m_patch.job = m_jobs.submit("Patch", [this, im, original = m_patch.original, ref = m_patch.ref, sel = m_patch.sel,
+                                          lock = m_patch.alpha_lock, dx, dy](core::Jobs::Token& t) -> core::Jobs::Landing {
+        auto out = core::heal::patched(im, *original, *ref, *sel, dx, dy, lock, [&t] { return t.cancelled(); });
+        auto res = out ? std::make_shared<const pixel::TileMap>(std::move(*out)) : nullptr;
+        return [this, res, dx, dy] {
+            m_patch.job = 0;
+            if (!m_patch.active) return;
+            m_patch.done_x = dx;
+            m_patch.done_y = dy;
+            m_patch.result = res;
+            if (res) m_preview[m_patch.id] = res;
+            queue_render();
+            patch_pump();
         };
     });
 }

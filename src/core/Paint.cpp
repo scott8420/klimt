@@ -261,6 +261,21 @@ bool stroke(DocJournal& j, Document& d, const Document::Id& id, const std::vecto
     return stroke_pen(j, d, id, dabs, b);
 }
 
+bool stroke_selection(DocJournal& j, Document& d, const std::vector<Dab>& path, Brush b) {
+    if (path.empty()) return false;
+    const auto& im = d.image();
+    b.erase = false;
+    b.alpha_lock = false;
+    b.source = nullptr;
+    const pixel::TileMap original = d.selection() ? *d.selection() : select::all_mask(d.mask_format(), im.width, im.height);
+    pixel::TileMap cov = new_coverage(original.width(), original.height());
+    TileSet touched = tiles_of(im);
+    double carry = 1e9;
+    for (std::size_t i = 0; i < path.size(); ++i)
+        cov = add_pen_dabs(cov, b, dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, carry), touched);
+    return select::set(j, d, apply(original, original, cov, nullptr, b, touched), "Quick Mask: Paint");
+}
+
 bool stroke_pen(DocJournal& j, Document& d, const Document::Id& id, const std::vector<Dab>& path, Brush b) {
     if (path.empty() || !refusal(d, id, b).empty()) return false;
     const auto l0 = *d.get(id);
