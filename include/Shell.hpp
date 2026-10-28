@@ -193,6 +193,10 @@ private:
     void on_adjust_new(core::AdjustKind k);      // category: adjust: Layer > New Adjustment Layer (and the panel's button)
     void on_adjust_apply(core::AdjustKind k);    // category: adjust: Image > Adjustments -- the dialog, then a job
     // s014: the Filter menu (Shell_filter.cpp).
+    // s015: retouching (Shell_paint.cpp).
+    void on_clone_source(core::select::Pt p);    // category: paint: Alt- / Ctrl-click with the Clone Stamp
+    void show_clone_marker();                    // category: paint: the source's crosshair follows m_clone
+    void heal_finish();                          // category: paint: a Heal stroke's last dab landed -- heal it (a job)
     void on_filter(core::FilterKind k);          // category: filter: Filter > ... -- the dialog, then a job
     void on_filter_last(bool dialog);            // category: filter: Last Filter (Ctrl+F) / its settings (Ctrl+Alt+F)
     bool filter_layer_ok(const std::string& verb);   // category: filter: the primary layer takes a filter? (toasts why not)
@@ -287,8 +291,16 @@ private:
         bool                on_mask = false;        // s012: painting the layer's mask
         double              carry = 0;
         core::Jobs::Id      job = 0;
+        core::Jobs::Id      source_job = 0;          // s015: All Layers -- the flattened source, before any dab
+        // s015 m4: a Heal stroke -- healed when the last dab lands, from `ref`
+        // (the layer as it began, or the flattened picture), with `heal_brush`
+        // (the stroke's own options; Spot shows a grey trail meanwhile).
+        bool                heal = false, spot = false;
+        std::shared_ptr<const pixel::TileMap> ref;
+        core::paint::Brush  heal_brush;
     };
     Stroke             m_stroke;
+    core::paint::CloneSource m_clone;               // s015: where the Clone Stamp takes from
     core::select::Pt   m_stroke_last;              // Shift-click draws from here
     core::Document::Id m_stroke_last_id;
     bool               m_stroke_last_valid = false;

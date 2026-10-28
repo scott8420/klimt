@@ -129,6 +129,13 @@ CanvasView::CanvasView() {
             }
             // s012: the pen's eraser end erases, whatever the tool (Photoshop's way).
             m_pen_eraser = button == GDK_BUTTON_PRIMARY && eraser_of(drag);
+            // s015: Alt- or Ctrl-click with the Clone Stamp picks the source.
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && sourced() && !m_pen_eraser && m_iw > 0 &&
+                (drag->get_current_event_state() & (Gdk::ModifierType::ALT_MASK | Gdk::ModifierType::CONTROL_MASK)) != Gdk::ModifierType{}) {
+                m_source_signal.emit({to_image_x(x), to_image_y(y)});
+                drag->set_state(Gtk::EventSequenceState::DENIED);
+                return;
+            }
             if (!m_panning && button == GDK_BUTTON_PRIMARY && (painting() || m_pen_eraser) && m_iw > 0) {
                 const bool shift = (drag->get_current_event_state() & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{};
                 m_stroking = true;
@@ -963,6 +970,23 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
             cr->stroke();
             cr->restore();
         }
+    }
+    // s015: the Clone Stamp's source -- a crosshair where it takes from.
+    if (sourced() && m_clone_set && !m_space && (!m_clone_fixed || m_px >= 0)) {
+        double sx = to_screen_x(m_clone_pt.x), sy = to_screen_y(m_clone_pt.y);
+        if (m_clone_fixed) {   // it walks with the pointer
+            sx = m_px + m_clone_dx * m_zoom;
+            sy = m_py + m_clone_dy * m_zoom;
+        }
+        cr->save();
+        for (int pass = 0; pass < 2; ++pass) {
+            cr->set_line_width(pass ? 1 : 3);
+            cr->set_source_rgba(pass, pass, pass, 0.85);
+            cr->move_to(sx - 9, sy); cr->line_to(sx + 9, sy);
+            cr->move_to(sx, sy - 9); cr->line_to(sx, sy + 9);
+            cr->stroke();
+        }
+        cr->restore();
     }
     tell_zoom();
 }

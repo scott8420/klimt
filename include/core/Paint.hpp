@@ -38,7 +38,33 @@ struct Brush {
     // strength at once (coverage by max, as before). Below 1, dabs BUILD UP
     // where they overlap (Photoshop's flow), still capped by the opacity.
     double     flow = 1;
+    // s015: CLONE STAMP -- the colour (and its alpha) comes from `source` at
+    // (x + dx, y + dy), rounded to whole pixels, instead of `colour`. The
+    // source is the layer's own pixels as the stroke began, or what the eye
+    // sees (All Layers, flattened) -- the same colour mode as the layer.
+    std::shared_ptr<const pixel::TileMap> source;
+    double     dx = 0, dy = 0;
     double spacing() const { return std::max(0.5, size * 0.25); }
+};
+
+// s015: where a Clone Stamp stroke takes from. Alt- / Ctrl-click sets the
+// source point; a stroke's offset is (source - where the stroke starts).
+// ALIGNED (Photoshop's default): the first stroke after setting the source
+// fixes the offset and later strokes keep it (the source walks with you);
+// not aligned: every stroke starts again from the source point.
+struct CloneSource {
+    bool       set = false;
+    select::Pt point;
+    bool       aligned = true;
+    bool       fixed = false;   // aligned: an offset is in use
+    double     dx = 0, dy = 0;
+    void set_point(select::Pt p) { set = true; point = p; fixed = false; }
+    // A stroke starts at p: the offset it paints with (set must be true).
+    void begin(select::Pt p) {
+        if (!aligned || !fixed) { dx = point.x - p.x; dy = point.y - p.y; fixed = true; }
+    }
+    // Where the source is while the brush is at p (the canvas's crosshair).
+    select::Pt at(select::Pt p) const { return fixed ? select::Pt{p.x + dx, p.y + dy} : point; }
 };
 
 // A dab: where, and the pen's pressure there (1 for a mouse).
@@ -91,6 +117,11 @@ pixel::TileMap new_coverage(int w, int h);
 // recomputed from `original`, `cov`, the selection `mask` and the brush.
 pixel::TileMap apply(const pixel::TileMap& original, const pixel::TileMap& current, const pixel::TileMap& cov,
                      const pixel::TileMap* mask, const Brush& b, const TileSet& touched);
+
+// s015: a clone source for this layer: its own pixels (`all` false) or the
+// flattened picture -- refused ("" back in `why`) when the flattened picture
+// isn't the layer's colour mode (All Layers: RGB documents, for now).
+std::shared_ptr<const pixel::TileMap> clone_source(const Document& d, const Document::Id& id, bool all, std::string& why);
 
 // May this layer be painted? "" yes, else why not (for a toast).
 std::string refusal(const Document& d, const Document::Id& id, const Brush& b);

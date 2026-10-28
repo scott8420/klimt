@@ -127,12 +127,12 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
                 m_variant_signal.emit(id, static_cast<int>(i));
                 // A variant with its own options (the Wand's) rebuilds the
                 // strip -- at idle, not inside the button's own signal.
-                if (id == "select")
+                if (id == "select" || id == "heal")   // s015 m4: Spot / Healing differ
                     if (const auto* tool = core::find_tool(id))
                         Glib::signal_idle().connect_once([this, tool] { show_tool(*tool); });
             });
             // s008: the variants that don't act yet say so instead of faking.
-            if (t.id == "select" && i >= 4) {
+            if ((t.id == "select" && i >= 4) || (t.id == "heal" && i == 2)) {   // s015: Patch later
                 b->set_sensitive(false);
                 b->set_tooltip_text("Arrives with a later milestone");
             }
@@ -142,7 +142,7 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
     }
 
     // s008 m4: the Brush's and the Eraser's options.
-    if (t.id == "brush" || t.id == "eraser") {
+    if (t.id == "brush" || t.id == "eraser" || t.id == "clone" || t.id == "heal") {
         // s012: COMPACT number fields (the -/+ spin buttons pushed Pressure,
         // Flow and Smoothing off a 1280 px window): type a number, scroll over
         // it, or drag its label sideways to scrub (Photoshop's way; easy with a pen).
@@ -187,6 +187,22 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
         toggle("Size", "A pen's pressure sets the size (light: thin)", o.pressure_size, &BrushOpts::pressure_size);
         toggle("Opacity", "A pen's pressure sets the strength (light: faint)", o.pressure_opacity, &BrushOpts::pressure_opacity);
         append(*group);
+    }
+
+    // s015: the Clone Stamp -- does the source walk with you; what it samples.
+    // s015 m4: the Heal tool shares them (Spot has no source point: no Aligned).
+    if (t.id == "clone" || t.id == "heal") {
+        append(*Gtk::make_managed<Gtk::Separator>(Gtk::Orientation::VERTICAL));
+        auto al = Gtk::make_managed<Gtk::CheckButton>("Aligned");
+        al->set_active(m_clone.aligned);
+        al->set_tooltip_text("On: the source keeps its distance from stroke to stroke. Off: every stroke starts again from the source point");
+        al->signal_toggled().connect([this, al] { m_clone.aligned = al->get_active(); m_clone_signal.emit(); });
+        if (t.id == "clone" || variant("heal") == 1) append(*al);
+        auto all = Gtk::make_managed<Gtk::CheckButton>("All layers");
+        all->set_active(m_clone.all_layers);
+        all->set_tooltip_text("Take from what you see (every layer) -- so you can retouch onto an empty layer. Off: the selected layer only");
+        all->signal_toggled().connect([this, all] { m_clone.all_layers = all->get_active(); m_clone_signal.emit(); });
+        append(*all);
     }
 
     // s012: the Gradient -- its strength, its direction, its far end.

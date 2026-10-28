@@ -5,6 +5,7 @@
 #include "core/Canvas.hpp"      // s009 m2: Crop, Canvas Size, Image Size
 #include "core/Transform.hpp"   // s011: Free Transform, flips, rotations
 #include "core/Gradient.hpp"    // s012: the Gradient tool
+#include "core/Heal.hpp"        // s015 m3: the healing brushes
 
 #include <algorithm>
 #include <set>
@@ -925,6 +926,22 @@ const std::vector<Verb>& verbs() {
         {"brush_flow",    [](DocJournal& j, Document& d) {
              paint::Brush b; b.size = 40; b.flow = 0.3; b.colour = pixel::rgba(1, 0, 1, 1);
              paint::stroke_pen(j, d, "L5", {{50, 100, 1.f}, {500, 100, 1.f}, {50, 110, 1.f}}, b); }},
+        // s015: the Clone Stamp -- from the layer itself, and from All Layers onto an empty one.
+        {"clone_layer",   [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 40; std::string why;
+             b.source = paint::clone_source(d, "L4", false, why); b.dx = -200; b.dy = -100;
+             paint::stroke(j, d, "L4", {{350, 250}, {450, 300}}, b); }},
+        {"clone_all",     [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 40; std::string why;
+             b.source = paint::clone_source(d, "L5", true, why); b.dx = -250; b.dy = -150;
+             paint::stroke(j, d, "L5", {{400, 300}, {450, 320}}, b); }},
+        // s015 m3: healing -- with a source, and Spot (it finds one).
+        {"heal",          [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 30;
+             heal::stroke(j, d, "L4", {{120, 120, 1.f}, {160, 130, 1.f}}, b, false, 100, 60); }},
+        {"heal_spot",     [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 30;
+             heal::stroke(j, d, "L4", {{298, 150, 1.f}}, b, true, 0, 0, true); }},
         // s009 m1: the Move tool -- a layer, a group's contents, a lifted selection.
         {"move_layer",    [](DocJournal& j, Document& d) { move::by(j, d, {"L4"}, 37, -20, pixel::rgba(1, 1, 1, 1)); }},
         {"move_group",    [](DocJournal& j, Document& d) { move::by(j, d, {"L2"}, -300, 5, pixel::rgba(1, 1, 1, 1)); }},

@@ -109,6 +109,7 @@ add_library(klimt_core STATIC
     src/core/Adjust.cpp       # s013: adjustments -- the maths
     src/core/Adjustments.cpp  # s013: adjustment layer verbs (s014: apply_filter)
     src/core/Filter.cpp       # s014: the Filter menu -- the maths
+    src/core/Heal.cpp         # s015 m3: the healing brushes
     src/core/Prefs.cpp        # s014 m4: the app's settings (the dock divider)
 )
 target_include_directories(klimt_core PUBLIC include)
@@ -123,7 +124,7 @@ if(KLIMT_FAST_PIXELS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(klimt_pixel PRIVATE -O2)
     set_source_files_properties(src/core/Composite.cpp src/core/Paint.cpp src/core/Canvas.cpp
                                 src/core/Move.cpp src/core/Selection.cpp src/core/Transform.cpp src/core/Gradient.cpp
-                                src/core/Adjust.cpp src/core/Filter.cpp
+                                src/core/Adjust.cpp src/core/Filter.cpp src/core/Heal.cpp
                                 PROPERTIES COMPILE_OPTIONS "-O2")
 endif()
 # s007: libzip writes and reads the .klimt container (Fedora: libzip-devel).
@@ -138,7 +139,7 @@ add_executable(klimt_bench src/bench.cpp)
 target_link_libraries(klimt_bench PRIVATE klimt_core Threads::Threads)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp)
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads)
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

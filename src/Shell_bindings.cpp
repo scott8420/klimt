@@ -53,6 +53,12 @@ void Shell::bind_actions() {  // bindings
     // s012: layer masks (Shell_masks.cpp).
     m_layers.signal_mask_view().connect(sigc::mem_fun(*this, &Shell::on_mask_view));
     m_canvas.signal_gradient().connect(sigc::mem_fun(*this, &Shell::on_gradient));   // s012 m4
+    // s015: the Clone Stamp's source (Shell_paint.cpp).
+    m_canvas.signal_source().connect(sigc::mem_fun(*this, &Shell::on_clone_source));
+    m_strip.signal_clone_changed().connect([this] {
+        if (m_clone.aligned != m_strip.clone().aligned) { m_clone.aligned = m_strip.clone().aligned; m_clone.fixed = false; }
+        show_clone_marker();
+    });
     // s013: adjustments (Shell_adjust.cpp).
     for (const auto k : core::adjust::kinds()) {
         const std::string key(core::adjust::key(k));
@@ -198,7 +204,7 @@ void Shell::bind_actions() {  // bindings
             if (keyval == GDK_KEY_x) { m_rail.swap_colours(); return true; }
             // s008 m4: [ and ] -- the brush's size, a step at a time.
             if ((keyval == GDK_KEY_bracketleft || keyval == GDK_KEY_bracketright) &&
-                (m_rail.tool() == "brush" || m_rail.tool() == "eraser")) {
+                (m_rail.tool() == "brush" || m_rail.tool() == "eraser" || m_rail.tool() == "clone" || m_rail.tool() == "heal")) {
                 const int s = m_strip.brush(m_rail.tool()).size;
                 const int step = s < 10 ? 1 : s < 50 ? 5 : s < 200 ? 10 : 50;
                 m_strip.set_brush_size(m_rail.tool(), keyval == GDK_KEY_bracketright ? s + step : s - step);

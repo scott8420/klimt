@@ -122,6 +122,13 @@ public:
     sigc::signal<void()>& signal_transform_commit() { return m_xf_commit; }
     // s008 m3: the Eyedropper clicked at an image point; `background`: Alt.
     sigc::signal<void(int, int, bool)>& signal_pick() { return m_pick_signal; }
+    // s015: Alt- / Ctrl-click with the Clone Stamp: the source point.
+    sigc::signal<void(core::select::Pt)>& signal_source() { return m_source_signal; }
+    // s015: the source's crosshair -- at `point` until a stroke fixes the
+    // offset, then (fixed) the pointer + (dx, dy).
+    void set_clone_marker(bool set, core::select::Pt point, bool fixed, double dx, double dy) {
+        m_clone_set = set; m_clone_pt = point; m_clone_fixed = fixed; m_clone_dx = dx; m_clone_dy = dy; queue_draw();
+    }
     // Told the zoom whenever it changes: 0.37 -> "37%".
     void set_on_zoom(std::function<void(double)> f) { m_on_zoom = std::move(f); }
 
@@ -136,7 +143,9 @@ private:
     void draw_ants(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     void draw_rubber(const Cairo::RefPtr<Cairo::Context>& cr);
     bool selecting() const { return m_tool == "select" && m_variant <= 3; }   // Rectangle, Ellipse, Lasso, Wand
-    bool painting() const { return m_tool == "brush" || m_tool == "eraser"; }
+    bool painting() const { return m_tool == "brush" || m_tool == "eraser" || m_tool == "clone" || m_tool == "heal"; }
+    // s015 m4: the tools that take from a source point (Alt- / Ctrl-click).
+    bool sourced() const { return m_tool == "clone" || (m_tool == "heal" && m_variant == 1); }
     double to_image_x(double sx) const { return m_cx + (sx - m_vw / 2.0) / m_zoom; }
     double to_image_y(double sy) const { return m_cy + (sy - m_vh / 2.0) / m_zoom; }
     double to_screen_x(double ix) const { return m_vw / 2.0 + (ix - m_cx) * m_zoom; }
@@ -178,6 +187,10 @@ private:
     double            m_press_x = 0, m_press_y = 0;    // screen
     sigc::signal<void(const Shape&)> m_shape_signal;
     sigc::signal<void(int, int, bool)> m_pick_signal;
+    sigc::signal<void(core::select::Pt)> m_source_signal;   // s015
+    bool   m_clone_set = false, m_clone_fixed = false;
+    core::select::Pt m_clone_pt;
+    double m_clone_dx = 0, m_clone_dy = 0;
     sigc::signal<void(StrokeAt, core::select::Pt, bool, double)> m_stroke_signal;
     bool   m_stroking = false;
     bool   m_pen_eraser = false;                       // s012: this stroke is the pen's eraser end

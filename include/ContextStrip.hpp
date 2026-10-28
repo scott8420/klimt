@@ -33,6 +33,10 @@ public:
         int flow = 100, smoothing = 0;                          // s012 m1: build-up; the stabiliser (%)
     };
     BrushOpts brush(const std::string& tool) const;
+    // s015: the Clone Stamp's own options (its brush is brush("clone")).
+    struct CloneOpts { bool aligned = true; bool all_layers = false; };
+    const CloneOpts& clone() const { return m_clone; }
+    sigc::signal<void()>& signal_clone_changed() { return m_clone_signal; }
     void set_brush_size(const std::string& tool, int size);   // [ and ] -- the strip follows
     sigc::signal<void()>& signal_brush_changed() { return m_brush_signal; }
     // s008: told when the user picks a variant (tool id, index).
@@ -43,6 +47,8 @@ private:
     Wand m_wand;
     bool m_crop_delete = false;
     GradientOpts m_gradient;
+    CloneOpts m_clone;
+    sigc::signal<void()> m_clone_signal;
     std::map<std::string, BrushOpts> m_brush;
     std::string m_shown;                                      // the tool the strip shows
     sigc::signal<void()> m_brush_signal;

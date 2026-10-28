@@ -1,4 +1,5 @@
 #include "core/Paint.hpp"
+#include "core/File.hpp"   // s015: flatten, for All Layers
 
 #include <algorithm>
 #include <cmath>
@@ -164,6 +165,11 @@ pixel::TileMap apply(const pixel::TileMap& original, const pixel::TileMap& curre
     const int cc = f.colour_channels();
     const auto ai = static_cast<std::size_t>(f.channels() - 1);
     const float op = static_cast<float>(std::clamp(b.opacity, 0.0, 1.0));
+    // s015: the clone source, when there is one (and it is the layer's mode).
+    const pixel::TileMap* src = b.source && b.source->format().mode == f.mode && !b.erase ? b.source.get() : nullptr;
+    const int sdx = static_cast<int>(std::lround(b.dx)), sdy = static_cast<int>(std::lround(b.dy));
+    const bool salpha = src && src->format().alpha;
+    const auto sai = src ? static_cast<std::size_t>(src->format().colour_channels()) : 0;
     std::vector<pixel::TileMap::TileRef> grid(static_cast<std::size_t>(current.cols()) * static_cast<std::size_t>(current.rows()));
     for (int row = 0; row < current.rows(); ++row)
         for (int col = 0; col < current.cols(); ++col) {
@@ -184,7 +190,24 @@ pixel::TileMap apply(const pixel::TileMap& original, const pixel::TileMap& curre
                     if (a <= 0.f) continue;
                     const pixel::Px o = wr.get(x, y);
                     pixel::Px p = o;
-                    if (b.erase) {
+                    if (src) {   // s015: the Clone Stamp
+                        const int sx = cell.x + x + sdx, sy = cell.y + y + sdy;
+                        const pixel::Px s = src->get(sx, sy);
+                        const float sa = salpha ? s.c[sai] : 1.f;
+                        const float A = a * sa;
+                        if (A <= 0.f) continue;
+                        if (!f.alpha || b.alpha_lock) {
+                            if (f.alpha && o.c[ai] <= 0.f) continue;
+                            for (int k = 0; k < cc; ++k) { const auto q = static_cast<std::size_t>(k); p.c[q] += (s.c[q] - o.c[q]) * A; }
+                        } else {
+                            const float oa = o.c[ai], out = A + oa * (1 - A);
+                            for (int k = 0; k < cc; ++k) {
+                                const auto q = static_cast<std::size_t>(k);
+                                p.c[q] = out > 0.f ? (s.c[q] * A + o.c[q] * oa * (1 - A)) / out : 0.f;
+                            }
+                            p.c[ai] = out;
+                        }
+                    } else if (b.erase) {
                         if (f.alpha) {
                             p.c[ai] = o.c[ai] * (1 - a);
                             if (p.c[ai] <= 0.f) p = pixel::transparent();
@@ -212,6 +235,16 @@ pixel::TileMap apply(const pixel::TileMap& original, const pixel::TileMap& curre
     return current.with_grid(std::move(grid));   // s010: keeps the pixels beyond the image
 }
 
+std::shared_ptr<const pixel::TileMap> clone_source(const Document& d, const Document::Id& id, bool all, std::string& why) {
+    const auto l = d.get(id);
+    if (!l) { why = "pick a layer to paint on"; return nullptr; }
+    if (!all) return std::make_shared<const pixel::TileMap>(l->pixels ? *l->pixels : d.blank());
+    if (d.image().format.mode != pixel::Mode::RGB) { why = "All Layers samples RGB documents only, for now"; return nullptr; }
+    auto flat = file::flatten(d.image(), d.snapshot());
+    if (!flat) { why = "couldn't flatten the picture"; return nullptr; }
+    return std::make_shared<const pixel::TileMap>(std::move(*flat));
+}
+
 std::string refusal(const Document& d, const Document::Id& id, const Brush& b) {
     const auto l = d.get(id);
     if (!l) return "pick a layer to paint on";
@@ -235,7 +268,7 @@ bool stroke_pen(DocJournal& j, Document& d, const Document::Id& id, const std::v
     const pixel::TileMap original = l0.pixels ? *l0.pixels : d.blank();
     pixel::TileMap cov = new_coverage(original.width(), original.height());
     pixel::TileMap cur = original;
-    j.begin(b.erase ? "Eraser" : "Brush Stroke", {id});
+    j.begin(b.source ? "Clone Stamp" : b.erase ? "Eraser" : "Brush Stroke", {id});
     double carry = 1e9;   // the first dab lands at the first point
     for (std::size_t i = 0; i < path.size(); ++i) {
         const auto dabs = dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, carry);
