@@ -22,6 +22,11 @@
 
 namespace klimt::core::paint {
 
+// s017: the brush TIP's shape. Round (the s008 dab); Square (a soft-cornered
+// square); Chalk (round, broken by a paper grain fixed to the IMAGE, so
+// strokes over each other share the grain, as chalk on paper does).
+enum class Tip : std::uint8_t { Round, Square, Chalk };
+
 struct Brush {
     double     size = 30;          // diameter, image pixels (1 .. 2500)
     double     hardness = 0.8;     // 0 soft .. 1 hard edge
@@ -44,6 +49,17 @@ struct Brush {
     // sees (All Layers, flattened) -- the same colour mode as the layer.
     std::shared_ptr<const pixel::TileMap> source;
     double     dx = 0, dy = 0;
+    // s017: the tip -- its shape, its angle (degrees, counter-clockwise) and
+    // its ROUNDNESS (1 a circle .. 0.05 a sliver: a flat, calligraphic
+    // brush). TILT: the pen's lean turns the tip to face where it leans and
+    // flattens it the further it leans (a pencil's side), over angle / roundness.
+    Tip        tip = Tip::Round;
+    double     angle = 0;
+    double     roundness = 1;
+    bool       tilt = false;
+    // s017: SMUDGE strength 0..1 (Photoshop's default 0.5): how much of the
+    // colour the finger carries it lays down, and keeps.
+    double     strength = 0.5;
     double spacing() const { return std::max(0.5, size * 0.25); }
 };
 
@@ -67,8 +83,16 @@ struct CloneSource {
     select::Pt at(select::Pt p) const { return fixed ? select::Pt{p.x + dx, p.y + dy} : point; }
 };
 
-// A dab: where, and the pen's pressure there (1 for a mouse).
-struct Dab { double x = 0, y = 0; float p = 1.f; };
+// A dab: where, the pen's pressure there (1 for a mouse) and (s017) its tilt
+// (-1 .. 1 each way, GDK's; 0 for a mouse).
+struct Dab { double x = 0, y = 0; float p = 1.f; float tx = 0.f, ty = 0.f; };
+
+// s017: a dab's strength at (dx, dy) from its centre -- radius r, the
+// brush's tip / angle / roundness / hardness (and the dab's tilt when the
+// brush follows it); (ix, iy) the image pixel, for Chalk's grain.
+float tip_alpha(double dx, double dy, double r, const Brush& b, const Dab& d, int ix, int iy);
+// How far from its centre a dab of radius r can reach (a square's corner).
+double tip_reach(double r, const Brush& b);
 // The light touch still leaves a mark: pressure never takes a dab below this
 // fraction of the brush's size.
 inline constexpr float kMinPressure = 0.05f;
@@ -89,7 +113,7 @@ private:
     double m_r = 0;
     bool   m_started = false;
     double m_x = 0, m_y = 0;
-    struct { double x = 0, y = 0; float p = 1; } m_last;
+    struct Dab m_last_dab;
 };
 
 // The dab centres from `from` to `to`, `spacing` apart, carrying the leftover
@@ -129,6 +153,22 @@ std::string refusal(const Document& d, const Document::Id& id, const Brush& b);
 // A whole stroke, synchronously, as ONE step (the verb table; tests). The
 // app does the same in pieces on workers (Shell_paint.cpp).
 bool stroke(DocJournal& j, Document& d, const Document::Id& id, const std::vector<select::Pt>& path, Brush b);
+// s017: SMUDGE. The finger carries a patch of colour (premultiplied, the
+// dab's size) taken where the stroke starts; each dab lays it over what is
+// there by (tip x pressure x opacity x selection) x strength, then picks up
+// the result -- so colour drags along and fades. Unlike the Brush this can't
+// be recomputed from the original: dabs run in order on the CURRENT pixels,
+// and the carry lives across calls (the app: one job at a time).
+struct SmudgeCarry {
+    std::vector<float> c;   // side x side x channels, premultiplied
+    int  side = 0, channels = 0;
+    bool started = false;
+};
+pixel::TileMap smudge(const pixel::TileMap& current, const pixel::TileMap* mask, const Brush& b,
+                      const std::vector<Dab>& dabs, SmudgeCarry& carry, TileSet& touched);
+// A whole Smudge stroke as ONE step ("Smudge").
+bool stroke_smudge(DocJournal& j, Document& d, const Document::Id& id, const std::vector<Dab>& path, Brush b);
+
 // s016: a QUICK MASK stroke -- the selection painted (b.colour.c[0]: 1 selects,
 // 0 masks), no selection counting as all selected. ONE step.
 bool stroke_selection(DocJournal& j, Document& d, const std::vector<Dab>& path, Brush b);

@@ -31,6 +31,9 @@ public:
         int size = 30; int hardness = 80; int opacity = 100;
         bool pressure_size = true, pressure_opacity = false;   // s009 m3: what the pen's pressure drives
         int flow = 100, smoothing = 0;                          // s012 m1: build-up; the stabiliser (%)
+        int tip = 0, angle = 0, roundness = 100;                // s017: core::paint::Tip, degrees, %
+        bool tilt = false;                                      // s017: the pen's lean shapes the tip
+        int strength = 50;                                      // s017: Smudge's strength (%)
     };
     BrushOpts brush(const std::string& tool) const;
     // s015: the Clone Stamp's own options (its brush is brush("clone")).

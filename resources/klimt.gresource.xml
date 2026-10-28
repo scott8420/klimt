@@ -19,6 +19,7 @@
     <file preprocess="xml-stripblanks" alias="klimt-adjustment-symbolic.svg">icons/scalable/apps/klimt-adjustment-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-subject-symbolic.svg">icons/scalable/apps/klimt-subject-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-brush-symbolic.svg">icons/scalable/apps/klimt-tool-brush-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="klimt-tool-smudge-symbolic.svg">icons/scalable/apps/klimt-tool-smudge-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-clone-symbolic.svg">icons/scalable/apps/klimt-tool-clone-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-crop-symbolic.svg">icons/scalable/apps/klimt-tool-crop-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-eraser-symbolic.svg">icons/scalable/apps/klimt-tool-eraser-symbolic.svg</file>

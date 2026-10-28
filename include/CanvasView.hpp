@@ -87,6 +87,10 @@ public:
     // s009 m3: the last argument is the pen's pressure, 0..1 (a mouse: 1).
     sigc::signal<void(StrokeAt, core::select::Pt, bool, double)>& signal_stroke() { return m_stroke_signal; }
     void set_brush_size(double px) { m_brush = px; queue_draw(); }   // the outline at the pointer
+    // s017: the outline's shape -- the tip (core::paint::Tip as int), angle, roundness 0..1.
+    void set_brush_shape(int tip, double angle, double roundness) { m_tip = tip; m_tip_angle = angle; m_tip_round = roundness; queue_draw(); }
+    // s017: the pen's tilt in the event being handled (-1..1 each way; 0 for a mouse).
+    void pen_tilt(float& x, float& y) const { x = m_tilt_x; y = m_tilt_y; }
     // s012 m1: the stroke under way is the pen's eraser end (the Shell erases).
     bool pen_eraser() const { return m_pen_eraser; }
     // s009 m1: the Move tool's drag: Begin, Move, End, each with the offset
@@ -147,7 +151,7 @@ private:
     void draw_ants(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     void draw_rubber(const Cairo::RefPtr<Cairo::Context>& cr);
     bool selecting() const { return m_tool == "select" && m_variant <= 3; }   // Rectangle, Ellipse, Lasso, Wand
-    bool painting() const { return m_tool == "brush" || m_tool == "eraser" || m_tool == "clone" || m_tool == "heal"; }
+    bool painting() const { return m_tool == "brush" || m_tool == "eraser" || m_tool == "clone" || m_tool == "heal" || m_tool == "smudge"; }
     // s015 m4: the tools that take from a source point (Alt- / Ctrl-click).
     bool sourced() const { return m_tool == "clone" || (m_tool == "heal" && m_variant == 1); }
     double to_image_x(double sx) const { return m_cx + (sx - m_vw / 2.0) / m_zoom; }
@@ -240,6 +244,9 @@ private:
     bool   m_patching = false;
     int    m_ants_dx = 0, m_ants_dy = 0;
     double m_brush = 30;
+    int    m_tip = 0;                                  // s017
+    double m_tip_angle = 0, m_tip_round = 1;
+    float  m_tilt_x = 0, m_tilt_y = 0;
 };
 
 }  // namespace klimt

@@ -105,7 +105,11 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["canvas-size"] = add_action("canvas-size", sigc::mem_fun(*this, &Shell::on_canvas_size));
     m_layer_acts["reveal-all"] = add_action("reveal-all", sigc::mem_fun(*this, &Shell::on_reveal_all));
     m_layer_acts["crop-selection"] = add_action("crop-selection", sigc::mem_fun(*this, &Shell::on_crop_selection));
-    m_strip.signal_brush_changed().connect([this] { m_canvas.set_brush_size(m_strip.brush(m_rail.tool()).size); });
+    m_strip.signal_brush_changed().connect([this] {
+        const auto o = m_strip.brush(m_rail.tool());
+        m_canvas.set_brush_size(o.size);
+        m_canvas.set_brush_shape(o.tip, o.angle, o.roundness / 100.0);   // s017
+    });
     m_layer_acts["select-feather"] = add_action("select-feather", sigc::mem_fun(*this, &Shell::on_feather));
     // s011 m4: Select > Modify.
     m_layer_acts["select-expand"]   = add_action("select-expand",   [this] { on_modify(core::select::Modify::Expand); });
@@ -218,7 +222,7 @@ void Shell::bind_actions() {  // bindings
             if (keyval == GDK_KEY_x) { m_rail.swap_colours(); return true; }
             // s008 m4: [ and ] -- the brush's size, a step at a time.
             if ((keyval == GDK_KEY_bracketleft || keyval == GDK_KEY_bracketright) &&
-                (m_rail.tool() == "brush" || m_rail.tool() == "eraser" || m_rail.tool() == "clone" || m_rail.tool() == "heal")) {
+                (m_rail.tool() == "brush" || m_rail.tool() == "eraser" || m_rail.tool() == "clone" || m_rail.tool() == "heal" || m_rail.tool() == "smudge")) {
                 const int s = m_strip.brush(m_rail.tool()).size;
                 const int step = s < 10 ? 1 : s < 50 ? 5 : s < 200 ? 10 : 50;
                 m_strip.set_brush_size(m_rail.tool(), keyval == GDK_KEY_bracketright ? s + step : s - step);

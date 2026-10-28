@@ -108,6 +108,7 @@ void selftest_gradient(const std::function<void(const std::string&, bool, const 
 void selftest_adjust(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_filter(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_retouch(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_brush(const std::function<void(const std::string&, bool, const std::string&)>& check);
 
 int main() {
     std::cout << "klimt_selftest -- undo, layers, jobs, recents, textmap, shortcuts\n";
@@ -1219,6 +1220,7 @@ int main() {
     selftest_adjust([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_filter([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_retouch([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_brush([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
 
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";

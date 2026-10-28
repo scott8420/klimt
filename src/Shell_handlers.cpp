@@ -92,6 +92,7 @@ void Shell::on_tool(const std::string& id) {  // view state: not a step
         m_strip.show_tool(*t);
         m_canvas.set_tool(id, m_strip.variant(id));   // s007: Hand pans, Zoom zooms; s008: Select selects
         m_canvas.set_brush_size(m_strip.brush(id).size);
+        { const auto o = m_strip.brush(id); m_canvas.set_brush_shape(o.tip, o.angle, o.roundness / 100.0); }   // s017
         if (auto lg = log::get(log::Area::Shell)) lg->info("tool: {}", id);
     }
 }

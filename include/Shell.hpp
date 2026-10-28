@@ -298,6 +298,7 @@ private:
         core::paint::Smoother smoother;             // s012: the stabiliser (Smoothing)
         bool                on_mask = false;        // s012: painting the layer's mask
         bool                on_selection = false;   // s016: Quick Mask -- painting the selection
+        std::shared_ptr<core::paint::SmudgeCarry> smudge;   // s017: a Smudge stroke's finger (its jobs run in turn)
         double              carry = 0;
         core::Jobs::Id      job = 0;
         core::Jobs::Id      source_job = 0;          // s015: All Layers -- the flattened source, before any dab

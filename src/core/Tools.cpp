@@ -17,6 +17,8 @@ const std::vector<ToolSpec>& tools() {
          "Alt-click (or Ctrl-click) where to take from, then paint."},
         {"brush",      "Brush",       "klimt-tool-brush-symbolic",      'b', 2, {},
          "Paint with the foreground colour; Shift-click draws a line from the last stroke."},
+        {"smudge",     "Smudge",      "klimt-tool-smudge-symbolic",     'r', 2, {},
+         "Drag colour along with your finger; Strength is how far it carries."},
         {"eraser",     "Eraser",      "klimt-tool-eraser-symbolic",     'e', 2, {},
          "Erase to transparency (on a layer without it, to the background colour)."},
         {"gradient",   "Gradient",    "klimt-tool-gradient-symbolic",   'g', 2, {"Linear", "Radial"},

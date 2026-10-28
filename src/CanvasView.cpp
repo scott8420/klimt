@@ -32,6 +32,18 @@ double pressure_of(const Glib::RefPtr<Gtk::GestureDrag>& g) {
     if (!pen || !ev->get_axis(Gdk::AxisUse::PRESSURE, p)) return 1;
     return std::clamp(p, 0.0, 1.0);
 }
+// s017: the pen's tilt in the event being handled (0, 0 for anything else).
+void tilt_of(const Glib::RefPtr<Gtk::GestureDrag>& g, float& tx, float& ty) {
+    tx = ty = 0;
+    const auto ev = g->get_current_event();
+    if (!ev) return;
+    const auto dev = ev->get_device();
+    const bool pen = (dev && dev->get_source() == Gdk::InputSource::PEN) || ev->get_device_tool();
+    double x = 0, y = 0;
+    if (!pen) return;
+    if (ev->get_axis(Gdk::AxisUse::XTILT, x)) tx = static_cast<float>(std::clamp(x, -1.0, 1.0));
+    if (ev->get_axis(Gdk::AxisUse::YTILT, y)) ty = static_cast<float>(std::clamp(y, -1.0, 1.0));
+}
 // s012 m1: the pen's ERASER end (a tablet tool of type eraser) is down?
 bool eraser_of(const Glib::RefPtr<Gtk::GestureDrag>& g) {
     const auto ev = g->get_current_event();
@@ -149,6 +161,7 @@ CanvasView::CanvasView() {
                 m_stroking = true;
                 m_press_x = x;
                 m_press_y = y;
+                tilt_of(drag, m_tilt_x, m_tilt_y);   // s017
                 m_stroke_signal.emit(StrokeAt::Begin, {to_image_x(x), to_image_y(y)}, shift, pressure_of(drag));
                 return;
             }
@@ -230,12 +243,15 @@ CanvasView::CanvasView() {
                             if (!(h[i].flags & GDK_AXIS_FLAG_X) || !(h[i].flags & GDK_AXIS_FLAG_Y)) continue;
                             double p = 1;
                             if (pen && (h[i].flags & GDK_AXIS_FLAG_PRESSURE)) p = std::clamp(h[i].axes[GDK_AXIS_PRESSURE], 0.0, 1.0);
+                            m_tilt_x = pen && (h[i].flags & GDK_AXIS_FLAG_XTILT) ? static_cast<float>(std::clamp(h[i].axes[GDK_AXIS_XTILT], -1.0, 1.0)) : 0.f;
+                            m_tilt_y = pen && (h[i].flags & GDK_AXIS_FLAG_YTILT) ? static_cast<float>(std::clamp(h[i].axes[GDK_AXIS_YTILT], -1.0, 1.0)) : 0.f;
                             m_stroke_signal.emit(StrokeAt::Move, {to_image_x(h[i].axes[GDK_AXIS_X] + ox), to_image_y(h[i].axes[GDK_AXIS_Y] + oy)},
                                                  false, p);
                         }
                         g_free(h);
                     }
                 }
+                tilt_of(drag, m_tilt_x, m_tilt_y);   // s017
                 m_stroke_signal.emit(StrokeAt::Move, {to_image_x(m_px), to_image_y(m_py)}, false, pressure_of(drag));
                 queue_draw();
                 return;
@@ -969,12 +985,22 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     if (painting() && m_px >= 0 && !m_space) {
         const double r = std::max(1.0, m_brush / 2 * m_zoom);
         if (r >= 3) {
+            // s017: the tip's own shape -- an ellipse at its angle, or a square.
+            const auto shape = [&](double rr) {
+                cr->save();
+                cr->translate(m_px, m_py);
+                cr->rotate(-m_tip_angle * M_PI / 180);   // counter-clockwise on screen
+                cr->scale(1, std::clamp(m_tip_round, 0.05, 1.0));
+                if (m_tip == 1) cr->rectangle(-rr, -rr, 2 * rr, 2 * rr);
+                else cr->arc(0, 0, rr, 0, 2 * M_PI);
+                cr->restore();
+            };
             cr->save();
             cr->set_line_width(1);
-            cr->arc(m_px, m_py, r, 0, 2 * M_PI);
+            shape(r);
             cr->set_source_rgba(0, 0, 0, 0.8);
             cr->stroke();
-            cr->arc(m_px, m_py, r + 1, 0, 2 * M_PI);
+            shape(r + 1);
             cr->set_source_rgba(1, 1, 1, 0.8);
             cr->stroke();
             cr->restore();

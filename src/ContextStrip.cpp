@@ -5,6 +5,9 @@
 #include <gtkmm/label.h>
 #include <gtkmm/separator.h>
 #include <gtkmm/togglebutton.h>
+#include <gtkmm/menubutton.h>
+#include <gtkmm/popover.h>
+#include <gtkmm/button.h>
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/spinbutton.h>
 #include <gtkmm/entry.h>
@@ -142,7 +145,7 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
     }
 
     // s008 m4: the Brush's and the Eraser's options.
-    if (t.id == "brush" || t.id == "eraser" || t.id == "clone" || t.id == "heal") {
+    if (t.id == "brush" || t.id == "eraser" || t.id == "clone" || t.id == "heal" || t.id == "smudge") {
         // s012: COMPACT number fields (the -/+ spin buttons pushed Pressure,
         // Flow and Smoothing off a 1280 px window): type a number, scroll over
         // it, or drag its label sideways to scrub (Photoshop's way; easy with a pen).
@@ -158,8 +161,79 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
                          });
         };
         const auto o = brush(t.id);
+        // s017: the TIP -- a button whose popover holds the shape, angle,
+        // roundness and pen tilt (Photoshop's brush picker, cut down): the
+        // strip itself stays as long as it was.
+        {
+            static const char* kTips[] = {"Round", "Square", "Chalk"};
+            auto mb = Gtk::make_managed<Gtk::MenuButton>();
+            mb->set_name("strip.brush.tip");
+            const auto label_of = [](const BrushOpts& b) {
+                std::string s = kTips[std::clamp(b.tip, 0, 2)];
+                if (b.roundness < 100) s += " " + std::to_string(b.roundness) + "%";
+                if (b.tilt) s += " · tilt";
+                return s;
+            };
+            mb->set_label(label_of(o));
+            mb->set_tooltip_text("The brush tip: its shape, angle, roundness, and the pen's tilt");
+            auto pop = Gtk::make_managed<Gtk::Popover>();
+            auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
+            box->set_margin(10);
+            auto shapes = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL);
+            shapes->add_css_class("linked");
+            Gtk::ToggleButton* first = nullptr;
+            const auto changed = [this, id = t.id, mb, label_of] {
+                mb->set_label(label_of(brush(id)));
+                m_brush_signal.emit();
+            };
+            for (int i = 0; i < 3; ++i) {
+                auto b = Gtk::make_managed<Gtk::ToggleButton>(kTips[i]);
+                if (first) b->set_group(*first); else first = b;
+                b->set_active(o.tip == i);
+                b->signal_toggled().connect([this, b, id = t.id, i, changed] {
+                    if (!b->get_active()) return;
+                    auto x = brush(id); x.tip = i; m_brush[id] = x; changed();
+                });
+                shapes->append(*b);
+            }
+            box->append(*shapes);
+            const auto field = [this, box, id = t.id, changed](const char* label, int lo, int hi, int value, const char* unit, const char* tip,
+                                                               int BrushOpts::*f) {
+                auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 4);
+                number_field(*row, label, lo, hi, value, unit, tip, [this, id, f] { return brush(id).*f; },
+                             [this, id, f, changed](int v) {
+                                 auto x = brush(id);
+                                 if (x.*f == v) return;
+                                 x.*f = v; m_brush[id] = x; changed();
+                             });
+                box->append(*row);
+            };
+            field("Angle", -180, 180, o.angle, "°", "The tip's angle, counter-clockwise", &BrushOpts::angle);
+            field("Roundness", 5, 100, o.roundness, "%", "100: round; low: a flat, calligraphic tip", &BrushOpts::roundness);
+            auto flat = Gtk::make_managed<Gtk::Button>("Flat 45°");
+            flat->set_tooltip_text("A calligraphy tip: roundness 25%, angle 45°");
+            flat->add_css_class("flat");
+            box->append(*flat);
+            auto tilt = Gtk::make_managed<Gtk::CheckButton>("Pen tilt shapes the tip");
+            tilt->set_active(o.tilt);
+            tilt->set_tooltip_text("Lean the pen: the tip turns to face the lean and flattens the further it leans (a pencil's side)");
+            tilt->signal_toggled().connect([this, tilt, id = t.id, changed] {
+                auto x = brush(id); x.tilt = tilt->get_active(); m_brush[id] = x; changed();
+            });
+            box->append(*tilt);
+            flat->signal_clicked().connect([this, id = t.id, changed, tool = t.id] {
+                auto x = brush(id); x.roundness = 25; x.angle = 45; m_brush[id] = x; changed();
+                // the fields show the new values when the strip is rebuilt
+                if (const auto* tt = core::find_tool(tool)) Glib::signal_idle().connect_once([this, tt] { show_tool(*tt); });
+            });
+            pop->set_child(*box);
+            mb->set_popover(*pop);
+            append(*mb);
+        }
         spin("Size", 1, 2500, o.size, "px", "The brush's diameter  ([ and ] change it)", &BrushOpts::size);
         spin("Hardness", 0, 100, o.hardness, "%", "100: a hard edge; 0: soft all the way in", &BrushOpts::hardness);
+        if (t.id == "smudge")   // s017
+            spin("Strength", 0, 100, o.strength, "%", "How much colour the finger carries, and how far it drags it", &BrushOpts::strength);
         spin("Opacity", 1, 100, o.opacity, "%", "The stroke's strength -- crossing itself doesn't build past it", &BrushOpts::opacity);
         // s012 m1: build-up and the stabiliser.
         spin("Flow", 1, 100, o.flow, "%", "How much each dab lays down: below 100, a stroke builds up where it overlaps (up to the opacity)",

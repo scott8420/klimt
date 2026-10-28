@@ -951,6 +951,17 @@ const std::vector<Verb>& verbs() {
         {"brush_flow",    [](DocJournal& j, Document& d) {
              paint::Brush b; b.size = 40; b.flow = 0.3; b.colour = pixel::rgba(1, 0, 1, 1);
              paint::stroke_pen(j, d, "L5", {{50, 100, 1.f}, {500, 100, 1.f}, {50, 110, 1.f}}, b); }},
+        // s017: a flat, angled tip and a chalk one.
+        {"brush_flat",    [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 50; b.roundness = 0.2; b.angle = 30; b.colour = pixel::rgba(1, 0, 0, 1);
+             paint::stroke(j, d, "L5", {{50, 300}, {500, 100}}, b); }},
+        {"brush_chalk",   [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 60; b.tip = paint::Tip::Chalk; b.colour = pixel::rgba(0, 0, 0, 1);
+             paint::stroke(j, d, "L5", {{50, 200}, {550, 200}}, b); }},
+        // s017: Smudge -- dragging the red square's edge outwards.
+        {"smudge",        [](DocJournal& j, Document& d) {
+             paint::Brush b; b.size = 40; b.strength = 0.7;
+             paint::stroke_smudge(j, d, "L4", {{250, 175, 1.f}, {360, 175, 1.f}}, b); }},
         // s015: the Clone Stamp -- from the layer itself, and from All Layers onto an empty one.
         {"clone_layer",   [](DocJournal& j, Document& d) {
              paint::Brush b; b.size = 40; std::string why;

@@ -31,7 +31,8 @@ bool same_tiles(const pixel::TileMap& a, const pixel::TileMap& b) {
 }  // namespace
 
 void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, double pressure) {
-    const Pa::Dab p{pt.x, pt.y, static_cast<float>(pressure)};
+    Pa::Dab p{pt.x, pt.y, static_cast<float>(pressure)};
+    m_canvas.pen_tilt(p.tx, p.ty);   // s017: the pen's lean (0 for a mouse)
     using A = CanvasView::StrokeAt;
     if (at == A::Begin) {
         if (m_stroke.active) return;
@@ -41,9 +42,10 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         const bool heal = m_rail.tool() == "heal" && !erase;     // s015 m4
         const bool spot = heal && m_strip.variant("heal") == 0;
         const bool sampled = clone || heal;
-        const std::string verb = erase ? "Eraser" : clone ? "Clone Stamp" : spot ? "Spot Healing" : heal ? "Healing Brush" : "Brush";
+        const bool smudge = m_rail.tool() == "smudge" && !erase;   // s017
+        const std::string verb = erase ? "Eraser" : clone ? "Clone Stamp" : spot ? "Spot Healing" : heal ? "Healing Brush" : smudge ? "Smudge" : "Brush";
         if (sampled && !spot && !m_clone.set) { toast(verb + ": Alt-click (or Ctrl-click) where to take from first"); return; }
-        const auto o = m_strip.brush(erase ? "eraser" : clone ? "clone" : heal ? "heal" : "brush");
+        const auto o = m_strip.brush(erase ? "eraser" : clone ? "clone" : heal ? "heal" : smudge ? "smudge" : "brush");
         Pa::Brush b;
         b.size = o.size;
         b.hardness = o.hardness / 100.0;
@@ -52,12 +54,17 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         b.pressure_size = o.pressure_size;        // s009 m3: the pen
         b.pressure_opacity = o.pressure_opacity;
         b.flow = o.flow / 100.0;                  // s012 m1
+        b.tip = static_cast<Pa::Tip>(std::clamp(o.tip, 0, 2));   // s017: the tip
+        b.angle = o.angle;
+        b.roundness = o.roundness / 100.0;
+        b.tilt = o.tilt;
+        b.strength = o.strength / 100.0;          // s017: Smudge
         const auto fmt = m_doc.image().format;
         const auto fg = m_rail.foreground(), bg = m_rail.background();
         b.colour = core::from_srgb(fmt, fg.r, fg.g, fg.b);
         b.background = core::from_srgb(fmt, bg.r, bg.g, bg.b);
         // s016: Quick Mask -- the Brush and Eraser paint the selection.
-        if (m_quick_mask && !sampled) {
+        if (m_quick_mask && !sampled && !smudge) {
             on_selection_stroke(p, erase, b, o.smoothing);
             return;
         }
@@ -67,7 +74,7 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         // Eraser paints the background colour (Photoshop's way).
         const auto lm = m_doc.get(id);
         const bool on_mask = lm && lm->mask && m_layers.mask_target() == id;
-        if (on_mask && sampled) {
+        if (on_mask && (sampled || smudge)) {
             toast(verb + ": it paints pixels, not the mask -- Layer > Layer Mask > Paint the Mask / the Pixels");
             return;
         }
@@ -99,7 +106,8 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         m_stroke.cov = std::make_shared<const pixel::TileMap>(Pa::new_coverage(m_doc.image().width, m_doc.image().height));
         m_stroke.mask = m_doc.selection_ptr();
         m_stroke.carry = 1e9;   // the first dab lands at the press
-        m_journal.begin(on_mask ? (erase ? "Eraser on Mask" : "Brush on Mask") : (sampled ? verb : erase ? "Eraser" : "Brush Stroke"), {id});
+        m_journal.begin(on_mask ? (erase ? "Eraser on Mask" : "Brush on Mask") : (sampled || smudge ? verb : erase ? "Eraser" : "Brush Stroke"), {id});
+        if (smudge) m_stroke.smudge = std::make_shared<Pa::SmudgeCarry>();   // s017
         // Shift-click: a straight line from where the last stroke ended.
         const bool line = shift && m_stroke_last_valid && m_stroke_last_id == id;
         const Pa::Dab from = line ? Pa::Dab{m_stroke_last.x, m_stroke_last.y, p.p} : p;
@@ -190,10 +198,15 @@ void Shell::paint_pump() {
     const auto im = m_doc.image();
     m_stroke.job = m_jobs.submit("Paint", [this, im, dabs = std::move(dabs), original = m_stroke.original,
                                            current = m_stroke.current, cov = m_stroke.cov, mask = m_stroke.mask,
-                                           b = m_stroke.brush](core::Jobs::Token&) -> core::Jobs::Landing {
+                                           b = m_stroke.brush, carry = m_stroke.smudge](core::Jobs::Token&) -> core::Jobs::Landing {
         core::TileSet touched = core::tiles_of(im);
-        auto cov2 = std::make_shared<const pixel::TileMap>(Pa::add_pen_dabs(*cov, b, dabs, touched));
-        auto cur2 = std::make_shared<const pixel::TileMap>(Pa::apply(*original, *current, *cov2, mask.get(), b, touched));
+        std::shared_ptr<const pixel::TileMap> cov2 = cov, cur2;
+        if (carry)   // s017: Smudge -- dab by dab on what's there (one job at a time owns the finger)
+            cur2 = std::make_shared<const pixel::TileMap>(Pa::smudge(*current, mask.get(), b, dabs, *carry, touched));
+        else {
+            cov2 = std::make_shared<const pixel::TileMap>(Pa::add_pen_dabs(*cov, b, dabs, touched));
+            cur2 = std::make_shared<const pixel::TileMap>(Pa::apply(*original, *current, *cov2, mask.get(), b, touched));
+        }
         return [this, cov2, cur2] {
             m_stroke.job = 0;
             // The stroke was ended from outside (an undo mid-stroke closed
