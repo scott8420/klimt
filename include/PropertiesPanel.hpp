@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 // PropertiesPanel -- ONE inspector for whatever is selected (s005, docs/ui.md
 // 5; call 2: blend / opacity / fill / locks left the Layers panel for here).
 // Today: the selected layers' blend, opacity, fill and locks -- shown for the
@@ -71,6 +72,7 @@ private:
     widgets::Box          m_live;
     widgets::Box          m_live_rows;
     std::vector<core::LiveFilter> m_live_shown;
+    std::vector<std::function<void()>> m_blend_follow;   // s023: the rows' blending labels follow
     Id                    m_live_id;
     bool                  m_live_had_mask = false;
     sigc::signal<void(const Id&, std::size_t)> m_live_edit;

@@ -1,6 +1,7 @@
 // core::live -- live filters (s018). See core/Live.hpp.
 #include "core/Live.hpp"
 #include "core/StylesRender.hpp"   // s019
+#include "core/Fade.hpp"           // s023: a live filter's blending
 
 #include <algorithm>
 #include <atomic>
@@ -68,7 +69,8 @@ std::shared_ptr<const pixel::TileMap> partly(const pixel::TileMap& src, const pi
         was.width() != src.width() || was.height() != src.height())
         return nullptr;
     if (src.has_outside() || was_src.has_outside() || was.has_outside()) return nullptr;
-    for (const auto& f : stack) if (f.f.kind == FilterKind::AddNoise) return nullptr;
+    for (const auto& f : stack)   // they depend on where they are: Add Noise, s023 a Dissolve blend
+        if (f.f.kind == FilterKind::AddNoise || f.mode == pixel::Blend::Dissolve) return nullptr;
     int reach_px = 0;
     for (const auto& f : stack) reach_px += filter::reach(f.f);
     if (st.any()) reach_px += styles::reach(st);
@@ -118,6 +120,13 @@ std::optional<pixel::TileMap> run(const pixel::TileMap& src, const std::vector<L
         }
         auto next = filter::filtered(cur, on[i].f, nullptr, false, r ? &*r : nullptr, cancelled);
         if (!next) return std::nullopt;
+        // s023: its blending -- the result faded over what went in.
+        if (on[i].opacity < 100 || on[i].mode != pixel::Blend::Normal) {
+            auto blended = fade::faded(std::make_shared<const pixel::TileMap>(cur), *next,
+                                       std::clamp(on[i].opacity, 0, 100) / 100.0, on[i].mode, cancelled);
+            if (!blended) return std::nullopt;
+            next = std::move(blended);
+        }
         cur = std::move(*next);
     }
     return cur;
@@ -339,6 +348,17 @@ bool remove_live(DocJournal& j, Document& d, const Id& id, std::size_t i) {
     l->filters.erase(l->filters.begin() + static_cast<std::ptrdiff_t>(i));
     if (l->filters.empty()) l->filter_mask = nullptr;   // the mask goes with the last filter
     return j.run(named(*l, what.c_str()), {id}, [&] { d.put(id, *l); });
+}
+
+bool set_live_blend(DocJournal& j, Document& d, const Id& id, std::size_t i, int opacity, pixel::Blend mode) {
+    auto l = stack_layer(d, id);
+    if (!l || i >= l->filters.size() || mode == pixel::Blend::PassThrough) return false;
+    opacity = std::clamp(opacity, 0, 100);
+    if (l->filters[i].opacity == opacity && l->filters[i].mode == mode) return false;
+    l->filters[i].opacity = opacity;
+    l->filters[i].mode = mode;
+    const std::string what = "Blending of " + std::string(filter::label(l->filters[i].f.kind));
+    return j.run(named(*l, what.c_str()), {id}, [&] { d.put(id, *l); }, "live-blend:" + id + ":" + std::to_string(i));
 }
 
 bool move_live(DocJournal& j, Document& d, const Id& id, std::size_t from, std::size_t to) {

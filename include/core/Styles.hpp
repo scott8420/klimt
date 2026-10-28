@@ -60,6 +60,18 @@ struct OverlayFx {
     bool operator==(const OverlayFx&) const = default;
 };
 
+// s023 -- Inner Glow: light inside the edge (Edge) softened over `size`, or
+// from the middle out (Center); `choke` (%) firms it up.
+struct InnerGlowFx {
+    bool on = false;
+    Rgb  colour{1.f, 1.f, 190.f / 255.f};
+    int  opacity = 75;
+    int  choke = 0;
+    int  size = 5;
+    bool center = false;
+    bool operator==(const InnerGlowFx&) const = default;
+};
+
 // s021 -- Bevel & Emboss (Smooth): the alpha as a height field, lit from
 // `angle` at `altitude` -- a highlight where the slope faces the light, a
 // shadow where it faces away. Inner Bevel: inside the content's edge;
@@ -88,7 +100,8 @@ struct Styles {
     OverlayFx overlay;
     StrokeFx  stroke;
     BevelFx   bevel;   // s021
-    bool any() const { return drop.on || outer.on || inner.on || overlay.on || stroke.on || bevel.on; }
+    InnerGlowFx inner_glow;   // s023
+    bool any() const { return drop.on || outer.on || inner.on || overlay.on || stroke.on || bevel.on || inner_glow.on; }
     bool operator==(const Styles&) const = default;
 };
 

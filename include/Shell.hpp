@@ -141,7 +141,7 @@ private:
     void on_export();                            // category: files: Export (PNG / JPEG / TIFF)
     bool on_close_request() override;            // category: files: unsaved changes ask first
     void save_to(const std::string& path, std::function<void()> then = {});   // category: files: a save JOB
-    void adopt(core::file::Contents c, const std::string& path, const std::string& name);   // category: files: the document becomes c
+    void adopt(core::file::Contents c, const std::string& path, const std::string& name, const std::string& source = {});   // category: files: the document becomes c
     void ask_unsaved(const std::string& doing, std::function<void()> go);   // category: files: Save / Discard / Cancel
     bool dirty() const { return m_tabs.dirty(m_tabs.live()); }
     bool file_job_busy();                        // category: files: one open / save / export at a time
@@ -325,6 +325,9 @@ private:
     void open_next();                          // category: files: the queue's next, once no file job runs
     void place_paths(const std::vector<std::string>& paths);   // category: files: s022 -- files dropped on the canvas: layers here
     void build_file_drops();                   // category: files: s022 -- drops from the file manager
+    void save_session();                       // category: files: s023 -- the open tabs, for next time
+    bool restore_session();                    // category: files: s023 -- started with no file: last time's tabs
+    std::string        m_restore_front;        // s023: the tab to bring to the front once the queue is done
 
     // ── the stroke in progress (s008 m4) ───────────────────────────────────
     struct Stroke {

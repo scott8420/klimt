@@ -2,6 +2,8 @@
 #include <glibmm/main.h>
 #include "NewDialog.hpp"
 #include "core/Transfer.hpp"   // s022: place
+#include "core/Session.hpp"    // s023
+#include <glibmm/miscutils.h>
 #include "Log.hpp"
 
 #include <adwaita.h>
@@ -68,7 +70,7 @@ bool Shell::file_job_busy() {
 
 // The document becomes `c`: a LOAD (Document::Loading), so no step; the
 // journal starts again and the file is "saved" as it stands.
-void Shell::adopt(core::file::Contents c, const std::string& path, const std::string& name) {
+void Shell::adopt(core::file::Contents c, const std::string& path, const std::string& name, const std::string& source) {
     {
         core::Document::Loading load(m_doc);
         m_doc.replace(c.image, std::move(c.layers), c.next_id);
@@ -78,6 +80,7 @@ void Shell::adopt(core::file::Contents c, const std::string& path, const std::st
     m_tabs.live_info().saved_mark = m_journal.mark();
     path_() = path;
     name_() = name;
+    m_tabs.live_info().source = source;   // s023
     m_layers.forget_view();
     const auto top = m_doc.panel("");
     if (!top.empty()) m_layers.select({top.front()}, false);
@@ -125,11 +128,11 @@ void Shell::ask_unsaved(const std::string& doing, std::function<void()> go) {
 
 // s020: every tab with unsaved changes asks, in turn (each shown first).
 bool Shell::on_close_request() {
-    if (m_closing) return false;
+    if (m_closing) { save_session(); return false; }   // s023: the tabs, for next time
     if (file_job_busy()) return true;
     bool any = false;
     for (std::size_t i = 0; i < m_tabs.count(); ++i) any = any || m_tabs.dirty(i);
-    if (!any) return false;
+    if (!any) { save_session(); return false; }
     // From idle: closing inside the dialog's own callback left GLib criticals
     // on the way out (seen under Xvfb, s019 too).
     close_all_then([this] { Glib::signal_idle().connect_once([this] { m_closing = true; close(); }); });
@@ -140,7 +143,37 @@ bool Shell::on_close_request() {
 // s009: launched without a file: the New dialog, once the window is up.
 void Shell::start() {
     if (has_image()) return;
-    Glib::signal_idle().connect_once([this] { if (!has_image()) on_new(); });
+    Glib::signal_idle().connect_once([this] {
+        if (has_image()) return;
+        if (!restore_session()) on_new();   // s023: last time's tabs, else the New dialog
+    });
+}
+
+// ── s023: the open tabs, remembered ─────────────────────────────────────────
+namespace {
+std::string session_file() { return Glib::build_filename(Glib::get_user_config_dir(), "klimt", "session.json"); }
+}
+
+void Shell::save_session() {
+    core::Session s;
+    for (std::size_t i = 0; i < m_tabs.count(); ++i) {
+        const auto& info = m_tabs.info(i);
+        const std::string f = !info.path.empty() ? info.path : info.source;
+        if (f.empty()) continue;
+        if (i == m_tabs.live()) s.active = static_cast<int>(s.files.size());
+        s.files.push_back(f);
+    }
+    if (!core::save_session(session_file(), s))
+        if (auto lg = log::get(log::Area::Shell)) lg->warn("session: couldn't write {}", session_file());
+}
+
+bool Shell::restore_session() {
+    const auto s = core::existing(core::load_session(session_file()));
+    if (s.files.empty()) return false;
+    m_restore_front = s.active >= 0 ? s.files[static_cast<std::size_t>(s.active)] : std::string{};
+    if (auto lg = log::get(log::Area::Shell)) lg->info("session: reopening {} file(s)", s.files.size());
+    open_paths(s.files);
+    return true;
 }
 
 // s009: Help > Open Demo -- the demo document in place of this one.
@@ -214,7 +247,16 @@ void Shell::open_paths(const std::vector<std::string>& paths) {
 
 void Shell::open_next() {
     using S = core::Jobs::State;
-    if (m_open_queue.empty()) return;
+    if (m_open_queue.empty()) {
+        // s023: a restored session -- its front tab, once all are open.
+        if (!m_restore_front.empty()) {
+            const auto want = m_restore_front;
+            m_restore_front.clear();
+            for (std::size_t i = 0; i < m_tabs.count(); ++i)
+                if (m_tabs.info(i).path == want || m_tabs.info(i).source == want) { show_tab(i); break; }
+        }
+        return;
+    }
     if (m_file_job) {
         const auto st = m_jobs.state(m_file_job);
         if (st == S::Queued || st == S::Running || st == S::Done) return;   // its landing calls again
@@ -255,7 +297,7 @@ void Shell::open_path(const std::string& path) {
                 const bool native = shared->kind == formats::Kind::Klimt;
                 // s020: a tab of its own -- made now, when there is something to show.
                 if (!tab_reusable() && !new_tab()) { toast("“" + name + "” opened, but the image can't be shown now -- try again"); return; }
-                adopt(std::move(*shared), native ? path : std::string{}, name);
+                adopt(std::move(*shared), native ? path : std::string{}, name, path);
                 Glib::signal_idle().connect_once([this] { open_next(); });
             };
         });

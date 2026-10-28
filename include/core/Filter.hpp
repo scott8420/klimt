@@ -13,6 +13,7 @@
 // cores. Blurs work on PREMULTIPLIED colour, so transparent pixels don't bleed
 // black into their neighbours; the image's edges extend (clamp).
 #include "pixel/Pixel.hpp"
+#include "pixel/Blend.hpp"   // s023: a live filter's blending
 
 #include <cstdint>
 #include <functional>
@@ -53,6 +54,10 @@ struct Filter {
 struct LiveFilter {
     Filter f;
     bool   on = true;
+    // s023: BLENDING OPTIONS (Photoshop's per smart filter): the filter's
+    // result at `opacity` % in `mode` over what went into it.
+    int    opacity = 100;
+    pixel::Blend mode = pixel::Blend::Normal;
     bool operator==(const LiveFilter&) const = default;
 };
 

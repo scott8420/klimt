@@ -45,6 +45,14 @@ StylesEditor::StylesEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 2) {
         slider(*b, "Choke", 0, 100, "%", &m_s.inner.spread);
         slider(*b, "Size", 0, 100, "px", &m_s.inner.size);
     }
+    {   // s023: Inner Glow
+        auto* b = section("Inner Glow", &m_s.inner_glow.on);
+        colour(*b, &m_s.inner_glow.colour);
+        slider(*b, "Opacity", 0, 100, "%", &m_s.inner_glow.opacity);
+        choice(*b, "Source", {"Edge", "Center"}, [this] { return m_s.inner_glow.center ? 1 : 0; }, [this](int v) { m_s.inner_glow.center = v == 1; });
+        slider(*b, "Choke", 0, 100, "%", &m_s.inner_glow.choke);
+        slider(*b, "Size", 0, 100, "px", &m_s.inner_glow.size);
+    }
     {   // Color Overlay
         auto* b = section("Color Overlay", &m_s.overlay.on);
         colour(*b, &m_s.overlay.colour);

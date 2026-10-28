@@ -88,6 +88,7 @@ const std::vector<Command>& commands() {
             {"Layer Style: Drop Shadow", "Layer", "win.style-drop-shadow", "", "effect fx shadow", ""},
             {"Layer Style: Outer Glow", "Layer", "win.style-outer-glow", "", "effect fx glow halo", ""},
             {"Layer Style: Inner Shadow", "Layer", "win.style-inner-shadow", "", "effect fx shadow inset", ""},
+            {"Layer Style: Inner Glow", "Layer", "win.style-inner-glow", "", "effect fx glow inside light", ""},
             {"Layer Style: Bevel & Emboss", "Layer", "win.style-bevel-emboss", "", "effect fx bevel emboss raise relief 3d", ""},
             {"Layer Style: Color Overlay", "Layer", "win.style-colour-overlay", "", "effect fx colour fill tint", ""},
             {"Layer Style: Stroke", "Layer", "win.style-stroke", "", "effect fx outline border", ""},

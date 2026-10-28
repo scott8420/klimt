@@ -3,6 +3,10 @@
 // tiles the change can't reach.
 #include "core/Document.hpp"
 #include "core/Live.hpp"
+#include "core/File.hpp"
+
+#include <filesystem>
+#include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
@@ -13,6 +17,7 @@
 
 namespace core = klimt::core;
 namespace P = klimt::pixel;
+namespace L = klimt::core::layers;
 using Check = std::function<void(const std::string&, bool, const std::string&)>;
 
 namespace {
@@ -139,4 +144,71 @@ void selftest_partly(const Check& check) {
         check("in part: not when most of it changed", core::live::partly_count() == before, "");
     }
     core::live::clear_cache();
+    std::cout << "\n-- a live filter's blending (s023) --\n";
+    {
+        core::live::clear_cache();
+        P::Format f8;
+        const auto px = std::make_shared<const P::TileMap>(P::TileMap(f8, 300, 200).fill({100, 50, 100, 100}, P::rgba(1, 0, 0, 1)));
+        auto l = layer_of(px);
+        core::LiveFilter blur{core::filter::fresh(core::FilterKind::GaussianBlur), true};
+        blur.f.radius = 10;
+        l.filters = {blur};
+        const auto full = core::live::look(l);
+        l.filters[0].opacity = 0;
+        const auto none = core::live::look(l);
+        check("blend: opacity 0 -- the layer as it was", none->get(102, 52) == px->get(102, 52) && none->get(90, 100) == px->get(90, 100), "");
+        l.filters[0].opacity = 50;
+        const auto half = core::live::look(l);
+        const float a_full = full->get(95, 100).c[3], a_half = half->get(95, 100).c[3];
+        check("blend: opacity 50 -- half-way (the blur's spread half as strong)", std::abs(a_half - a_full * 0.5f) < 0.02f,
+              std::to_string(a_half) + " vs " + std::to_string(a_full));
+        l.filters[0].opacity = 100;
+        l.filters[0].mode = P::Blend::Darken;
+        const auto dark = core::live::look(l);
+        check("blend: Darken -- the blur's spill can't lighten (it stays as transparent as before at least)",
+              dark->get(150, 100).c[0] > 0.99f, std::to_string(dark->get(150, 100).c[0]));
+        // The verb: one step, presses fold; the file keeps it.
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        { core::Document::Loading load(d); auto v = *d.get("L4"); v.filters = {blur}; d.put("L4", v); }
+        const bool a = L::set_live_blend(j, d, "L4", 0, 70, P::Blend::Normal);
+        const bool b = L::set_live_blend(j, d, "L4", 0, 40, P::Blend::Screen);
+        check("set_live_blend: presses fold into ONE step", a && b && j.size() == 1 && d.get("L4")->filters[0].opacity == 40, std::to_string(j.size()));
+        check("set_live_blend: Pass Through refused", !L::set_live_blend(j, d, "L4", 0, 40, P::Blend::PassThrough), "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_lb_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image(); c.layers = d.snapshot(); c.next_id = d.next_id();
+        std::string err;
+        core::file::save_klimt(path, c, err);
+        const auto back = core::file::open(path, err);
+        fs::remove(path);
+        check("blend: in the file", back && back->layers.at("L4").filters.size() == 1 && back->layers.at("L4").filters[0].opacity == 40 &&
+                  back->layers.at("L4").filters[0].mode == P::Blend::Screen, err);
+        // In part still matches whole with a blend; Dissolve: whole.
+        core::live::clear_cache();
+        auto m = layer_of(base);
+        m.filters = {blur};
+        m.filters[0].opacity = 60;
+        m.filters[0].mode = P::Blend::Multiply;
+        core::live::look(m);
+        const int before = core::live::partly_count();
+        auto m2 = m;
+        m2.pixels = dab(*base, 900, 700);
+        const auto part = core::live::look(m2);
+        core::live::clear_cache();
+        const auto whole_look = core::live::look(m2);
+        check("blend: in part = whole (Multiply 60 %)", core::live::partly_count() == before + 1 && diff(*part, *whole_look) <= 1.5 / 255, "");
+        core::live::clear_cache();
+        m.filters[0].mode = P::Blend::Dissolve;
+        core::live::look(m);
+        const int b2 = core::live::partly_count();
+        auto m3 = m;
+        m3.pixels = dab(*base, 900, 700);
+        core::live::look(m3);
+        check("blend: Dissolve depends on where -- whole", core::live::partly_count() == b2, "");
+        core::live::clear_cache();
+    }
 }

@@ -55,6 +55,9 @@ bool set_live(DocJournal& j, Document& d, const Id& id, std::size_t i, const Fil
 bool toggle_live(DocJournal& j, Document& d, const Id& id, std::size_t i);
 bool remove_live(DocJournal& j, Document& d, const Id& id, std::size_t i);
 bool move_live(DocJournal& j, Document& d, const Id& id, std::size_t from, std::size_t to);
+// s023: filter i's blending (opacity %, mode) -- one step; quick presses (a
+// slider's) fold into one.
+bool set_live_blend(DocJournal& j, Document& d, const Id& id, std::size_t i, int opacity, pixel::Blend mode);
 // The stack baked into the pixels (Photoshop's Rasterize): the look becomes
 // the pixels, the stack goes. s019: with styles, they go into the pixels too
 // (Rasterize Layer Style) and the fill returns to 100 (it is in the look).

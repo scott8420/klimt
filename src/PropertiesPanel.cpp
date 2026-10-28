@@ -10,6 +10,11 @@
 #include <gtkmm/grid.h>
 #include <gtkmm/label.h>
 #include <gtkmm/stringlist.h>
+#include <gtkmm/menubutton.h>
+#include <gtkmm/popover.h>
+#include <gtkmm/scale.h>
+#include <gtkmm/dropdown.h>
+#include <cmath>
 
 namespace klimt {
 
@@ -244,10 +249,25 @@ void PropertiesPanel::paint_live(const core::Layer& l) {
         m_live_shown.clear();   // rebuild: the toggle shows off
     }
     if (!show) { m_live_shown.clear(); m_live_id.clear(); return; }
+    // s023: only a filter's blending moved (its popover's slider, mid-drag):
+    // keep the rows -- a rebuild would close the popover under the pointer.
+    const auto same_but_blend = [](const std::vector<core::LiveFilter>& a, const std::vector<core::LiveFilter>& b) {
+        if (a.size() != b.size()) return false;
+        for (std::size_t i = 0; i < a.size(); ++i)
+            if (!(a[i].f == b[i].f) || a[i].on != b[i].on) return false;
+        return true;
+    };
+    if (primary() == m_live_id && same_but_blend(l.filters, m_live_shown) && !(l.filters == m_live_shown) &&
+        (l.filter_mask != nullptr) == m_live_had_mask) {
+        m_live_shown = l.filters;
+        for (const auto& f : m_blend_follow) f();
+        return;
+    }
     if (primary() == m_live_id && l.filters == m_live_shown && (l.filter_mask != nullptr) == m_live_had_mask) return;
     m_live_had_mask = l.filter_mask != nullptr;
     m_live_id = primary();
     m_live_shown = l.filters;
+    m_blend_follow.clear();
     while (auto* c = m_live_rows.get_first_child()) m_live_rows.remove(*c);
     const bool editable = !m_doc.locked_all(primary()) && !(l.locks & core::lock::Pixels);
     for (std::size_t i = 0; i < l.filters.size(); ++i) {
@@ -283,6 +303,68 @@ void PropertiesPanel::paint_live(const core::Layer& l) {
             b->signal_clicked().connect(std::move(act));
             row->append(*b);
         };
+        // s023: BLENDING OPTIONS -- the filter's opacity and mode, in a popover.
+        {
+            auto mb = Gtk::make_managed<Gtk::MenuButton>();
+            mb->add_css_class("flat");
+            const auto label_of = [](const core::LiveFilter& f) {
+                std::string t = std::to_string(f.opacity) + "%";
+                if (f.mode != core::Blend::Normal) t += " " + std::string(core::blend_label(f.mode));
+                return t;
+            };
+            mb->set_label(label_of(lf));
+            mb->set_tooltip_text("Blending options: this filter's opacity and blend mode over what goes into it");
+            mb->set_sensitive(editable);
+            auto pop = Gtk::make_managed<Gtk::Popover>();
+            auto grid = Gtk::make_managed<Gtk::Grid>();
+            grid->set_row_spacing(8);
+            grid->set_column_spacing(8);
+            grid->set_margin(10);
+            auto ol = Gtk::make_managed<Gtk::Label>("Opacity");
+            ol->add_css_class("dim-label");
+            ol->set_xalign(0.f);
+            grid->attach(*ol, 0, 0);
+            auto sc = Gtk::make_managed<Gtk::Scale>(Gtk::Orientation::HORIZONTAL);
+            sc->set_range(0, 100);
+            sc->set_increments(1, 10);
+            sc->set_digits(0);
+            sc->set_draw_value(true);
+            sc->set_value_pos(Gtk::PositionType::RIGHT);
+            sc->set_size_request(200, -1);
+            sc->set_value(lf.opacity);
+            grid->attach(*sc, 1, 0);
+            auto ml = Gtk::make_managed<Gtk::Label>("Mode");
+            ml->add_css_class("dim-label");
+            ml->set_xalign(0.f);
+            grid->attach(*ml, 0, 1);
+            std::vector<Glib::ustring> names;
+            auto modes = std::make_shared<std::vector<core::Blend>>();
+            guint at = 0;
+            for (const auto& b : core::blend_modes()) {
+                if (b.mode == core::Blend::PassThrough) continue;
+                if (b.mode == lf.mode) at = static_cast<guint>(modes->size());
+                modes->push_back(b.mode);
+                names.emplace_back(b.label);
+            }
+            auto dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(names));
+            dd->set_selected(at);
+            grid->attach(*dd, 1, 1);
+            const auto put = [this, i, sc, dd, modes] {
+                if (m_painting) return;
+                const auto k = dd->get_selected();
+                L::set_live_blend(m_journal, m_doc, m_live_id, i, static_cast<int>(std::lround(sc->get_value())),
+                                  k < modes->size() ? (*modes)[k] : core::Blend::Normal);
+            };
+            sc->signal_value_changed().connect(put);
+            dd->property_selected().signal_changed().connect(put);
+            // The button's label follows (the rows stay while only blending moves).
+            m_blend_follow.push_back([this, i, mb, label_of] {
+                if (i < m_live_shown.size()) mb->set_label(label_of(m_live_shown[i]));
+            });
+            pop->set_child(*grid);
+            mb->set_popover(*pop);
+            row->append(*mb);
+        }
         button("go-up-symbolic", "Earlier in the stack (runs first)", i > 0, [this, i] { L::move_live(m_journal, m_doc, m_live_id, i, i - 1); });
         button("go-down-symbolic", "Later in the stack", i + 1 < l.filters.size(), [this, i] { L::move_live(m_journal, m_doc, m_live_id, i, i + 1); });
         button("user-trash-symbolic", "Delete this filter", true, [this, i] { L::remove_live(m_journal, m_doc, m_live_id, i); });

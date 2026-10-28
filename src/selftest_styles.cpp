@@ -206,4 +206,36 @@ void selftest_styles(const Check& check) {
         check("bevel: in the file", back && back->layers.at("L4").styles.bevel == s.bevel, err);
         fs::remove(path);
     }
+    std::cout << "\n-- layer styles: inner glow (s023) --\n";
+    {
+        const auto src = square();   // red 200 x 150 at (100, 100)
+        core::Styles s;
+        s.inner_glow.on = true;
+        s.inner_glow.size = 10;
+        s.inner_glow.colour = {0, 1, 0};
+        s.inner_glow.opacity = 100;
+        const auto out = S::drawn(src, s, 100);
+        check("inner glow (edge): the edge glows", out.get(101, 175).c[1] > 0.5f, num(out.get(101, 175).c[1]));
+        check("inner glow (edge): the middle untouched", out.get(200, 175).c[1] < 0.02f && out.get(200, 175).c[0] > 0.98f, num(out.get(200, 175).c[1]));
+        check("inner glow: nothing outside", out.get(95, 175).c[3] == 0.f, "");
+        s.inner_glow.center = true;
+        const auto c = S::drawn(src, s, 100);
+        check("inner glow (center): the middle glows, the edge less", c.get(200, 175).c[1] > 0.9f && c.get(101, 175).c[1] < c.get(200, 175).c[1],
+              num(c.get(101, 175).c[1]));
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        s.inner_glow.choke = 30;
+        L::set_styles(j, d, "L4", s);
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_iglow_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents fc;
+        fc.image = d.image(); fc.layers = d.snapshot(); fc.next_id = d.next_id();
+        std::string err;
+        core::file::save_klimt(path, fc, err);
+        const auto back = core::file::open(path, err);
+        check("inner glow: in the file", back && back->layers.at("L4").styles.inner_glow == s.inner_glow, err);
+        fs::remove(path);
+    }
 }

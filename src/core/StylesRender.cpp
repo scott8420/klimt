@@ -76,6 +76,7 @@ int reach(const Styles& s) {
     if (s.stroke.on) r = std::max(r, s.stroke.size + 2);
     if (s.inner.on) r = std::max(r, s.inner.distance + blur_reach(s.inner.size) + 1);
     if (s.bevel.on) r = std::max(r, blur_reach(s.bevel.size) + blur_reach(s.bevel.soften) + 2);   // s021
+    if (s.inner_glow.on) r = std::max(r, blur_reach(s.inner_glow.size) + 1);   // s023
     return r;
 }
 
@@ -176,6 +177,18 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
         blur(inner, W, H, sigma_of(s.inner.size));
         spread_up(inner, s.inner.spread);
     }
+    // s023: Inner Glow -- the outside softened into the content (Edge), or
+    // the inside softened from it (Center: the glow from the middle out).
+    std::vector<float> iglow;
+    if (s.inner_glow.on) {
+        iglow.assign(N, 0.f);
+        for (std::size_t i = 0; i < N; ++i) iglow[i] = 1.f - A[i];
+        blur(iglow, W, H, sigma_of(s.inner_glow.size));
+        spread_up(iglow, std::max(s.inner_glow.choke, 50));   // at full strength at the edge, as the outer glow
+        if (s.inner_glow.center) for (auto& v : iglow) v = 1.f - v;
+    }
+    const auto igc = colour_of(s.inner_glow.colour);
+    const float igo = static_cast<float>(s.inner_glow.opacity) / 100.f;
     const auto ov = colour_of(s.overlay.colour), ish = colour_of(s.inner.colour);
     const float ovo = static_cast<float>(s.overlay.opacity) / 100.f, iso = static_cast<float>(s.inner.opacity) / 100.f;
     for (std::size_t i = 0; i < N; ++i) {
@@ -189,6 +202,10 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
         if (s.inner.on) {
             const float t = inner[i] * iso;
             for (int k = 0; k < cc; ++k) col[k] += (ish.c[static_cast<std::size_t>(k)] - col[k]) * t;
+        }
+        if (s.inner_glow.on) {   // s023
+            const float t = std::clamp(iglow[i], 0.f, 1.f) * igo;
+            for (int k = 0; k < cc; ++k) col[k] += (igc.c[static_cast<std::size_t>(k)] - col[k]) * t;
         }
         const float ca = a * fl;
         float* o = O.data() + i * static_cast<std::size_t>(C);

@@ -31,6 +31,7 @@ public:
     struct Info {
         std::uint64_t key = 0;
         std::string   path;            // the .klimt it saves to; "" = never saved
+        std::string   source;          // s023: the file it was opened from (an image or a .klimt); "" = none
         std::string   name = "No Image";
         std::uint64_t saved_mark = 0;  // its journal's mark when it last matched a file
     };

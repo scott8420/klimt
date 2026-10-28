@@ -127,7 +127,7 @@ void Shell::update_layer_actions() {
         for (const auto k : core::filter::kinds()) on(("filter-" + std::string(core::filter::key(k))).c_str(), filterable);
         on("filter-last", filterable && m_last_filter);
         // s019: a pixel layer takes styles; Paste wants something copied.
-        for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear", "style-rasterize"})
+        for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear", "style-rasterize"})
             on(v, img && pixel_layer);
         on("style-paste", img && pixel_layer && m_style_clip);
         on("filter-last-dialog", filterable && m_last_filter);

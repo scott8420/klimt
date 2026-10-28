@@ -1095,6 +1095,12 @@ const std::vector<Verb>& verbs() {
         // s022: layers from another document (here, a copy of this one's group).
         {"paste",         [](DocJournal& j, Document& d) { paste(j, d, transfer::take(d, {"L2"}), "L5"); }},
         {"copy_to",       [](DocJournal& j, Document& d) { copy_to(j, d, {"L4", "L5"}, "L1", Where::Above); }},
+        // s023: a live filter's blending.
+        {"live_blend",    [](DocJournal& j, Document& d) { set_live_blend(j, d, "L4", 0, 40, Blend::Multiply); },
+             [](Document& d) {
+                 Document::Loading load(d);
+                 auto l = *d.get("L4"); l.filters.push_back({filter::fresh(FilterKind::GaussianBlur), true}); d.put("L4", l);
+             }},
         // s020: Edit > Fade -- the square half-way back to nothing.
         {"fade",          [](DocJournal& j, Document& d) {
              layers::fade(j, d, "L4", nullptr, d.get("L4")->pixels, 0.5, Blend::Multiply, "Brush"); }},

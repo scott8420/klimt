@@ -131,6 +131,11 @@ json styles_json(const Styles& s) {
     if (s.overlay.on) o["colour_overlay"] = {{"on", true}, {"colour", rgb_json(s.overlay.colour)}, {"opacity", s.overlay.opacity}};
     if (s.stroke.on) o["stroke"] = {{"on", true}, {"colour", rgb_json(s.stroke.colour)}, {"opacity", s.stroke.opacity},
                                     {"size", s.stroke.size}, {"position", s.stroke.position}};
+    if (s.inner_glow.on) {   // s023
+        const auto& g = s.inner_glow;
+        o["inner_glow"] = {{"on", true}, {"colour", rgb_json(g.colour)}, {"opacity", g.opacity}, {"choke", g.choke},
+                           {"size", g.size}, {"source", g.center ? "center" : "edge"}};
+    }
     if (s.bevel.on) {   // s021
         const auto& b = s.bevel;
         o["bevel_emboss"] = {{"on", true}, {"style", b.style == 1 ? "emboss" : "inner-bevel"}, {"depth", b.depth}, {"up", b.up},
@@ -177,6 +182,16 @@ Styles styles_from(const json& o) {
         s.stroke.size = std::clamp(j.value("size", s.stroke.size), 1, 250);
         s.stroke.position = std::clamp(j.value("position", s.stroke.position), 0, 2);
     }
+    if (o.contains("inner_glow")) {   // s023
+        const auto& j = o.at("inner_glow");
+        auto& g = s.inner_glow;
+        g.on = j.value("on", true);
+        g.colour = rgb_from(j.value("colour", json()), g.colour);
+        g.opacity = pct(j, "opacity", g.opacity);
+        g.choke = pct(j, "choke", g.choke);
+        g.size = std::clamp(j.value("size", g.size), 0, 250);
+        g.center = j.value("source", std::string("edge")) == "center";
+    }
     if (o.contains("bevel_emboss")) {   // s021
         const auto& j = o.at("bevel_emboss");
         auto& b = s.bevel;
@@ -200,7 +215,8 @@ Styles styles_from(const json& o) {
 json live_json(const LiveFilter& lf) {
     const Filter& f = lf.f;
     return {{"kind", std::string(filter::key(f.kind))}, {"on", lf.on}, {"radius", f.radius}, {"angle", f.angle},
-            {"amount", f.amount}, {"threshold", f.threshold}, {"gaussian", f.gaussian}, {"mono", f.mono}, {"seed", f.seed}};
+            {"amount", f.amount}, {"threshold", f.threshold}, {"gaussian", f.gaussian}, {"mono", f.mono}, {"seed", f.seed},
+            {"opacity", lf.opacity}, {"mode", std::string(blend_key(lf.mode))}};   // s023
 }
 std::optional<LiveFilter> live_from(const json& j) {
     const std::string key = j.at("kind").get<std::string>();
@@ -208,6 +224,8 @@ std::optional<LiveFilter> live_from(const json& j) {
     for (const auto k : filter::kinds()) if (filter::key(k) == key) lf.f.kind = k;
     if (lf.f.kind == FilterKind::None) return std::nullopt;
     lf.on = j.value("on", true);
+    lf.opacity = std::clamp(j.value("opacity", 100), 0, 100);   // s023
+    if (const auto m = blend_from_key(j.value("mode", std::string("normal"))); m && *m != Blend::PassThrough) lf.mode = *m;
     lf.f.radius = j.value("radius", 1.0);
     lf.f.angle = j.value("angle", 0);
     lf.f.amount = j.value("amount", 0.0);
