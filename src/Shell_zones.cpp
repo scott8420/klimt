@@ -311,6 +311,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     ls_fx->append("Outer Glow", "win.style-outer-glow");
     ls_fx->append("Inner Shadow", "win.style-inner-shadow");
     ls_fx->append("Inner Glow", "win.style-inner-glow");   // s023
+    ls_fx->append("Gradient Overlay", "win.style-gradient-overlay");   // s025
     ls_fx->append("Bevel & Emboss", "win.style-bevel-emboss");   // s021
     ls_fx->append("Color Overlay", "win.style-colour-overlay");
     ls_fx->append("Stroke", "win.style-stroke");

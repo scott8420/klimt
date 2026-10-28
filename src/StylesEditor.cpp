@@ -1,4 +1,5 @@
 #include "StylesEditor.hpp"
+#include "core/Document.hpp"   // s025: blend_modes()
 
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/colordialog.h>
@@ -23,6 +24,7 @@ StylesEditor::StylesEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 2) {
     {   // Drop Shadow
         auto* b = section("Drop Shadow", &m_s.drop.on);
         colour(*b, &m_s.drop.colour);
+        mode(*b, &m_s.drop.mode);
         slider(*b, "Opacity", 0, 100, "%", &m_s.drop.opacity);
         slider(*b, "Angle", -180, 180, "°", &m_s.drop.angle);
         slider(*b, "Distance", 0, 200, "px", &m_s.drop.distance);
@@ -32,6 +34,7 @@ StylesEditor::StylesEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 2) {
     {   // Outer Glow
         auto* b = section("Outer Glow", &m_s.outer.on);
         colour(*b, &m_s.outer.colour);
+        mode(*b, &m_s.outer.mode);
         slider(*b, "Opacity", 0, 100, "%", &m_s.outer.opacity);
         slider(*b, "Spread", 0, 100, "%", &m_s.outer.spread);
         slider(*b, "Size", 0, 100, "px", &m_s.outer.size);
@@ -39,6 +42,7 @@ StylesEditor::StylesEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 2) {
     {   // Inner Shadow
         auto* b = section("Inner Shadow", &m_s.inner.on);
         colour(*b, &m_s.inner.colour);
+        mode(*b, &m_s.inner.mode);
         slider(*b, "Opacity", 0, 100, "%", &m_s.inner.opacity);
         slider(*b, "Angle", -180, 180, "°", &m_s.inner.angle);
         slider(*b, "Distance", 0, 200, "px", &m_s.inner.distance);
@@ -48,19 +52,33 @@ StylesEditor::StylesEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 2) {
     {   // s023: Inner Glow
         auto* b = section("Inner Glow", &m_s.inner_glow.on);
         colour(*b, &m_s.inner_glow.colour);
+        mode(*b, &m_s.inner_glow.mode);
         slider(*b, "Opacity", 0, 100, "%", &m_s.inner_glow.opacity);
         choice(*b, "Source", {"Edge", "Center"}, [this] { return m_s.inner_glow.center ? 1 : 0; }, [this](int v) { m_s.inner_glow.center = v == 1; });
         slider(*b, "Choke", 0, 100, "%", &m_s.inner_glow.choke);
         slider(*b, "Size", 0, 100, "px", &m_s.inner_glow.size);
     }
+    {   // s025: Gradient Overlay
+        auto* b = section("Gradient Overlay", &m_s.gradient.on);
+        colour(*b, &m_s.gradient.from, "From");
+        colour(*b, &m_s.gradient.to, "To");
+        mode(*b, &m_s.gradient.mode);
+        slider(*b, "Opacity", 0, 100, "%", &m_s.gradient.opacity);
+        choice(*b, "Style", {"Linear", "Radial"}, [this] { return m_s.gradient.style; }, [this](int v) { m_s.gradient.style = v; });
+        slider(*b, "Angle", -180, 180, "°", &m_s.gradient.angle);
+        slider(*b, "Scale", 10, 150, "%", &m_s.gradient.scale);
+        choice(*b, "Reverse", {"No", "Yes"}, [this] { return m_s.gradient.reverse ? 1 : 0; }, [this](int v) { m_s.gradient.reverse = v == 1; });
+    }
     {   // Color Overlay
         auto* b = section("Color Overlay", &m_s.overlay.on);
         colour(*b, &m_s.overlay.colour);
+        mode(*b, &m_s.overlay.mode);
         slider(*b, "Opacity", 0, 100, "%", &m_s.overlay.opacity);
     }
     {   // Stroke
         auto* b = section("Stroke", &m_s.stroke.on);
         colour(*b, &m_s.stroke.colour);
+        mode(*b, &m_s.stroke.mode);
         slider(*b, "Size", 1, 100, "px", &m_s.stroke.size);
         slider(*b, "Opacity", 0, 100, "%", &m_s.stroke.opacity);
         auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
@@ -90,11 +108,29 @@ StylesEditor::StylesEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 2) {
         slider(*b, "Angle", -180, 180, "°", &m_s.bevel.angle);
         slider(*b, "Altitude", 0, 90, "°", &m_s.bevel.altitude);
         colour(*b, &m_s.bevel.highlight, "Highlight");
+        mode(*b, &m_s.bevel.highlight_mode, "Its mode");
         slider(*b, "Opacity", 0, 100, "%", &m_s.bevel.highlight_opacity);
         colour(*b, &m_s.bevel.shadow, "Shadow");
+        mode(*b, &m_s.bevel.shadow_mode, "Its mode");
         slider(*b, "Opacity", 0, 100, "%", &m_s.bevel.shadow_opacity);
     }
     paint();
+}
+
+void StylesEditor::mode(Gtk::Box& into, pixel::Blend* field, const char* label) {
+    static const std::vector<pixel::Blend> modes = [] {
+        std::vector<pixel::Blend> v;
+        for (const auto& b : core::blend_modes()) if (b.mode != pixel::Blend::PassThrough) v.push_back(b.mode);
+        return v;
+    }();
+    std::vector<Glib::ustring> names;
+    for (const auto m : modes) names.emplace_back(std::string(core::blend_label(m)));
+    choice(into, label, names,
+           [field] {
+               for (std::size_t i = 0; i < modes.size(); ++i) if (modes[i] == *field) return static_cast<int>(i);
+               return 0;
+           },
+           [field](int i) { if (i >= 0 && static_cast<std::size_t>(i) < modes.size()) *field = modes[static_cast<std::size_t>(i)]; });
 }
 
 void StylesEditor::choice(Gtk::Box& into, const char* label, std::vector<Glib::ustring> items, std::function<int()> get,

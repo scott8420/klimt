@@ -25,7 +25,7 @@ std::mutex g_mutex;
 std::atomic<int> g_partly{0};   // s021: looks made in part (the selftest reads it)
 std::vector<Entry> g_cache;
 std::uint64_t g_clock = 0;
-constexpr std::size_t kKeep = 8;
+constexpr std::size_t kKeep = 16;   // s025: a split style keeps a look per part
 
 std::vector<LiveFilter> on_only(const std::vector<LiveFilter>& s) {
     std::vector<LiveFilter> v;
@@ -283,7 +283,7 @@ std::shared_ptr<const pixel::TileMap> group_look(const Image& im, const Layers& 
     {
         std::lock_guard lk(g_gmutex);
         for (auto& e : g_groups)
-            if (e.id == gid && e.w == im.width && e.h == im.height && e.group.styles == g.styles && e.group.fill == g.fill && e.sub == sub) {
+            if (e.id == gid && e.w == im.width && e.h == im.height && e.sub == sub) {   // s025: the contents only
                 e.used = ++g_gclock;
                 fut = e.result;
                 break;
@@ -319,7 +319,8 @@ std::shared_ptr<const pixel::TileMap> group_look(const Image& im, const Layers& 
                 grid.push_back(w.freeze());
             }
         const auto flat = pixel::TileMap::from_tiles(im.format, im.width, im.height, std::move(grid));
-        mine.set_value(std::make_shared<const pixel::TileMap>(styles::drawn(flat, g.styles, g.fill)));
+        mine.set_value(std::make_shared<const pixel::TileMap>(flat));   // s025: flat; look() draws the styles (cached there)
+        (void)g;
     }
     return fut.get();
 }
@@ -338,25 +339,55 @@ Layers effective(const Layers& ls, const Image* im) {
                 if (outer) styled.push_back(id);
             }
         for (const auto& gid : styled) {
-            const auto look_px = group_look(*im, ls, gid);
-            if (!look_px) continue;
+            const auto flat = group_look(*im, ls, gid);
+            if (!flat) continue;
             for (auto it = out.begin(); it != out.end();)
                 it = inside(ls, it->first, gid) ? out.erase(it) : std::next(it);
             Layer& g = out.at(gid);
-            g.kind = Kind::Pixel;
-            g.pixels = look_px;
+            g.kind = Kind::Pixel;   // its contents, flat: the styles drawn below, as a pixel layer's
+            g.pixels = flat;
+            g.filters.clear();
             if (g.blend == pixel::Blend::PassThrough) g.blend = pixel::Blend::Normal;   // a styled group is isolated
-            g.fill = 100;   // in the look
-            g.styles = Styles{};
         }
     }
+    std::vector<std::pair<Document::Id, Layer>> parts;   // s025: effects composited apart, in their own mode
     for (auto& [id, l] : out)
         if (active(l)) {
-            l.pixels = look(l);
+            // s025: a Drop Shadow / Outer Glow in a mode other than Normal
+            // blends with what is BELOW the layer: drawn apart, as a layer of
+            // its own just under this one (not for a clipped layer -- its
+            // clip base would change).
+            Styles main = l.styles;
+            if (!l.clipped) {
+                const auto split = [&](bool on, pixel::Blend mode, const char* tag, double below, auto only) {
+                    if (!on || mode == pixel::Blend::Normal) return;
+                    Layer fx = l;
+                    fx.styles = Styles{};
+                    only(fx.styles);
+                    fx.fill = 0;   // the effect alone
+                    Layer p = l;
+                    p.pixels = look(fx);
+                    p.filters.clear();
+                    p.styles = Styles{};
+                    p.fill = 100;
+                    p.blend = mode;
+                    p.clipped = false;
+                    p.pos = l.pos - below;
+                    parts.emplace_back(id + "\x1f" + tag, std::move(p));
+                };
+                split(l.styles.drop.on, l.styles.drop.mode, "drop", 0.002, [&](Styles& s) { s.drop = l.styles.drop; });
+                split(l.styles.outer.on, l.styles.outer.mode, "outer", 0.001, [&](Styles& s) { s.outer = l.styles.outer; });
+                if (l.styles.drop.mode != pixel::Blend::Normal) main.drop.on = false;
+                if (l.styles.outer.mode != pixel::Blend::Normal) main.outer.on = false;
+            }
+            Layer m = l;
+            m.styles = main;
+            l.pixels = main.any() || !l.filters.empty() || l.filter_mask ? look(m) : l.pixels;
             l.filters.clear();
-            if (l.styles.any()) l.fill = 100;   // s019: the fill is in the look (the content's alone)
+            l.fill = main.any() ? 100 : l.fill;   // s019: the fill is in the look (the content's alone)
             l.styles = Styles{};
         }
+    for (auto& [pid, p] : parts) out[pid] = std::move(p);
     return out;
 }
 

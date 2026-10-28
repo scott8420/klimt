@@ -9,6 +9,7 @@
 // on the whole; FILL only on the content (Photoshop's distinction -- a fill of
 // 0 leaves just the effects). Effects blend Normal within the layer.
 #include <cstdint>
+#include "pixel/Blend.hpp"   // s025: each effect's blend mode
 
 namespace klimt::core {
 
@@ -28,6 +29,7 @@ struct ShadowFx {
     int  distance = 5;     // px, 0..1000
     int  spread = 0;       // %, Inner Shadow: choke
     int  size = 5;         // px, 0..250
+    pixel::Blend mode = pixel::Blend::Multiply;   // s025 (Photoshop's default; a file without it: Normal)
     bool operator==(const ShadowFx&) const = default;
 };
 
@@ -38,6 +40,7 @@ struct GlowFx {
     int  opacity = 75;
     int  spread = 0;
     int  size = 5;
+    pixel::Blend mode = pixel::Blend::Screen;     // s025
     bool operator==(const GlowFx&) const = default;
 };
 
@@ -49,6 +52,7 @@ struct StrokeFx {
     int  opacity = 100;
     int  size = 3;         // px, 1..250
     int  position = 0;     // 0 outside, 1 inside, 2 centre
+    pixel::Blend mode = pixel::Blend::Normal;     // s025
     bool operator==(const StrokeFx&) const = default;
 };
 
@@ -57,6 +61,7 @@ struct OverlayFx {
     bool on = false;
     Rgb  colour{1, 0, 0};
     int  opacity = 100;
+    pixel::Blend mode = pixel::Blend::Normal;     // s025
     bool operator==(const OverlayFx&) const = default;
 };
 
@@ -69,7 +74,24 @@ struct InnerGlowFx {
     int  choke = 0;
     int  size = 5;
     bool center = false;
+    pixel::Blend mode = pixel::Blend::Screen;     // s025
     bool operator==(const InnerGlowFx&) const = default;
+};
+
+// s025 -- Gradient Overlay: the content's colour from `from` to `to` across
+// its own box -- Linear along `angle` (90: bottom to top), or Radial from
+// its middle; `scale` (%) stretches it; Reverse swaps the ends.
+struct GradientFx {
+    bool on = false;
+    Rgb  from{0, 0, 0};
+    Rgb  to{1, 1, 1};
+    int  opacity = 100;
+    int  angle = 90;
+    int  style = 0;        // 0 Linear, 1 Radial
+    int  scale = 100;      // %, 10..150
+    bool reverse = false;
+    pixel::Blend mode = pixel::Blend::Normal;
+    bool operator==(const GradientFx&) const = default;
 };
 
 // s021 -- Bevel & Emboss (Smooth): the alpha as a height field, lit from
@@ -90,6 +112,8 @@ struct BevelFx {
     int  highlight_opacity = 75;
     Rgb  shadow{0, 0, 0};
     int  shadow_opacity = 75;
+    pixel::Blend highlight_mode = pixel::Blend::Screen;   // s025
+    pixel::Blend shadow_mode = pixel::Blend::Multiply;
     bool operator==(const BevelFx&) const = default;
 };
 
@@ -101,7 +125,8 @@ struct Styles {
     StrokeFx  stroke;
     BevelFx   bevel;   // s021
     InnerGlowFx inner_glow;   // s023
-    bool any() const { return drop.on || outer.on || inner.on || overlay.on || stroke.on || bevel.on || inner_glow.on; }
+    GradientFx gradient;      // s025
+    bool any() const { return drop.on || outer.on || inner.on || overlay.on || stroke.on || bevel.on || inner_glow.on || gradient.on; }
     bool operator==(const Styles&) const = default;
 };
 

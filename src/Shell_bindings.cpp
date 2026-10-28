@@ -98,7 +98,7 @@ void Shell::bind_actions() {  // bindings
         m_layer_acts["filter-" + std::string(core::filter::key(k))] =
             add_action("filter-" + std::string(core::filter::key(k)), [this, k] { on_filter(k); });
     // s019: Layer > Layer Style (Shell_filter.cpp).
-    for (const char* v : {"drop-shadow", "outer-glow", "inner-shadow", "inner-glow", "bevel-emboss", "colour-overlay", "stroke", "copy", "paste", "clear", "rasterize"})
+    for (const char* v : {"drop-shadow", "outer-glow", "inner-shadow", "inner-glow", "gradient-overlay", "bevel-emboss", "colour-overlay", "stroke", "copy", "paste", "clear", "rasterize"})
         m_layer_acts[std::string("style-") + v] = add_action(std::string("style-") + v, [this, v] { on_style(v); });
     m_layer_acts["filter-last"] = add_action("filter-last", [this] { on_filter_last(false); });
     m_layer_acts["filter-last-dialog"] = add_action("filter-last-dialog", [this] { on_filter_last(true); });

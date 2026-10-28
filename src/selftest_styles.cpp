@@ -264,4 +264,137 @@ void selftest_styles(const Check& check) {
         j.undo(); j.undo(); j.undo(); j.undo();
         check("group style: undone", !d.get("L2")->styles.any() && seen(96, 175).b > 0.99f && seen(96, 175).r > 0.99f, "");
     }
+    std::cout << "\n-- layer styles: blend modes per effect (s025) --\n";
+    {
+        const auto src = square();   // red (1, 0, 0)
+        core::Styles s;
+        s.overlay.on = true;
+        s.overlay.colour = {0, 1, 0};
+        s.overlay.mode = P::Blend::Normal;
+        check("overlay Normal: green replaces red", near(S::drawn(src, s, 100).get(200, 175).c[1], 1) && near(S::drawn(src, s, 100).get(200, 175).c[0], 0), "");
+        s.overlay.mode = P::Blend::Screen;
+        const auto sc = S::drawn(src, s, 100).get(200, 175);
+        check("overlay Screen: red + green = yellow", near(sc.c[0], 1) && near(sc.c[1], 1), num(sc.c[0]) + "," + num(sc.c[1]));
+        s.overlay.mode = P::Blend::Multiply;
+        const auto mu = S::drawn(src, s, 100).get(200, 175);
+        check("overlay Multiply: red x green = black", near(mu.c[0], 0) && near(mu.c[1], 0), num(mu.c[0]));
+        core::Styles t;
+        t.stroke.on = true;
+        t.stroke.position = 1;   // inside: over the content
+        t.stroke.colour = {0, 0, 1};
+        t.stroke.size = 4;
+        t.stroke.mode = P::Blend::Lighten;
+        const auto li = S::drawn(src, t, 100).get(101, 175);
+        check("stroke Lighten inside: max(red, blue) = magenta", near(li.c[0], 1) && near(li.c[2], 1), num(li.c[0]) + "," + num(li.c[2]));
+        // Defaults: Photoshop's for new effects.
+        core::Styles d;
+        check("defaults: shadows Multiply, glows Screen, stroke / overlay Normal, bevel Screen / Multiply",
+              d.drop.mode == P::Blend::Multiply && d.inner.mode == P::Blend::Multiply && d.outer.mode == P::Blend::Screen &&
+                  d.inner_glow.mode == P::Blend::Screen && d.stroke.mode == P::Blend::Normal && d.overlay.mode == P::Blend::Normal &&
+                  d.bevel.highlight_mode == P::Blend::Screen && d.bevel.shadow_mode == P::Blend::Multiply, "");
+        // The file keeps them.
+        core::Document doc;
+        core::DocJournal j{doc};
+        doc.set_door([&] { return j.open(); });
+        L::load_fixture(doc);
+        core::Styles f;
+        f.drop.on = true; f.drop.mode = P::Blend::LinearBurn;
+        f.outer.on = true; f.outer.mode = P::Blend::ColorDodge;
+        f.overlay.on = true; f.overlay.mode = P::Blend::Hue;
+        f.bevel.on = true; f.bevel.highlight_mode = P::Blend::Overlay;
+        L::set_styles(j, doc, "L4", f);
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_fxmode_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = doc.image(); c.layers = doc.snapshot(); c.next_id = doc.next_id();
+        std::string err;
+        core::file::save_klimt(path, c, err);
+        const auto back = core::file::open(path, err);
+        fs::remove(path);
+        check("effect modes: in the file", back && back->layers.at("L4").styles == f, err);
+    }
+    std::cout << "\n-- layer styles: shadows and glows blend with what is below (s025) --\n";
+    {
+        core::live::clear_cache();
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        {   // a blue Background
+            core::Document::Loading load(d);
+            auto bg = *d.get("L1");
+            bg.pixels = std::make_shared<const P::TileMap>(d.blank().fill({0, 0, 600, 400}, P::rgba(0, 0, 1, 1)));
+            d.put("L1", bg);
+        }
+        const auto seen = [&](int x, int y) { return core::sample_composite(d.image(), d.snapshot(), x, y, 0); };
+        core::Styles s;
+        s.drop.on = true;
+        s.drop.colour = {1, 0, 0};
+        s.drop.opacity = 100;
+        s.drop.distance = 20;
+        s.drop.size = 0;
+        s.drop.mode = P::Blend::Normal;
+        L::set_styles(j, d, "L4", s);
+        const auto normal = seen(305, 175);   // right of the square: the shadow only
+        s.drop.mode = P::Blend::Multiply;
+        L::set_styles(j, d, "L4", s);
+        const auto mult = seen(305, 175);
+        check("drop shadow Normal: red over the blue", normal.r > 0.9f && normal.b < 0.1f, num(normal.r));
+        check("drop shadow Multiply: red x blue = black (it blends with what is below)", mult.r < 0.05f && mult.b < 0.05f,
+              num(mult.r) + "," + num(mult.b));
+        check("the square itself unchanged by the split", seen(200, 175).r > 0.99f && seen(200, 175).b < 0.01f, "");
+        s.drop.on = false;
+        s.outer.on = true;
+        s.outer.colour = {1, 1, 0};
+        s.outer.opacity = 100;
+        s.outer.size = 10;
+        s.outer.mode = P::Blend::Screen;
+        L::set_styles(j, d, "L4", s);
+        const auto gl = seen(97, 175);
+        check("outer glow Screen: yellow screened on blue -> toward white", gl.r > 0.5f && gl.g > 0.5f && gl.b > 0.9f,
+              num(gl.r) + "," + num(gl.g) + "," + num(gl.b));
+        // A clipped layer keeps its effects inside (no split).
+        { core::Document::Loading load(d); auto v = *d.get("L4"); v.clipped = true; d.put("L4", v); }
+        check("a clipped styled layer: drawn as before (no stray part)", d.check().empty(), d.check());
+        core::live::clear_cache();
+    }
+    std::cout << "\n-- layer styles: gradient overlay (s025) --\n";
+    {
+        const auto src = square();   // (100, 100) 200 x 150
+        core::Styles s;
+        s.gradient.on = true;
+        s.gradient.from = {0, 0, 0};
+        s.gradient.to = {1, 1, 1};
+        s.gradient.angle = 0;   // left (from) to right (to)
+        const auto lin = S::drawn(src, s, 100);
+        check("gradient linear 0°: dark at the left, light at the right", lin.get(101, 175).c[1] < 0.05f && lin.get(298, 175).c[1] > 0.95f &&
+                  near(lin.get(200, 175).c[1], 0.5, 0.03), num(lin.get(200, 175).c[1]));
+        check("gradient: only on the content", lin.get(95, 175).c[3] == 0.f, "");
+        s.gradient.reverse = true;
+        check("gradient reversed: light at the left", S::drawn(src, s, 100).get(101, 175).c[1] > 0.95f, "");
+        s.gradient.reverse = false;
+        s.gradient.style = 1;
+        const auto rad = S::drawn(src, s, 100);
+        check("gradient radial: dark in the middle, lighter toward the corners", rad.get(200, 175).c[1] < 0.05f && rad.get(102, 102).c[1] > 0.8f,
+              num(rad.get(102, 102).c[1]));
+        s.gradient.angle = 90;
+        s.gradient.style = 0;
+        const auto up = S::drawn(src, s, 100);
+        check("gradient linear 90°: dark at the bottom, light at the top", up.get(200, 248).c[1] < 0.05f && up.get(200, 101).c[1] > 0.95f, "");
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        s.gradient.scale = 80; s.gradient.opacity = 60; s.gradient.mode = P::Blend::Overlay; s.gradient.from = {0.2f, 0.4f, 0.6f};
+        L::set_styles(j, d, "L4", s);
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_grad_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image(); c.layers = d.snapshot(); c.next_id = d.next_id();
+        std::string err;
+        core::file::save_klimt(path, c, err);
+        const auto back = core::file::open(path, err);
+        fs::remove(path);
+        check("gradient overlay: in the file", back && back->layers.at("L4").styles.gradient == s.gradient, err);
+    }
 }

@@ -118,30 +118,45 @@ Rgb rgb_from(const json& j, Rgb dflt) {
     if (!j.is_array() || j.size() != 3) return dflt;
     return {std::clamp(j[0].get<float>(), 0.f, 1.f), std::clamp(j[1].get<float>(), 0.f, 1.f), std::clamp(j[2].get<float>(), 0.f, 1.f)};
 }
+// s025: an effect's blend mode -- absent (a file before s025): Normal, so old
+// documents look as they did.
+Blend fx_mode(const json& j, const char* key) {
+    if (!j.contains(key) || !j.at(key).is_string()) return Blend::Normal;
+    const auto m = blend_from_key(j.at(key).get<std::string>());
+    return m && *m != Blend::PassThrough ? *m : Blend::Normal;
+}
 json styles_json(const Styles& s) {
     json o = json::object();
     const auto shadow = [](const ShadowFx& f) {
         return json{{"on", f.on}, {"colour", rgb_json(f.colour)}, {"opacity", f.opacity}, {"angle", f.angle},
-                    {"distance", f.distance}, {"spread", f.spread}, {"size", f.size}};
+                    {"distance", f.distance}, {"spread", f.spread}, {"size", f.size}, {"mode", std::string(blend_key(f.mode))}};
     };
     if (s.drop.on) o["drop_shadow"] = shadow(s.drop);
     if (s.inner.on) o["inner_shadow"] = shadow(s.inner);
     if (s.outer.on) o["outer_glow"] = {{"on", true}, {"colour", rgb_json(s.outer.colour)}, {"opacity", s.outer.opacity},
-                                       {"spread", s.outer.spread}, {"size", s.outer.size}};
-    if (s.overlay.on) o["colour_overlay"] = {{"on", true}, {"colour", rgb_json(s.overlay.colour)}, {"opacity", s.overlay.opacity}};
+                                       {"spread", s.outer.spread}, {"size", s.outer.size}, {"mode", std::string(blend_key(s.outer.mode))}};
+    if (s.overlay.on) o["colour_overlay"] = {{"on", true}, {"colour", rgb_json(s.overlay.colour)}, {"opacity", s.overlay.opacity},
+                                             {"mode", std::string(blend_key(s.overlay.mode))}};
     if (s.stroke.on) o["stroke"] = {{"on", true}, {"colour", rgb_json(s.stroke.colour)}, {"opacity", s.stroke.opacity},
-                                    {"size", s.stroke.size}, {"position", s.stroke.position}};
+                                    {"size", s.stroke.size}, {"position", s.stroke.position}, {"mode", std::string(blend_key(s.stroke.mode))}};
+    if (s.gradient.on) {   // s025
+        const auto& g = s.gradient;
+        o["gradient_overlay"] = {{"on", true}, {"from", rgb_json(g.from)}, {"to", rgb_json(g.to)}, {"opacity", g.opacity},
+                                 {"angle", g.angle}, {"style", g.style == 1 ? "radial" : "linear"}, {"scale", g.scale},
+                                 {"reverse", g.reverse}, {"mode", std::string(blend_key(g.mode))}};
+    }
     if (s.inner_glow.on) {   // s023
         const auto& g = s.inner_glow;
         o["inner_glow"] = {{"on", true}, {"colour", rgb_json(g.colour)}, {"opacity", g.opacity}, {"choke", g.choke},
-                           {"size", g.size}, {"source", g.center ? "center" : "edge"}};
+                           {"size", g.size}, {"source", g.center ? "center" : "edge"}, {"mode", std::string(blend_key(g.mode))}};
     }
     if (s.bevel.on) {   // s021
         const auto& b = s.bevel;
         o["bevel_emboss"] = {{"on", true}, {"style", b.style == 1 ? "emboss" : "inner-bevel"}, {"depth", b.depth}, {"up", b.up},
                              {"size", b.size}, {"soften", b.soften}, {"angle", b.angle}, {"altitude", b.altitude},
                              {"highlight", rgb_json(b.highlight)}, {"highlight_opacity", b.highlight_opacity},
-                             {"shadow", rgb_json(b.shadow)}, {"shadow_opacity", b.shadow_opacity}};
+                             {"shadow", rgb_json(b.shadow)}, {"shadow_opacity", b.shadow_opacity},
+                             {"highlight_mode", std::string(blend_key(b.highlight_mode))}, {"shadow_mode", std::string(blend_key(b.shadow_mode))}};
     }
     return o;
 }
@@ -156,6 +171,7 @@ Styles styles_from(const json& o) {
         f.distance = std::clamp(j.value("distance", f.distance), 0, 1000);
         f.spread = pct(j, "spread", f.spread);
         f.size = std::clamp(j.value("size", f.size), 0, 250);
+        f.mode = fx_mode(j, "mode");   // s025
         return f;
     };
     if (o.contains("drop_shadow")) s.drop = shadow(o.at("drop_shadow"), s.drop);
@@ -167,12 +183,14 @@ Styles styles_from(const json& o) {
         s.outer.opacity = pct(j, "opacity", s.outer.opacity);
         s.outer.spread = pct(j, "spread", s.outer.spread);
         s.outer.size = std::clamp(j.value("size", s.outer.size), 0, 250);
+        s.outer.mode = fx_mode(j, "mode");
     }
     if (o.contains("colour_overlay")) {
         const auto& j = o.at("colour_overlay");
         s.overlay.on = j.value("on", true);
         s.overlay.colour = rgb_from(j.value("colour", json()), s.overlay.colour);
         s.overlay.opacity = pct(j, "opacity", s.overlay.opacity);
+        s.overlay.mode = fx_mode(j, "mode");
     }
     if (o.contains("stroke")) {
         const auto& j = o.at("stroke");
@@ -181,6 +199,20 @@ Styles styles_from(const json& o) {
         s.stroke.opacity = pct(j, "opacity", s.stroke.opacity);
         s.stroke.size = std::clamp(j.value("size", s.stroke.size), 1, 250);
         s.stroke.position = std::clamp(j.value("position", s.stroke.position), 0, 2);
+        s.stroke.mode = fx_mode(j, "mode");
+    }
+    if (o.contains("gradient_overlay")) {   // s025
+        const auto& j = o.at("gradient_overlay");
+        auto& g = s.gradient;
+        g.on = j.value("on", true);
+        g.from = rgb_from(j.value("from", json()), g.from);
+        g.to = rgb_from(j.value("to", json()), g.to);
+        g.opacity = pct(j, "opacity", g.opacity);
+        g.angle = std::clamp(j.value("angle", g.angle), -180, 180);
+        g.style = j.value("style", std::string("linear")) == "radial" ? 1 : 0;
+        g.scale = std::clamp(j.value("scale", g.scale), 10, 150);
+        g.reverse = j.value("reverse", false);
+        g.mode = fx_mode(j, "mode");
     }
     if (o.contains("inner_glow")) {   // s023
         const auto& j = o.at("inner_glow");
@@ -191,6 +223,7 @@ Styles styles_from(const json& o) {
         g.choke = pct(j, "choke", g.choke);
         g.size = std::clamp(j.value("size", g.size), 0, 250);
         g.center = j.value("source", std::string("edge")) == "center";
+        g.mode = fx_mode(j, "mode");
     }
     if (o.contains("bevel_emboss")) {   // s021
         const auto& j = o.at("bevel_emboss");
@@ -207,6 +240,8 @@ Styles styles_from(const json& o) {
         b.highlight_opacity = pct(j, "highlight_opacity", b.highlight_opacity);
         b.shadow = rgb_from(j.value("shadow", json()), b.shadow);
         b.shadow_opacity = pct(j, "shadow_opacity", b.shadow_opacity);
+        b.highlight_mode = fx_mode(j, "highlight_mode");
+        b.shadow_mode = fx_mode(j, "shadow_mode");
     }
     return s;
 }

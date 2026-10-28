@@ -2,6 +2,7 @@
 #include "core/StylesRender.hpp"
 #include "core/Composite.hpp"   // from_srgb
 #include "core/Filter.hpp"      // blur_line
+#include "pixel/Blend.hpp"     // s025
 
 #include <algorithm>
 #include <cmath>
@@ -138,11 +139,34 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
     // The result, premultiplied: effects under, the content, effects over.
     std::vector<float> O(N * static_cast<std::size_t>(C), 0.f);
     const auto colour_of = [&](const Rgb& c) { return from_srgb(fmt, c.r, c.g, c.b); };
+    // s025: an effect's BLEND MODE -- RGB with alpha (the compositor's own
+    // layout), else Normal. `mix` a straight colour into a straight colour;
+    // `over_mode` a flat colour at alpha a onto the result so far (O).
+    const bool modes = fmt.mode == pixel::Mode::RGB && C == 4;
+    const auto mix = [&](float* col, const pixel::Px& fx, float t, pixel::Blend mode, std::size_t i) {
+        if (t <= 0.f) return;
+        if (!modes || mode == pixel::Blend::Normal) {
+            for (int k = 0; k < cc; ++k) col[k] += (fx.c[static_cast<std::size_t>(k)] - col[k]) * t;
+            return;
+        }
+        float src[4] = {fx.c[0] * t, fx.c[1] * t, fx.c[2] * t, t};
+        float dst[4] = {col[0], col[1], col[2], 1.f};
+        const int x = R.x + static_cast<int>(i % static_cast<std::size_t>(W)), y = R.y + static_cast<int>(i / static_cast<std::size_t>(W));
+        pixel::blend_span(mode, src, dst, 1, 1.f, x, y);
+        for (int k = 0; k < 3; ++k) col[k] = dst[k];
+    };
     const auto over = [&](std::size_t i, const pixel::Px& col, float a) {   // a flat colour at alpha a, over
         if (a <= 0.f) return;
         float* o = O.data() + i * static_cast<std::size_t>(C);
         for (int k = 0; k < cc; ++k) o[k] = col.c[static_cast<std::size_t>(k)] * a + o[k] * (1 - a);
         o[cc] = a + o[cc] * (1 - a);
+    };
+    const auto over_mode = [&](std::size_t i, const pixel::Px& col, float a, pixel::Blend mode) {
+        if (a <= 0.f) return;
+        if (!modes || mode == pixel::Blend::Normal) { over(i, col, a); return; }
+        float src[4] = {col.c[0] * a, col.c[1] * a, col.c[2] * a, a};
+        const int x = R.x + static_cast<int>(i % static_cast<std::size_t>(W)), y = R.y + static_cast<int>(i / static_cast<std::size_t>(W));
+        pixel::blend_span(mode, src, O.data() + i * 4, 1, 1.f, x, y);
     };
     if (s.drop.on) {
         int dx = 0, dy = 0;
@@ -187,6 +211,39 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
         spread_up(iglow, std::max(s.inner_glow.choke, 50));   // at full strength at the edge, as the outer glow
         if (s.inner_glow.center) for (auto& v : iglow) v = 1.f - v;
     }
+    // s025: Gradient Overlay -- across the content's own box (alpha > 0).
+    std::vector<float> grad_t;
+    pixel::Px g_from{}, g_to{};
+    if (s.gradient.on) {
+        int bx0 = W, by0 = H, bx1 = -1, by1 = -1;
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                if (A[static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)] > 0.f) {
+                    bx0 = std::min(bx0, x); bx1 = std::max(bx1, x); by0 = std::min(by0, y); by1 = std::max(by1, y);
+                }
+        if (bx1 >= bx0) {
+            const auto& gf = s.gradient;
+            const double cx = (bx0 + bx1) / 2.0, cy = (by0 + by1) / 2.0;
+            const double hw = (bx1 - bx0 + 1) / 2.0, hh = (by1 - by0 + 1) / 2.0;
+            const double sc = std::clamp(gf.scale, 10, 150) / 100.0;
+            const double a = gf.angle * M_PI / 180;
+            const double ux = std::cos(a), uy = -std::sin(a);   // image y runs down: 90 points up
+            const double half = std::max(1.0, std::abs(ux) * hw + std::abs(uy) * hh) * sc;   // the box's extent along it
+            const double radius = std::max(1.0, std::sqrt(hw * hw + hh * hh)) * sc;
+            grad_t.assign(N, 0.f);
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x) {
+                    const double dx = x - cx, dy = y - cy;
+                    double t = gf.style == 1 ? std::sqrt(dx * dx + dy * dy) / radius : (dx * ux + dy * uy) / (2 * half) + 0.5;
+                    t = std::clamp(t, 0.0, 1.0);
+                    if (gf.reverse) t = 1 - t;
+                    grad_t[static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)] = static_cast<float>(t);
+                }
+            g_from = colour_of(gf.from);
+            g_to = colour_of(gf.to);
+        }
+    }
+    const float gro = static_cast<float>(s.gradient.opacity) / 100.f;
     const auto igc = colour_of(s.inner_glow.colour);
     const float igo = static_cast<float>(s.inner_glow.opacity) / 100.f;
     const auto ov = colour_of(s.overlay.colour), ish = colour_of(s.inner.colour);
@@ -197,15 +254,21 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
         // The content's own straight colour, overlaid, inner-shadowed.
         float col[pixel::kMaxChannels];
         for (int k = 0; k < cc; ++k) col[k] = P[i * static_cast<std::size_t>(C) + static_cast<std::size_t>(k)] / a;
+        if (!grad_t.empty()) {   // s025: under Color Overlay (Photoshop's order)
+            pixel::Px gc{};
+            for (int k = 0; k < cc; ++k)
+                gc.c[static_cast<std::size_t>(k)] = g_from.c[static_cast<std::size_t>(k)] + (g_to.c[static_cast<std::size_t>(k)] - g_from.c[static_cast<std::size_t>(k)]) * grad_t[i];
+            mix(col, gc, gro, s.gradient.mode, i);
+        }
         if (s.overlay.on)
-            for (int k = 0; k < cc; ++k) col[k] += (ov.c[static_cast<std::size_t>(k)] - col[k]) * ovo;
+            mix(col, ov, ovo, s.overlay.mode, i);
         if (s.inner.on) {
             const float t = inner[i] * iso;
-            for (int k = 0; k < cc; ++k) col[k] += (ish.c[static_cast<std::size_t>(k)] - col[k]) * t;
+            mix(col, ish, t, s.inner.mode, i);
         }
         if (s.inner_glow.on) {   // s023
             const float t = std::clamp(iglow[i], 0.f, 1.f) * igo;
-            for (int k = 0; k < cc; ++k) col[k] += (igc.c[static_cast<std::size_t>(k)] - col[k]) * t;
+            mix(col, igc, t, s.inner_glow.mode, i);
         }
         const float ca = a * fl;
         float* o = O.data() + i * static_cast<std::size_t>(C);
@@ -242,8 +305,8 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
         const float ho = static_cast<float>(b.highlight_opacity) / 100.f, so = static_cast<float>(b.shadow_opacity) / 100.f;
         for (std::size_t i = 0; i < N; ++i) {
             const float where = b.style == 1 ? 1.f : A[i];   // Inner Bevel: only on the content
-            over(i, sc, lo[i] * so * where);
-            over(i, hc, hi[i] * ho * where);
+            over_mode(i, sc, lo[i] * so * where, b.shadow_mode);
+            over_mode(i, hc, hi[i] * ho * where, b.highlight_mode);
         }
     }
     if (s.stroke.on) {   // exact distances to the edge (alpha >= 1/2), anti-aliased
@@ -263,7 +326,7 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
                 case 2:  a = std::clamp(sz / 2 + 1.f - (in[i] ? d_in[i] : d_out[i]), 0.f, 1.f); break;   // centre
                 default: a = in[i] ? 0.f : std::clamp(sz + 1.f - d_out[i], 0.f, 1.f); break;   // outside
             }
-            over(i, col, a * op);
+            over_mode(i, col, a * op, s.stroke.mode);
         }
     }
     // Back to tiles: every tile the region touches, made afresh (the content

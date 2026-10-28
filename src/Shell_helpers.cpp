@@ -129,7 +129,7 @@ void Shell::update_layer_actions() {
         // s019: a pixel layer takes styles; Paste wants something copied.
         // s024: groups take styles too (Rasterize: pixel layers only).
         const bool styleable = pixel_layer || (pl && pl->kind == core::Kind::Group);
-        for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear"})
+        for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-gradient-overlay", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear"})
             on(v, img && styleable);
         on("style-rasterize", img && pixel_layer);
         on("style-paste", img && styleable && m_style_clip);
