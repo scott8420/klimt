@@ -103,6 +103,7 @@ void Shell::update_layer_actions() {
     };
     // s009: with no image, the verbs that need one grey.
     const bool img = has_image();
+    on("guides-clear", img && !m_doc.image().guides.empty());   // s032
     for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save", "select-range",
                           "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
                           "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate"})
@@ -122,6 +123,8 @@ void Shell::update_layer_actions() {
             const std::string key(core::adjust::key(k));
             on(("adjust-apply-" + key).c_str(), img && pixel_layer && pl->pixels);
             on(("adjust-new-" + key).c_str(), img);
+        for (const auto fk : core::filter::kinds())   // s030
+            on(("filter-layer-" + std::string(core::filter::key(fk))).c_str(), img && m_doc.image().format.mode == pixel::Mode::RGB);
         }
         // s014: the Filter menu wants a pixel layer with pixels (Last Filter: one run before).
         const bool filterable = img && pixel_layer && pl->pixels;
@@ -130,7 +133,7 @@ void Shell::update_layer_actions() {
         // s019: a pixel layer takes styles; Paste wants something copied.
         // s024: groups take styles too (Rasterize: pixel layers only).
         const bool styleable = pixel_layer || (pl && pl->kind == core::Kind::Group);
-        for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-satin", "style-gradient-overlay", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear"})
+        for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-satin", "style-pattern-overlay", "style-gradient-overlay", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear"})
             on(v, img && styleable);
         on("style-rasterize", img && pixel_layer);
         on("style-paste", img && styleable && m_style_clip);
@@ -253,6 +256,8 @@ void Shell::queue_render() {
     m_render_queued = true;
     Glib::signal_idle().connect_once([this] {
         m_render_queued = false;
+        update_rulers();   // s031: the zero point, the resolution may have changed
+        update_guides();   // s032
         const core::Image im = m_doc.image();
         auto layers = m_doc.snapshot();
         // s011: a transform's preview shows in place of the real pixels.

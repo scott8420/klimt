@@ -1,4 +1,5 @@
 #include "CanvasView.hpp"
+#include "core/Rulers.hpp"   // s032: guides::snap
 
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/eventcontrollermotion.h>
@@ -94,15 +95,26 @@ CanvasView::CanvasView() {
             if (ix >= 0 && iy >= 0 && ix < m_iw && iy < m_ih) m_pick_signal.emit(ix, iy, alt);
             return;
         }
-        if (m_tool == "zoom" && !m_space) {
-            const bool out = (click->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
-            double z = m_zoom;
-            if (out) { for (auto it = std::rbegin(kSteps); it != std::rend(kSteps); ++it) if (*it < m_zoom - 1e-9) { z = *it; break; } }
-            else     { for (double s : kSteps) if (s > m_zoom + 1e-9) { z = s; break; } }
-            zoom_at(z, x, y);
-        }
+    });
+    // The Zoom tool: a CLICK steps in (Alt: out) where it clicks -- on the
+    // release, so that a drag (a box to zoom to, s030) isn't also a click.
+    click->signal_released().connect([this, click](int, double x, double y) {
+        if (m_tool != "zoom" || m_space || m_zoom_box_shown) return;   // a box was drawn: not a click
+        const bool out = (click->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+        double z = m_zoom;
+        if (out) { for (auto it = std::rbegin(kSteps); it != std::rend(kSteps); ++it) if (*it < m_zoom - 1e-9) { z = *it; break; } }
+        else     { for (double s : kSteps) if (s > m_zoom + 1e-9) { z = s; break; } }
+        zoom_at(z, x, y);
     });
     add_controller(click);
+    {   // s029: right-click -- the tool's settings at the pointer
+        auto rc = Gtk::GestureClick::create();
+        rc->set_button(GDK_BUTTON_SECONDARY);
+        // On the release: a popover opened while the button is still down
+        // (the canvas holding the pointer) closed at once (seen under X11).
+        rc->signal_released().connect([this](int, double x, double y) { m_settings_at_signal.emit(x, y); });
+        add_controller(rc);
+    }
 
     // Pan: middle-drag anywhere; left-drag with Space held or the Hand tool.
     // s008: a left-drag with the Select tool draws a marquee or a lasso.
@@ -131,6 +143,17 @@ CanvasView::CanvasView() {
                 m_press_y = y;
                 crop_press(x, y);
                 return;
+            }
+            // s032: the Move tool on a guide drags the guide.
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "move" && m_iw > 0 && !m_xf.on) {
+                const int g = guide_near(x, y);
+                if (g >= 0) {
+                    m_guide_drag = g;
+                    m_guide_at = m_guides[static_cast<std::size_t>(g)].at;
+                    m_press_x = x;
+                    m_press_y = y;
+                    return;
+                }
             }
             if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "move" && m_iw > 0) {
                 m_moving = true;
@@ -176,9 +199,19 @@ CanvasView::CanvasView() {
                 m_drag.kind = m_variant == 1 ? Shape::Kind::Ellipse : m_variant == 2 ? Shape::Kind::Lasso
                             : m_variant == 3 ? Shape::Kind::Point : Shape::Kind::Rect;
                 m_drag.pts = {{to_image_x(x), to_image_y(y)}};
+                if (m_drag.kind == Shape::Kind::Rect || m_drag.kind == Shape::Kind::Ellipse)   // s032: snap the corner
+                    m_drag.pts[0] = {snap_x(m_drag.pts[0].x), snap_y(m_drag.pts[0].y)};
                 m_press_x = x;
                 m_press_y = y;
                 m_rubber = true;
+                return;
+            }
+            // s030: the Zoom tool's drag -- a box; the release zooms to fit it.
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "zoom" && m_iw > 0) {
+                m_zoom_box = true;
+                m_zoom_box_shown = false;
+                m_press_x = m_zbx = x;
+                m_press_y = m_zby = y;
                 return;
             }
             if (!m_panning) { drag->set_state(Gtk::EventSequenceState::DENIED); return; }
@@ -256,10 +289,24 @@ CanvasView::CanvasView() {
                 queue_draw();
                 return;
             }
+            if (m_guide_drag >= 0) {   // s032: a guide follows the pointer (snapping to the edges / centre)
+                const auto& g = m_guides[static_cast<std::size_t>(m_guide_drag)];
+                m_guide_at = g.vertical ? snap_x(to_image_x(m_press_x + dx)) : snap_y(to_image_y(m_press_y + dy));
+                queue_draw();
+                return;
+            }
+            if (m_zoom_box) {   // s030
+                m_zbx = m_press_x + dx;
+                m_zby = m_press_y + dy;
+                m_zoom_box_shown = m_zoom_box_shown || std::hypot(dx, dy) >= 4;
+                queue_draw();
+                return;
+            }
             if (m_rubber && m_drag.kind == Shape::Kind::Point) return;   // the Wand: a click, not a drag
             if (m_rubber) {
                 const double sx = m_press_x + dx, sy = m_press_y + dy;
                 core::select::Pt p{to_image_x(sx), to_image_y(sy)};
+                if (m_drag.kind != Shape::Kind::Lasso) p = {snap_x(p.x), snap_y(p.y)};   // s032
                 if (m_drag.kind == Shape::Kind::Lasso) {
                     // A new point once the pointer has moved a screen pixel.
                     const auto& last = m_drag.pts.back();
@@ -287,6 +334,24 @@ CanvasView::CanvasView() {
             queue_draw();
         });
         drag->signal_drag_end().connect([this, offset, drag](double dx, double dy) {
+            if (m_guide_drag >= 0) {   // s032: its new place told (off the picture: removed)
+                const int g = m_guide_drag;
+                m_guide_drag = -1;
+                if (std::hypot(dx, dy) >= 2) m_guide_moved.emit(g, std::round(m_guide_at));
+                queue_draw();
+                return;
+            }
+            if (m_zoom_box) {   // s030: zoom so the box fills the view (a tiny one: the click does it)
+                m_zoom_box = false;
+                if (m_zoom_box_shown) {
+                    const bool out = (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+                    zoom_to_box(m_press_x, m_press_y, m_press_x + dx, m_press_y + dy, out);
+                    // kept until the click's release (either order) has seen it
+                    Glib::signal_idle().connect_once([this] { m_zoom_box_shown = false; queue_draw(); });
+                }
+                queue_draw();
+                return;
+            }
             if (m_moving || m_patching) {
                 const bool patching = m_patching;
                 m_moving = m_patching = false;
@@ -335,8 +400,14 @@ CanvasView::CanvasView() {
         m_px = x;
         m_py = y;
         if (painting()) queue_draw();   // the brush outline follows the pointer
+        if (m_on_pointer) m_on_pointer(x, y);   // s031: the rulers' marks
+        if (m_tool == "move" && !m_space && !m_panning && m_guide_drag < 0) {   // s032: over a guide
+            const int g = guide_near(x, y);
+            if (g >= 0) set_cursor(m_guides[static_cast<std::size_t>(g)].vertical ? "col-resize" : "row-resize");
+            else update_cursor();
+        }
     });
-    motion->signal_leave().connect([this] { m_px = m_py = -1; if (painting()) queue_draw(); });
+    motion->signal_leave().connect([this] { m_px = m_py = -1; if (painting()) queue_draw(); if (m_on_pointer) m_on_pointer(-1, -1); });
     add_controller(motion);
 
     // Ctrl+scroll zooms at the pointer; scroll pans.
@@ -473,6 +544,66 @@ void CanvasView::zoom_at(double z, double sx, double sy) {
     queue_draw();
 }
 
+// s032: the guide within 4 screen px of (sx, sy), when they show and aren't locked.
+int CanvasView::guide_near(double sx, double sy) const {
+    if (!m_show_guides || m_lock_guides) return -1;
+    int best = -1;
+    double dist = 4;
+    for (std::size_t i = 0; i < m_guides.size(); ++i) {
+        const auto& g = m_guides[i];
+        const double d = std::abs(g.vertical ? sx - to_screen_x(g.at) : sy - to_screen_y(g.at));
+        if (d <= dist) { dist = d; best = static_cast<int>(i); }
+    }
+    return best;
+}
+
+// s032 m3: an image position pulled to a guide / the picture's edges or
+// centre within 6 screen px (when snapping is on; guides only while shown).
+double CanvasView::snap_x(double ix) const {
+    if (!m_snap || m_zoom <= 0) return ix;
+    core::Image im;
+    im.width = m_iw;
+    im.height = m_ih;
+    if (m_show_guides) im.guides = m_guides;
+    return core::guides::snap(ix, true, im, 6 / m_zoom);
+}
+double CanvasView::snap_y(double iy) const {
+    if (!m_snap || m_zoom <= 0) return iy;
+    core::Image im;
+    im.width = m_iw;
+    im.height = m_ih;
+    if (m_show_guides) im.guides = m_guides;
+    return core::guides::snap(iy, false, im, 6 / m_zoom);
+}
+
+// s030: the screen box (x0, y0) - (x1, y1) fills the view -- the Zoom tool's
+// drag. `out` (Alt): the other way -- the whole view shrinks into the box.
+void CanvasView::zoom_to_box(double x0, double y0, double x1, double y1, bool out) {
+    if (m_iw <= 0 || m_vw <= 0 || m_vh <= 0) return;
+    const double w = std::abs(x1 - x0), h = std::abs(y1 - y0);
+    if (w < 4 && h < 4) return;
+    const double bx = (x0 + x1) / 2, by = (y0 + y1) / 2;
+    if (out) {
+        const double z = std::clamp(m_zoom * std::min(std::max(1.0, w) / m_vw, std::max(1.0, h) / m_vh), kMin, kMax);
+        // What was at the view's centre lands at the box's centre.
+        m_cx = m_cx - (bx - m_vw / 2.0) / z;
+        m_cy = m_cy - (by - m_vh / 2.0) / z;
+        m_zoom = z;
+        m_fit = false;
+        clamp_centre();
+        queue_draw();
+        return;
+    }
+    const double cx = to_image_x(bx), cy = to_image_y(by);
+    const double z = std::clamp(m_zoom * std::min(m_vw / std::max(1.0, w), m_vh / std::max(1.0, h)), kMin, kMax);
+    m_zoom = z;
+    m_cx = cx;
+    m_cy = cy;
+    m_fit = false;
+    clamp_centre();
+    queue_draw();
+}
+
 void CanvasView::pan_by(double dx, double dy) {
     if (m_zoom <= 0 || m_iw <= 0) return;
     m_fit = false;
@@ -603,14 +734,14 @@ void CanvasView::crop_press(double sx, double sy) {
     if (hit > 0) { m_crop_mode = CropMode::Resize; m_crop_edges = hit; return; }
     m_crop_mode = CropMode::New;
     m_crop = true;
-    m_cx0 = m_cx1 = std::round(to_image_x(sx));
-    m_cy0 = m_cy1 = std::round(to_image_y(sy));
+    m_cx0 = m_cx1 = std::round(snap_x(to_image_x(sx)));   // s032: snapped
+    m_cy0 = m_cy1 = std::round(snap_y(to_image_y(sy)));
     m_crop_from[0] = m_cx0; m_crop_from[1] = m_cy0;
     queue_draw();
 }
 
 void CanvasView::crop_drag(double sx, double sy, bool shift) {
-    const double ix = std::round(to_image_x(sx)), iy = std::round(to_image_y(sy));
+    const double ix = std::round(snap_x(to_image_x(sx))), iy = std::round(snap_y(to_image_y(sy)));   // s032: snapped
     const double dx = std::round((sx - m_press_x) / m_zoom), dy = std::round((sy - m_press_y) / m_zoom);
     if (m_crop_mode == CropMode::New) {
         double x1 = ix, y1 = iy;
@@ -625,10 +756,11 @@ void CanvasView::crop_drag(double sx, double sy, bool shift) {
         m_cx1 = m_crop_from[2] + dx; m_cy1 = m_crop_from[3] + dy;
     } else if (m_crop_mode == CropMode::Resize) {
         m_cx0 = m_crop_from[0]; m_cy0 = m_crop_from[1]; m_cx1 = m_crop_from[2]; m_cy1 = m_crop_from[3];
-        if (m_crop_edges & 1) m_cx0 = std::min(m_crop_from[0] + dx, m_cx1 - 1);
-        if (m_crop_edges & 2) m_cx1 = std::max(m_crop_from[2] + dx, m_cx0 + 1);
-        if (m_crop_edges & 4) m_cy0 = std::min(m_crop_from[1] + dy, m_cy1 - 1);
-        if (m_crop_edges & 8) m_cy1 = std::max(m_crop_from[3] + dy, m_cy0 + 1);
+        // s032: a dragged edge snaps
+        if (m_crop_edges & 1) m_cx0 = std::min(std::round(snap_x(m_crop_from[0] + dx)), m_cx1 - 1);
+        if (m_crop_edges & 2) m_cx1 = std::max(std::round(snap_x(m_crop_from[2] + dx)), m_cx0 + 1);
+        if (m_crop_edges & 4) m_cy0 = std::min(std::round(snap_y(m_crop_from[1] + dy)), m_cy1 - 1);
+        if (m_crop_edges & 8) m_cy1 = std::max(std::round(snap_y(m_crop_from[3] + dy)), m_cy0 + 1);
     }
     queue_draw();
 }
@@ -950,6 +1082,13 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
                 sh = src->get_height();
             }
             cr->save();
+            // s030: the clip snapped to DEVICE pixels, not antialiased. On a
+            // fractionally scaled screen (125 / 150 / 175 %) a whole logical
+            // pixel falls between device pixels: each neighbour's clip half
+            // covered the shared edge, and the checkerboard showed through
+            // as a thin grid (Scott, on Fedora; reproduced in cairo at 1.25 -
+            // 1.75). Unantialiased, both sides round the same way: no seam.
+            cr->set_antialias(Cairo::Antialias::ANTIALIAS_NONE);
             cr->rectangle(tx0, ty0, tx1 - tx0, ty1 - ty0);
             cr->clip();
             cr->translate(tx0, ty0);
@@ -963,6 +1102,19 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
         }
     draw_ants(cr, w, h);
     draw_rubber(cr);
+    if (m_zoom_box && m_zoom_box_shown) {   // s030: the Zoom tool's box (while dragging)
+        const double x0 = std::round(std::min(m_press_x, m_zbx)) + 0.5, y0 = std::round(std::min(m_press_y, m_zby)) + 0.5;
+        const double x1 = std::round(std::max(m_press_x, m_zbx)) + 0.5, y1 = std::round(std::max(m_press_y, m_zby)) + 0.5;
+        cr->save();
+        cr->set_line_width(1);
+        cr->rectangle(x0, y0, x1 - x0, y1 - y0);
+        cr->set_source_rgb(1, 1, 1);
+        cr->stroke_preserve();
+        cr->set_source_rgb(0, 0, 0);
+        cr->set_dash(std::vector<double>{4, 4}, 0);
+        cr->stroke();
+        cr->restore();
+    }
     draw_crop(cr, w, h);
     draw_transform(cr);
     if (m_line) {   // s011: the Straighten line, and its angle
@@ -1034,6 +1186,45 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
         cr->restore();
     }
     tell_zoom();
+    // s032: the guides -- cyan lines across the view (the one dragged where it is
+    // going; one coming out of a ruler).
+    if ((m_show_guides && !m_guides.empty()) || m_guide_preview) {
+        cr->save();
+        cr->set_line_width(1);
+        const auto line = [&](const core::Guide& g) {
+            if (g.vertical) { const double sx = std::round(to_screen_x(g.at)) + 0.5; cr->move_to(sx, 0); cr->line_to(sx, h); }
+            else { const double sy = std::round(to_screen_y(g.at)) + 0.5; cr->move_to(0, sy); cr->line_to(w, sy); }
+        };
+        cr->set_source_rgba(0.0, 0.78, 1.0, 0.9);
+        if (m_show_guides)
+            for (std::size_t i = 0; i < m_guides.size(); ++i) {
+                core::Guide g = m_guides[i];
+                if (static_cast<int>(i) == m_guide_drag) g.at = m_guide_at;
+                line(g);
+            }
+        if (m_guide_preview) line(*m_guide_preview);
+        cr->stroke();
+        cr->restore();
+    }
+    // s031: the zero point being dragged -- a cross over the picture.
+    if (m_cross) {
+        cr->save();
+        cr->set_line_width(1);
+        const double cx = std::round(m_cross->x) + 0.5, cy = std::round(m_cross->y) + 0.5;
+        for (int pass = 0; pass < 2; ++pass) {
+            cr->set_source_rgba(pass, pass, pass, 0.85);
+            if (pass) cr->set_dash(std::vector<double>{4, 4}, 0);
+            cr->move_to(0, cy); cr->line_to(w, cy);
+            cr->move_to(cx, 0); cr->line_to(cx, h);
+            cr->stroke();
+        }
+        cr->restore();
+    }
+    // s031: the rulers follow the view -- told at idle, not inside the draw.
+    if (m_on_view && (m_zoom != m_told_vz || m_cx != m_told_cx || m_cy != m_told_cy || w != m_told_vw || h != m_told_vh)) {
+        m_told_vz = m_zoom; m_told_cx = m_cx; m_told_cy = m_cy; m_told_vw = w; m_told_vh = h;
+        Glib::signal_idle().connect_once([this] { if (m_on_view) m_on_view(); });
+    }
 }
 
 pixel::Rect CanvasView::visible() const {

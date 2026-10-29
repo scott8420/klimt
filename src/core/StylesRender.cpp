@@ -1,5 +1,6 @@
 // core::styles -- drawing the layer styles (s019). See core/Styles.hpp.
 #include "core/StylesRender.hpp"
+#include "core/Patterns.hpp"   // s028 m4
 #include "core/Composite.hpp"   // from_srgb
 #include "core/Filter.hpp"      // blur_line
 #include "pixel/Blend.hpp"     // s025
@@ -259,6 +260,39 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
         blur(satin, W, H, sigma_of(s.satin.size));
         if (s.satin.invert) for (auto& v : satin) v = 1.f - std::clamp(v, 0.f, 1.f);
     }
+    // s028 m4: Pattern Overlay -- the pattern's grey at each pixel, as the
+    // document's colour (256 levels, made once).
+    std::vector<std::uint8_t> pat;
+    std::vector<pixel::Px> pat_lut;
+    std::vector<pixel::Px> upat;      // s033: YOUR pattern -- each pixel's colour, its alpha in upat_a
+    std::vector<float> upat_a;
+    if (s.pattern.on && s.pattern.image) {
+        const auto& pf = s.pattern;
+        upat.assign(N, pixel::Px{});
+        upat_a.assign(N, 0.f);
+        float px[4];
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x) {
+                const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x);
+                if (A[i] <= 0.f) continue;
+                pattern::sample(*pf.image, R.x + x, R.y + y, std::clamp(pf.scale, 10, 1000) / 100.0, pf.x, pf.y, px);
+                upat[i] = colour_of(Rgb{px[0], px[1], px[2]});
+                upat_a[i] = px[3];
+            }
+    } else if (s.pattern.on) {
+        const auto& pf = s.pattern;
+        pat.assign(N, 0);
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x) {
+                const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x);
+                if (A[i] <= 0.f) continue;
+                const float g = pattern::grey(pf.pattern, R.x + x, R.y + y, std::clamp(pf.scale, 10, 1000) / 100.0, pf.x, pf.y);
+                pat[i] = static_cast<std::uint8_t>(std::lround(std::clamp(g, 0.f, 1.f) * 255));
+            }
+        pat_lut.resize(256);
+        for (int k = 0; k < 256; ++k) pat_lut[static_cast<std::size_t>(k)] = colour_of(Rgb{k / 255.f, k / 255.f, k / 255.f});
+    }
+    const float pao = static_cast<float>(s.pattern.opacity) / 100.f;
     const auto sac = colour_of(s.satin.colour);
     const float sao = static_cast<float>(s.satin.opacity) / 100.f;
     const auto igc = colour_of(s.inner_glow.colour);
@@ -273,6 +307,10 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
         for (int k = 0; k < cc; ++k) col[k] = P[i * static_cast<std::size_t>(C) + static_cast<std::size_t>(k)] / a;
         if (!satin.empty())   // s026: under the overlays (Photoshop's order)
             mix(col, sac, std::clamp(satin[i], 0.f, 1.f) * sao, s.satin.mode, i);
+        if (!pat.empty())   // s028 m4: under the Gradient and Color Overlays (Photoshop's order)
+            mix(col, pat_lut[pat[i]], pao, s.pattern.mode, i);
+        else if (!upat.empty() && upat_a[i] > 0.f)   // s033: yours, through its own alpha
+            mix(col, upat[i], pao * upat_a[i], s.pattern.mode, i);
         if (!grad_t.empty()) {   // s025: under Color Overlay (Photoshop's order)
             pixel::Px gc{};
             for (int k = 0; k < cc; ++k)

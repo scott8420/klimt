@@ -66,6 +66,8 @@ std::optional<pixel::TileMap> modified(const pixel::TileMap& m, Modify k, double
                                        const std::function<bool()>& cancelled = {});
 // The tiles' extent (coarse: whole tiles), empty Rect when nothing.
 pixel::Rect extent(const pixel::TileMap& m);
+// s033: the selected pixels' exact bounds (any coverage); empty when nothing.
+pixel::Rect bounds(const pixel::TileMap& m);
 float coverage(const pixel::TileMap& m, int x, int y);   // 0..1; outside: 0
 
 // The Magic Wand (s008 m3): the pixels of `src` like the one at (x, y) --

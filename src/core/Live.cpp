@@ -176,6 +176,7 @@ bool active(const Layer& l) {
 bool any(const Layers& ls) {
     for (const auto& [id, l] : ls) {
         if (active(l)) return true;
+        if (l.kind == Kind::Filter) return true;   // s030
         if (l.kind == Kind::Group && l.styles.any()) return true;   // s024
     }
     return false;
@@ -325,6 +326,125 @@ std::shared_ptr<const pixel::TileMap> group_look(const Image& im, const Layers& 
     return fut.get();
 }
 
+namespace {
+// s030: the cache of FILTER LAYERS' looks -- keyed by the layer's id, what it
+// reads (the layers below it in its scope; values, pixels by pointer), its
+// filter and the image's size.
+struct FilterEntry {
+    Document::Id id;
+    Layers sub;
+    std::vector<LiveFilter> stack;
+    int w = 0, h = 0;
+    std::shared_future<std::shared_ptr<const pixel::TileMap>> result;
+    std::uint64_t used = 0;
+};
+std::mutex g_fmutex;
+std::vector<FilterEntry> g_filters;
+std::uint64_t g_fclock = 0;
+
+// What a filter layer reads: unclipped, the picture BELOW it in its scope --
+// the nearest enclosing group that isn't Pass Through (an isolated group
+// composites alone), or the whole document -- the layer and everything above
+// it hidden; clipped, its clip base alone, as it looks.
+Layers filter_source(const Layers& ls, const Document::Id& id) {
+    const Layer& f = ls.at(id);
+    if (f.clipped) {   // the nearest unclipped sibling below
+        const Layer* base = nullptr;
+        Document::Id bid;
+        for (const auto& [oid, o] : ls)
+            if (o.parent == f.parent && o.pos < f.pos && !o.clipped && (!base || o.pos > base->pos)) { base = &o; bid = oid; }
+        if (base && base->kind == Kind::Pixel) {
+            Layer b = *base;
+            b.parent.clear();
+            b.clipped = false;
+            b.opacity = 100;
+            b.fill = b.styles.any() ? b.fill : 100;
+            b.blend = pixel::Blend::Normal;
+            b.mask = nullptr;   // the compositor clips by the base's own alpha and mask afterwards
+            return Layers{{bid, b}};
+        }
+    }
+    Document::Id scope;
+    for (Document::Id p = f.parent; !p.empty();) {
+        const auto it = ls.find(p);
+        if (it == ls.end()) break;
+        if (it->second.blend != pixel::Blend::PassThrough) { scope = p; break; }
+        p = it->second.parent;
+    }
+    const Layers hid = below(ls, id);   // the layer and those above it, at every level, hidden
+    Layers sub;
+    for (const auto& [oid, o] : hid) {
+        if (!scope.empty() && !inside(hid, oid, scope)) continue;
+        Layer v = o;
+        if (!scope.empty() && v.parent == scope) v.parent.clear();
+        sub[oid] = std::move(v);
+    }
+    // Hidden ones change nothing: drop them, so the key is what shows.
+    for (auto it = sub.begin(); it != sub.end();) it = it->second.visible ? std::next(it) : sub.erase(it);
+    return sub;
+}
+
+std::shared_ptr<const pixel::TileMap> filter_look(const Image& im, const Layers& ls, const Document::Id& id) {
+    const Layer& f = ls.at(id);
+    if (im.format.mode != pixel::Mode::RGB || im.width <= 0 || im.height <= 0 || f.filters.size() != 1) return nullptr;
+    Layers sub = filter_source(ls, id);
+    std::vector<LiveFilter> stack = f.filters;
+    stack[0].on = true;
+    stack[0].opacity = 100;
+    stack[0].mode = pixel::Blend::Normal;
+    std::shared_future<std::shared_ptr<const pixel::TileMap>> fut;
+    std::promise<std::shared_ptr<const pixel::TileMap>> mine;
+    bool compute = false;
+    {
+        std::lock_guard lk(g_fmutex);
+        for (auto& e : g_filters)
+            if (e.id == id && e.w == im.width && e.h == im.height && e.stack == stack && e.sub == sub) {
+                e.used = ++g_fclock;
+                fut = e.result;
+                break;
+            }
+        if (!fut.valid()) {
+            if (g_filters.size() >= 8) {
+                auto victim = g_filters.end();
+                for (auto it = g_filters.begin(); it != g_filters.end(); ++it)
+                    if (it->result.wait_for(std::chrono::seconds(0)) == std::future_status::ready &&
+                        (victim == g_filters.end() || it->used < victim->used)) victim = it;
+                if (victim != g_filters.end()) g_filters.erase(victim);
+            }
+            fut = mine.get_future().share();
+            g_filters.push_back({id, sub, stack, im.width, im.height, fut, ++g_fclock});
+            compute = true;
+        }
+    }
+    if (compute) {
+        // What it reads, flattened (RGB with alpha, the image's depth) -- the
+        // layers in it as they look (composite_tile sees to that, filter
+        // layers below this one included) -- then the filter over it.
+        const pixel::Format ff{im.format.depth, pixel::Mode::RGB, true};
+        pixel::TileMap flat(ff, im.width, im.height);
+        std::vector<pixel::TileMap::TileRef> grid;
+        grid.reserve(static_cast<std::size_t>(flat.cols()) * static_cast<std::size_t>(flat.rows()));
+        std::vector<float> px;
+        Image fim = im;
+        fim.format = ff;
+        for (int r = 0; r < flat.rows(); ++r)
+            for (int c = 0; c < flat.cols(); ++c) {
+                composite_tile(fim, sub, c, r, px);
+                bool any_px = false;
+                for (std::size_t i = 3; i < px.size(); i += 4) if (px[i] > 0.f) { any_px = true; break; }
+                if (!any_px) { grid.push_back(nullptr); continue; }
+                pixel::TileWriter w(ff, pixel::transparent());
+                w.set_premultiplied(px);
+                grid.push_back(w.freeze());
+            }
+        const auto src = pixel::TileMap::from_tiles(ff, im.width, im.height, std::move(grid));
+        auto out = run(src, stack);
+        mine.set_value(out ? std::make_shared<const pixel::TileMap>(std::move(*out)) : nullptr);
+    }
+    return fut.get();
+}
+}  // namespace
+
 Layers effective(const Layers& ls, const Image* im) {
     Layers out = ls;
     // s024: styled groups first (the outermost; the inner ones are done
@@ -350,6 +470,15 @@ Layers effective(const Layers& ls, const Image* im) {
             if (g.blend == pixel::Blend::PassThrough) g.blend = pixel::Blend::Normal;   // a styled group is isolated
         }
     }
+    // s030: FILTER LAYERS become pixel layers of what they read, filtered
+    // (their mask, opacity, blend, clip kept). Without the image (or not
+    // RGB) they show nothing.
+    for (auto& [id, l] : out)
+        if (l.kind == Kind::Filter) {
+            l.pixels = im && l.visible && ls.count(id) ? filter_look(*im, ls, id) : nullptr;
+            l.kind = Kind::Pixel;
+            l.filters.clear();
+        }
     std::vector<std::pair<Document::Id, Layer>> parts;   // s025: effects composited apart, in their own mode
     for (auto& [id, l] : out)
         if (active(l)) {
@@ -396,8 +525,12 @@ void clear_cache() {
         std::lock_guard g(g_mutex);
         g_cache.clear();
     }
-    std::lock_guard g(g_gmutex);
-    g_groups.clear();
+    {
+        std::lock_guard g(g_gmutex);
+        g_groups.clear();
+    }
+    std::lock_guard g(g_fmutex);   // s030
+    g_filters.clear();
 }
 
 int partly_count() { return g_partly.load(); }

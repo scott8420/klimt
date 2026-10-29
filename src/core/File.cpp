@@ -1,4 +1,5 @@
 #include "core/File.hpp"
+#include "core/Patterns.hpp"   // s028 m4
 #include "core/Transfer.hpp"   // s022: converted()
 #include "core/Composite.hpp"
 
@@ -150,6 +151,18 @@ json styles_json(const Styles& s) {
                                  {"angle", g.angle}, {"style", g.style == 1 ? "radial" : "linear"}, {"scale", g.scale},
                                  {"reverse", g.reverse}, {"mode", std::string(blend_key(g.mode))}};
     }
+    if (s.pattern.on) {   // s028 m4: the pattern by its key
+        const auto& t = s.pattern;
+        const auto& pv = pattern::builtin();
+        const std::string key = t.pattern >= 0 && t.pattern < static_cast<int>(pv.size()) ? pv[static_cast<std::size_t>(t.pattern)].key : "paper";
+        o["pattern_overlay"] = {{"on", true}, {"pattern", key}, {"opacity", t.opacity}, {"scale", t.scale},
+                                {"x", t.x}, {"y", t.y}, {"mode", std::string(blend_key(t.mode))}};
+        if (t.image) {   // s033: yours -- its pixels written beside (save_klimt), its size and name here
+            o["pattern_overlay"]["user"] = t.user;
+            o["pattern_overlay"]["width"] = t.image->width();
+            o["pattern_overlay"]["height"] = t.image->height();
+        }
+    }
     if (s.inner_glow.on) {   // s023
         const auto& g = s.inner_glow;
         o["inner_glow"] = {{"on", true}, {"colour", rgb_json(g.colour)}, {"opacity", g.opacity}, {"choke", g.choke},
@@ -230,6 +243,17 @@ Styles styles_from(const json& o) {
         g.scale = std::clamp(j.value("scale", g.scale), 10, 150);
         g.reverse = j.value("reverse", false);
         g.mode = fx_mode(j, "mode");
+    }
+    if (o.contains("pattern_overlay")) {   // s028 m4
+        const auto& j = o.at("pattern_overlay");
+        auto& t = s.pattern;
+        t.on = j.value("on", true);
+        t.pattern = std::max(0, pattern::index_of(j.value("pattern", std::string("paper"))));   // unknown: the first
+        t.opacity = pct(j, "opacity", t.opacity);
+        t.scale = std::clamp(j.value("scale", t.scale), 10, 1000);
+        t.x = std::clamp(j.value("x", t.x), -1000, 1000);
+        t.y = std::clamp(j.value("y", t.y), -1000, 1000);
+        t.mode = fx_mode(j, "mode");
     }
     if (o.contains("inner_glow")) {   // s023
         const auto& j = o.at("inner_glow");
@@ -377,6 +401,13 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
         c.image.height = im.at("height").get<int>();
         c.image.format = {*depth, *mode, im.at("alpha").get<bool>()};
         c.image.dpi = im.value("dpi", 72.0);
+        c.image.origin_x = im.value("origin_x", 0.0);   // s031: the rulers' zero point
+        c.image.origin_y = im.value("origin_y", 0.0);
+        if (im.contains("guides") && im["guides"].is_array())   // s032
+            for (const auto& g : im["guides"]) {
+                if (!g.is_object() || !g.contains("at") || !g["at"].is_number()) continue;
+                c.image.guides.push_back({g.value("vertical", true), g["at"].get<double>()});
+            }
         if (c.image.width <= 0 || c.image.height <= 0 || c.image.width > formats::kMaxSide ||
             c.image.height > formats::kMaxSide ||
             static_cast<std::uint64_t>(c.image.width) * static_cast<std::uint64_t>(c.image.height) > formats::kMaxPixels) {
@@ -392,7 +423,8 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
 
         const P::Format f = c.image.format;
         const P::TileMap blank(f, c.image.width, c.image.height);
-        const int cols = blank.cols(), rows = blank.rows();
+        const int blank_cols = blank.cols(), blank_rows = blank.rows();   // s033: read_map's own size or these
+        const int cols = blank_cols, rows = blank_rows;
         std::unordered_map<std::string, P::TileMap::TileRef> loaded;   // a shared tile, read once
 
         const json& layers = doc.at("layers");
@@ -406,13 +438,17 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
         // One map's tiles (s012: a layer's pixels, or its mask): the image's
         // and those beyond it, in the format `fm`. false: damaged (error set).
         const auto read_map = [&](const json& l, const char* in_key, const char* out_key, const P::Format& fm,
-                                  P::TileMap& result) -> bool {
+                                  P::TileMap& result, int own_w = 0, int own_h = 0) -> bool {
+            // s033: a map of its own size (a pattern) -- no outside cells.
+            const int mw = own_w > 0 ? own_w : c.image.width, mh = own_h > 0 ? own_h : c.image.height;
+            const int cols = own_w > 0 ? (mw + P::kTile - 1) / P::kTile : blank_cols;
+            const int rows = own_w > 0 ? (mh + P::kTile - 1) / P::kTile : blank_rows;
             const std::size_t tb = static_cast<std::size_t>(P::kTile) * P::kTile * static_cast<std::size_t>(fm.bytes_per_pixel());
             std::vector<P::TileMap::TileRef> grid(static_cast<std::size_t>(cols) * static_cast<std::size_t>(rows));
             P::TileMap::Outside outside;   // s010: the pixels beyond the image
             const json none = json::array();
             const json& in_list = l.contains(in_key) ? l.at(in_key) : none;
-            const json& out_list = l.contains(out_key) ? l.at(out_key) : none;
+            const json& out_list = own_w > 0 || !l.contains(out_key) ? none : l.at(out_key);
             for (int pass = 0; pass < 2; ++pass)
             for (const auto& t : pass == 0 ? in_list : out_list) {
                 if (p.stop()) { error = "cancelled"; return false; }
@@ -451,7 +487,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 ++done;
                 if (total && (done & 15) == 0) p.at(static_cast<double>(done) / static_cast<double>(total));
             }
-            result = P::TileMap::from_tiles(fm, c.image.width, c.image.height, std::move(grid)).with_outside(std::move(outside));
+            result = P::TileMap::from_tiles(fm, mw, mh, std::move(grid)).with_outside(std::move(outside));
             return true;
         };
         for (const auto& l : layers) {
@@ -461,6 +497,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             const std::string kind = l.at("kind").get<std::string>();
             if (kind == "pixel") L.kind = Kind::Pixel;
             else if (kind == "group") L.kind = Kind::Group;
+            else if (kind == "filter") L.kind = Kind::Filter;   // s030: its filter in "filters"
             else if (kind == "adjustment") {   // s013
                 L.kind = Kind::Adjustment;
                 const auto a = adjust_from(l.at("adjust"));
@@ -468,13 +505,23 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 L.adjust = *a;
             }
             else { error = "a layer kind this Klimt doesn't know (" + kind + ")"; return std::nullopt; }
-            if (l.contains("filters") && L.kind == Kind::Pixel)   // s018: live filters
+            if (l.contains("filters") && (L.kind == Kind::Pixel || L.kind == Kind::Filter))   // s018: live filters; s030
                 for (const auto& jf : l.at("filters")) {
                     const auto lf = live_from(jf);
                     if (!lf) { error = "a live filter this Klimt doesn't know"; return std::nullopt; }
                     L.filters.push_back(*lf);
                 }
             if (l.contains("styles") && L.kind == Kind::Pixel) L.styles = styles_from(l.at("styles"));   // s019
+            if (L.styles.pattern.on && l.contains("styles") && l.at("styles").contains("pattern_overlay")) {   // s033: yours
+                const auto& po = l.at("styles").at("pattern_overlay");
+                const int pw = po.value("width", 0), ph = po.value("height", 0);
+                if (po.contains("tiles") && pw > 0 && ph > 0 && pw <= pattern::kMaxSide && ph <= pattern::kMaxSide) {
+                    P::TileMap m;
+                    if (!read_map(po, "tiles", "outside", P::Format{P::Depth::U8, P::Mode::RGB, true}, m, pw, ph)) return std::nullopt;
+                    L.styles.pattern.image = std::make_shared<const P::TileMap>(std::move(m));
+                    L.styles.pattern.user = po.value("user", std::string("Pattern"));
+                }
+            }
             if (l.contains("filter_mask") && L.kind == Kind::Pixel) {   // s018 m3
                 P::TileMap m;
                 if (!read_map(l, "filter_mask", "filter_mask_outside", P::Format{f.depth, P::Mode::Gray, false}, m)) return std::nullopt;
@@ -614,6 +661,15 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
     doc["endian"] = "little";
     doc["image"] = {{"width", c.image.width}, {"height", c.image.height}, {"depth", depth_key(f.depth)},
                     {"mode", mode_key(f.mode)}, {"alpha", f.alpha}, {"dpi", c.image.dpi}};
+    if (!c.image.guides.empty()) {   // s032
+        json gs = json::array();
+        for (const auto& g : c.image.guides) gs.push_back({{"vertical", g.vertical}, {"at", g.at}});
+        doc["image"]["guides"] = std::move(gs);
+    }
+    if (c.image.origin_x != 0 || c.image.origin_y != 0) {   // s031
+        doc["image"]["origin_x"] = c.image.origin_x;
+        doc["image"]["origin_y"] = c.image.origin_y;
+    }
     doc["next_id"] = c.next_id;
     std::unordered_map<const P::Tile*, std::string> named;   // a shared tile, written once
     json layers = json::array();
@@ -656,13 +712,20 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         return true;
     };
     for (const auto& [id, L] : c.layers) {
-        json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : L.kind == Kind::Adjustment ? "adjustment" : "pixel"}, {"name", L.name},
+        json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : L.kind == Kind::Adjustment ? "adjustment" : L.kind == Kind::Filter ? "filter" : "pixel"}, {"name", L.name},
                   {"parent", L.parent}, {"pos", L.pos}, {"visible", L.visible}, {"locks", L.locks},
                   {"opacity", L.opacity}, {"fill", L.fill}, {"blend", std::string(blend_key(L.blend))},
                   {"clipped", L.clipped}};
         if (L.pixels && L.kind == Kind::Pixel && !write_map(l, *L.pixels, "tiles", "outside")) return false;
         if (L.kind == Kind::Adjustment) l["adjust"] = adjust_json(L.adjust);   // s013
+        if (L.kind == Kind::Filter) {   // s030: its one filter
+            json fs = json::array();
+            for (const auto& lf : L.filters) fs.push_back(live_json(lf));
+            l["filters"] = std::move(fs);
+        }
         if (L.kind == Kind::Pixel && L.styles.any()) l["styles"] = styles_json(L.styles);   // s019
+        if (L.styles.pattern.on && L.styles.pattern.image && l.contains("styles") && l["styles"].contains("pattern_overlay"))   // s033
+            if (!write_map(l["styles"]["pattern_overlay"], *L.styles.pattern.image, "tiles", "outside")) return false;
         if (L.kind == Kind::Pixel && !L.filters.empty()) {                      // s018: live filters
             json fs = json::array();
             for (const auto& lf : L.filters) fs.push_back(live_json(lf));

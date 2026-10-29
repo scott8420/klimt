@@ -5,6 +5,7 @@
 // spread, position). It writes nothing: it says what changed (`changed`) and
 // when a slider drag starts and ends (`begin` / `end`), so Properties makes a
 // drag ONE step. docs/styles.md.
+#include <gtkmm/dropdown.h>   // s033
 #include "core/Styles.hpp"
 
 #include <gtkmm/box.h>
@@ -24,8 +25,16 @@ public:
     sigc::signal<void(const core::Styles&)>& signal_changed() { return m_changed; }
     sigc::signal<void()>& signal_begin() { return m_begin; }
     sigc::signal<void()>& signal_end() { return m_end; }
+    // s033: the pattern library changed (Define Pattern): the list again.
+    void patterns_changed() { fill_patterns(); paint(); }
 
 private:
+    // s033: Pattern Overlay's list -- the built-ins, the library, and the
+    // layer's own pattern when the library doesn't have it (from a file).
+    struct PatternItem { int builtin = -1; std::string user; std::shared_ptr<const pixel::TileMap> image; };
+    std::vector<PatternItem> m_pattern_items;
+    Gtk::DropDown* m_pattern_dd = nullptr;
+    void fill_patterns();
     // One effect's section: an expander with a box in its label.
     Gtk::Box* section(const char* name, bool* on);
     void mode(Gtk::Box& into, pixel::Blend* field, const char* label = "Mode");   // s025: an effect's blend mode

@@ -42,6 +42,10 @@ else
         "$prefix/bin/klimt"
         "$prefix/share/applications/$APP_ID.desktop"
         "$prefix/share/icons/hicolor/scalable/apps/$APP_ID.svg"
+    )
+    # s027: the PNG icon set, every size folder
+    for f in "$prefix/share/icons/hicolor"/*/apps/"$APP_ID".png; do files+=("$f"); done
+    files+=(
         "$prefix/share/icons/hicolor/symbolic/apps/$APP_ID-symbolic.svg"
     )
 fi

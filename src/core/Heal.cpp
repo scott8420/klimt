@@ -203,9 +203,10 @@ bool stroke(DocJournal& j, Document& d, const Document::Id& id, const std::vecto
     const pixel::TileMap original = l0.pixels ? *l0.pixels : d.blank();
     pixel::TileMap cov = paint::new_coverage(original.width(), original.height());
     double carry = 1e9;
+    paint::Jitter jit;   // s028
     for (std::size_t i = 0; i < path.size(); ++i) {
         TileSet touched = tiles_of(d.image());
-        cov = paint::add_pen_dabs(cov, b, paint::dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, carry), touched);
+        cov = paint::add_pen_dabs(cov, b, jit.apply(paint::dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, carry), b), touched);
     }
     if (spot) {
         const auto o = spot_offset(*ref, cov, b.size);

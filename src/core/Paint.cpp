@@ -1,5 +1,6 @@
 #include "core/Paint.hpp"
 #include "core/File.hpp"   // s015: flatten, for All Layers
+#include "core/Patterns.hpp"   // s033: the brush's texture
 
 #include <algorithm>
 #include <cmath>
@@ -78,6 +79,112 @@ std::optional<Dab> Smoother::finish() {
     return m_last_dab;
 }
 
+double dab_radius(const Brush& b, const Dab& d) {
+    return std::max(0.5, dab_radius(b, d.p) * std::clamp(static_cast<double>(d.size), 0.01, 1.0));
+}
+
+// ── s028: the dynamics' dice ────────────────────────────────────────────────
+
+double Jitter::next() {   // xorshift64*: small, fast, the same everywhere
+    m_s ^= m_s >> 12;
+    m_s ^= m_s << 25;
+    m_s ^= m_s >> 27;
+    const std::uint64_t r = m_s * 0x2545F4914F6CDD1DULL;
+    return static_cast<double>(r >> 11) * (1.0 / 9007199254740992.0);
+}
+
+void Jitter::colours(const pixel::Format& f, const float fg[3], const float bg[3]) {
+    m_colours = true;
+    m_format = f;
+    for (int i = 0; i < 3; ++i) { m_fg[i] = fg[i]; m_bg[i] = bg[i]; }
+}
+
+void jitter_hsb(float rgb[3], double dh, double ds, double dv) {
+    const double r = rgb[0], g = rgb[1], b = rgb[2];
+    const double mx = std::max({r, g, b}), mn = std::min({r, g, b}), c = mx - mn;
+    double h = 0;
+    if (c > 1e-9) {
+        if (mx == r) h = std::fmod((g - b) / c, 6.0);
+        else if (mx == g) h = (b - r) / c + 2;
+        else h = (r - g) / c + 4;
+        h /= 6;
+    }
+    double s = mx > 1e-9 ? c / mx : 0, v = mx;
+    h = std::fmod(h + dh + 2.0, 1.0);
+    s = std::clamp(s + ds, 0.0, 1.0);
+    v = std::clamp(v + dv, 0.0, 1.0);
+    const double hh = h * 6, cc = v * s, x = cc * (1 - std::abs(std::fmod(hh, 2.0) - 1)), m = v - cc;
+    double o[3] = {0, 0, 0};
+    switch (static_cast<int>(hh) % 6) {
+        case 0: o[0] = cc; o[1] = x; break;
+        case 1: o[0] = x; o[1] = cc; break;
+        case 2: o[1] = cc; o[2] = x; break;
+        case 3: o[1] = x; o[2] = cc; break;
+        case 4: o[0] = x; o[2] = cc; break;
+        default: o[0] = cc; o[2] = x; break;
+    }
+    for (int i = 0; i < 3; ++i) rgb[i] = static_cast<float>(std::clamp(o[i] + m, 0.0, 1.0));
+}
+
+pixel::Px Jitter::colour_of(const Brush& b) {
+    const auto& y = b.dyn;
+    const double t = y.fg_bg * next();
+    float rgb[3];
+    for (int i = 0; i < 3; ++i) rgb[i] = static_cast<float>(m_fg[i] + (m_bg[i] - m_fg[i]) * t);
+    const double dh = (next() * 2 - 1) * 0.5 * y.hue, ds = (next() * 2 - 1) * y.sat, dv = (next() * 2 - 1) * y.bri;
+    if (dh != 0 || ds != 0 || dv != 0) jitter_hsb(rgb, dh, ds, dv);
+    return from_srgb(m_format, rgb[0], rgb[1], rgb[2]);
+}
+
+std::vector<Dab> Jitter::apply(const std::vector<Dab>& path, const Brush& b) {
+    const auto& y = b.dyn;
+    if (!y.any()) return path;
+    const bool tint = y.colour() && m_colours;
+    if (tint && !y.per_tip && !m_stroke_drawn) { m_stroke_colour = colour_of(b); m_stroke_drawn = true; }
+    std::vector<Dab> out;
+    out.reserve(path.size() * static_cast<std::size_t>(std::max(1, y.count)));
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        const Dab& d = path[i];
+        // The path's direction, for scattering across it (the stroke's first
+        // dab looks ahead to the next).
+        const bool ahead = !m_have_last && i + 1 < path.size();
+        const double dx = ahead ? path[i + 1].x - d.x : d.x - m_lx, dy = ahead ? path[i + 1].y - d.y : d.y - m_ly;
+        if (m_have_last || ahead) {
+            const double len = std::hypot(dx, dy);
+            if (len > 1e-6) { m_dx = dx / len; m_dy = dy / len; }
+        }
+        m_have_last = true;
+        m_lx = d.x;
+        m_ly = d.y;
+        const int count = std::clamp(y.count, 1, 16);
+        const int n = std::max(1, count - static_cast<int>(std::floor(std::clamp(y.count_jitter, 0.0, 1.0) * count * next())));
+        for (int k = 0; k < n; ++k) {
+            Dab e = d;
+            if (y.size_jitter > 0) {
+                const double lo = std::clamp(y.min_size, 0.0, 1.0);
+                e.size = static_cast<float>(std::max(lo, 1 - std::clamp(y.size_jitter, 0.0, 1.0) * next()));
+                e.size = std::max(e.size, 0.01f);
+            }
+            if (y.angle_jitter > 0) e.turn = static_cast<float>((next() * 2 - 1) * 180 * std::clamp(y.angle_jitter, 0.0, 1.0));
+            if (y.roundness_jitter > 0)
+                e.round = static_cast<float>(std::max(std::clamp(y.min_roundness, 0.0, 1.0), 1 - std::clamp(y.roundness_jitter, 0.0, 1.0) * next()));
+            if (y.scatter > 0) {
+                const double reach = std::clamp(y.scatter, 0.0, 10.0) * 2 * dab_radius(b, d.p);
+                const double across = (next() * 2 - 1) * reach;
+                const double along = y.both_axes ? (next() * 2 - 1) * reach : 0;
+                e.x += -m_dy * across + m_dx * along;
+                e.y += m_dx * across + m_dy * along;
+            }
+            if (tint) {
+                e.tinted = true;
+                e.colour = y.per_tip ? colour_of(b) : m_stroke_colour;
+            }
+            out.push_back(e);
+        }
+    }
+    return out;
+}
+
 double dab_radius(const Brush& b, float p) {
     const double r = std::max(0.5, b.size / 2);
     if (!b.pressure_size) return r;
@@ -121,6 +228,20 @@ float grain(int ix, int iy) {
 }
 }  // namespace
 
+// s033: the texture's grain at a pixel, applied to a dab's strength a.
+float Texture::at(int x, int y, float a) const {
+    if (!on || a <= 0.f) return a;
+    float g;
+    if (image) {
+        float px[4];
+        pattern::sample(*image, x, y, scale, 0, 0, px);
+        g = (0.2126f * px[0] + 0.7152f * px[1] + 0.0722f * px[2]) * px[3] + (1.f - px[3]);   // clear: as white
+    } else g = pattern::grey(builtin, x, y, scale, 0, 0);
+    if (invert) g = 1.f - g;
+    const float d = static_cast<float>(std::clamp(depth, 0.0, 1.0));
+    return subtract ? std::max(0.f, a - (1.f - g) * d) : a * (1.f - d + d * g);
+}
+
 double tip_reach(double r, const Brush& b) { return (b.tip == Tip::Square ? r * 1.4143 : r) + 1; }
 
 float tip_alpha(double dx, double dy, double r, const Brush& b, const Dab& d, int ix, int iy) {
@@ -132,6 +253,8 @@ float tip_alpha(double dx, double dy, double r, const Brush& b, const Dab& d, in
             round = std::min(round, 1.0 - 0.8 * m);
         }
     }
+    angle += d.turn;   // s028: the dab's own angle and roundness jitter
+    round *= d.round;
     round = std::clamp(round, 0.05, 1.0);
     double u = dx, v = dy;
     if (angle != 0 || round < 1) {
@@ -142,6 +265,7 @@ float tip_alpha(double dx, double dy, double r, const Brush& b, const Dab& d, in
     const double dist = b.tip == Tip::Square ? std::max(std::abs(u), std::abs(v)) : std::hypot(u, v);
     float a = dab_alpha(dist, r, b.hardness);
     if (b.tip == Tip::Chalk && a > 0.f) a *= std::clamp(grain(ix, iy) * 1.6f - 0.3f, 0.f, 1.f);
+    if (b.texture.on) a = b.texture.at(ix, iy, a);   // s033
     return a;
 }
 
@@ -154,8 +278,29 @@ pixel::TileMap add_dabs(const pixel::TileMap& cov, const Brush& b, const std::ve
     return add_pen_dabs(cov, b, dabs, touched);
 }
 
+pixel::TileMap new_tint(const pixel::Format& layer, int w, int h) {
+    return pixel::TileMap(pixel::Format{pixel::Depth::F32, layer.mode, false}, w, h);
+}
+
 pixel::TileMap add_pen_dabs(const pixel::TileMap& cov, const Brush& b, const std::vector<Dab>& dabs, TileSet& touched) {
+    return add_pen_dabs(cov, b, dabs, touched, nullptr);
+}
+
+pixel::TileMap add_pen_dabs(const pixel::TileMap& cov, const Brush& b, const std::vector<Dab>& dabs, TileSet& touched,
+                            pixel::TileMap* tint) {
     if (dabs.empty()) return cov;
+    // s028 m2: the tint's grid, a tile's colours in `tb` (cc floats a pixel).
+    const pixel::Format tf = tint ? tint->format() : pixel::Format{};
+    const int cc = tint ? tf.colour_channels() : 0;
+    const auto ucc = static_cast<std::size_t>(cc);
+    std::vector<pixel::TileMap::TileRef> tgrid;
+    if (tint) {
+        tgrid.resize(static_cast<std::size_t>(tint->cols()) * static_cast<std::size_t>(tint->rows()));
+        for (int row = 0; row < tint->rows(); ++row)
+            for (int col = 0; col < tint->cols(); ++col)
+                tgrid[static_cast<std::size_t>(row) * static_cast<std::size_t>(tint->cols()) + static_cast<std::size_t>(col)] = tint->tile(col, row);
+    }
+    std::vector<float> tb(tint ? kPx * ucc : 0);
     const int w = cov.width(), h = cov.height();
     const double r = tip_reach(std::max(0.5, b.size / 2), b);   // the largest a dab can be (pressure only shrinks it)
     // Group the work per tile: each touched tile is copied once.
@@ -173,10 +318,20 @@ pixel::TileMap add_pen_dabs(const pixel::TileMap& cov, const Brush& b, const std
             if (!hit) continue;
             auto& slot = grid[static_cast<std::size_t>(row) * static_cast<std::size_t>(cov.cols()) + static_cast<std::size_t>(col)];
             for (std::size_t i = 0; i < kPx; ++i) buf[i] = cov_at(slot.get(), i);
-            bool changed = false;
+            bool changed = false, tchanged = false;
+            pixel::TileMap::TileRef* tslot = nullptr;
+            if (tint) {   // s028 m2: this tile's colours
+                tslot = &tgrid[static_cast<std::size_t>(row) * static_cast<std::size_t>(tint->cols()) + static_cast<std::size_t>(col)];
+                const pixel::Tile* tt = tslot->get();
+                if (!tt) std::fill(tb.begin(), tb.end(), 0.f);
+                else if (tt->is_uniform()) {
+                    for (std::size_t i = 0; i < kPx; ++i) std::memcpy(tb.data() + i * ucc, tt->data(), ucc * 4);
+                } else std::memcpy(tb.data(), tt->data(), kPx * ucc * 4);
+            }
             for (const auto& p : dabs) {
-                const double pr = dab_radius(b, p.p), reach = tip_reach(pr, b);
+                const double pr = dab_radius(b, p), reach = tip_reach(pr, b);   // s028: its size jitter
                 const float strength = dab_strength(b, p.p);
+                const pixel::Px& k = p.tinted ? p.colour : b.colour;   // s028 m2
                 const int x0 = std::max(cell.x, static_cast<int>(std::floor(p.x - reach)));
                 const int x1 = std::min(cell.x + cell.w, static_cast<int>(std::ceil(p.x + reach)));
                 const int y0 = std::max(cell.y, static_cast<int>(std::floor(p.y - reach)));
@@ -184,7 +339,17 @@ pixel::TileMap add_pen_dabs(const pixel::TileMap& cov, const Brush& b, const std
                 for (int y = y0; y < y1; ++y)
                     for (int x = x0; x < x1; ++x) {
                         const float a = tip_alpha(x + 0.5 - p.x, y + 0.5 - p.y, pr, b, p, x, y) * strength;   // s017
-                        float& c = buf[static_cast<std::size_t>(y - cell.y) * kTile + static_cast<std::size_t>(x - cell.x)];
+                        const std::size_t at = static_cast<std::size_t>(y - cell.y) * kTile + static_cast<std::size_t>(x - cell.x);
+                        float& c = buf[at];
+                        if (tint && a > 0.f) {   // s028 m2: this dab's colour over the stroke's, by its strength
+                            const float af = b.flow >= 1 ? a : a * static_cast<float>(b.flow);
+                            const float w = af / (af + c * (1 - af));
+                            float* t = tb.data() + at * ucc;
+                            for (std::size_t q = 0; q < ucc; ++q) {
+                                const float n = t[q] + (k.c[q] - t[q]) * w;
+                                if (n != t[q]) { t[q] = n; tchanged = true; }
+                            }
+                        }
                         if (b.flow >= 1) {
                             if (a > c) { c = a; changed = true; }
                         } else if (a > 0.f) {   // s012: build up, a flow's worth a dab
@@ -193,17 +358,24 @@ pixel::TileMap add_pen_dabs(const pixel::TileMap& cov, const Brush& b, const std
                         }
                     }
             }
+            if (tchanged) {   // s028 m2
+                std::vector<std::uint8_t> tbytes(kPx * ucc * 4);
+                std::memcpy(tbytes.data(), tb.data(), tbytes.size());
+                *tslot = pixel::Tile::from_bytes(tf, std::move(tbytes));
+                touched.add(col, row);
+            }
             if (!changed) continue;
             std::vector<std::uint8_t> bytes(kPx * 4);
             std::memcpy(bytes.data(), buf.data(), bytes.size());
             slot = pixel::Tile::from_bytes(kCov, std::move(bytes));
             touched.add(col, row);
         }
+    if (tint) *tint = pixel::TileMap::from_tiles(tf, tint->width(), tint->height(), std::move(tgrid));
     return pixel::TileMap::from_tiles(kCov, w, h, std::move(grid));
 }
 
 pixel::TileMap apply(const pixel::TileMap& original, const pixel::TileMap& current, const pixel::TileMap& cov,
-                     const pixel::TileMap* mask, const Brush& b, const TileSet& touched) {
+                     const pixel::TileMap* mask, const Brush& b, const TileSet& touched, const pixel::TileMap* tint) {
     const pixel::Format f = original.format();
     const int cc = f.colour_channels();
     const auto ai = static_cast<std::size_t>(f.channels() - 1);
@@ -222,6 +394,9 @@ pixel::TileMap apply(const pixel::TileMap& original, const pixel::TileMap& curre
             const auto ct = cov.tile(col, row);
             const auto ot = original.tile(col, row);
             if (!ct) { slot = ot; continue; }
+            // s028 m2: the stroke's own colours (the tint), when it has them.
+            const auto tt = tint && !src && !b.erase && tint->format().mode == f.mode ? tint->tile(col, row) : nullptr;
+            const auto tcc = static_cast<std::size_t>(cc);
             pixel::TileWriter wr = ot ? pixel::TileWriter(ot) : pixel::TileWriter(f, pixel::transparent());
             const pixel::Rect cell = pixel::Rect{col * kTile, row * kTile, kTile, kTile}.intersect({0, 0, original.width(), original.height()});
             for (int y = 0; y < cell.h; ++y)
@@ -257,16 +432,23 @@ pixel::TileMap apply(const pixel::TileMap& original, const pixel::TileMap& curre
                         } else {
                             for (int k = 0; k < cc; ++k) { const auto q = static_cast<std::size_t>(k); p.c[q] += (b.background.c[q] - o.c[q]) * a; }
                         }
-                    } else if (!f.alpha || b.alpha_lock) {
-                        if (f.alpha && o.c[ai] <= 0.f) continue;
-                        for (int k = 0; k < cc; ++k) { const auto q = static_cast<std::size_t>(k); p.c[q] += (b.colour.c[q] - o.c[q]) * a; }
                     } else {
-                        const float oa = o.c[ai], out = a + oa * (1 - a);
-                        for (int k = 0; k < cc; ++k) {
-                            const auto q = static_cast<std::size_t>(k);
-                            p.c[q] = out > 0.f ? (b.colour.c[q] * a + o.c[q] * oa * (1 - a)) / out : 0.f;
+                        pixel::Px col_px = b.colour;   // s028 m2: or the tint's
+                        if (tt) {
+                            const float* tv = reinterpret_cast<const float*>(tt->data()) + (tt->is_uniform() ? 0 : i * tcc);
+                            for (std::size_t q = 0; q < tcc; ++q) col_px.c[q] = tv[q];
                         }
-                        p.c[ai] = out;
+                        if (!f.alpha || b.alpha_lock) {
+                            if (f.alpha && o.c[ai] <= 0.f) continue;
+                            for (int k = 0; k < cc; ++k) { const auto q = static_cast<std::size_t>(k); p.c[q] += (col_px.c[q] - o.c[q]) * a; }
+                        } else {
+                            const float oa = o.c[ai], out = a + oa * (1 - a);
+                            for (int k = 0; k < cc; ++k) {
+                                const auto q = static_cast<std::size_t>(k);
+                                p.c[q] = out > 0.f ? (col_px.c[q] * a + o.c[q] * oa * (1 - a)) / out : 0.f;
+                            }
+                            p.c[ai] = out;
+                        }
                     }
                     wr.set(x, y, p);
                 }
@@ -340,7 +522,7 @@ pixel::TileMap smudge(const pixel::TileMap& current, const pixel::TileMap* mask,
             carry.started = true;
             continue;
         }
-        const double pr = dab_radius(b, d.p);
+        const double pr = dab_radius(b, d);   // s028
         const float strength = dab_strength(b, d.p) * op;
         const pixel::Rect box = pixel::Rect{cx - R, cy - R, side, side}.intersect({0, 0, out.width(), out.height()});
         if (box.empty()) continue;
@@ -378,8 +560,9 @@ bool stroke_smudge(DocJournal& j, Document& d, const Document::Id& id, const std
     SmudgeCarry carry;
     TileSet touched = tiles_of(d.image());
     double spacing = 1e9;
+    Jitter jit;   // s028
     for (std::size_t i = 0; i < path.size(); ++i)
-        cur = smudge(cur, d.selection(), b, dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, spacing), carry, touched);
+        cur = smudge(cur, d.selection(), b, jit.apply(dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, spacing), b), carry, touched);
     return layers::set_pixels_if(j, d, id, l0.pixels, std::move(cur), "Smudge");
 }
 
@@ -393,25 +576,33 @@ bool stroke_selection(DocJournal& j, Document& d, const std::vector<Dab>& path, 
     pixel::TileMap cov = new_coverage(original.width(), original.height());
     TileSet touched = tiles_of(im);
     double carry = 1e9;
+    Jitter jit;   // s028
     for (std::size_t i = 0; i < path.size(); ++i)
-        cov = add_pen_dabs(cov, b, dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, carry), touched);
+        cov = add_pen_dabs(cov, b, jit.apply(dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, carry), b), touched);
     return select::set(j, d, apply(original, original, cov, nullptr, b, touched), "Quick Mask: Paint");
 }
 
 bool stroke_pen(DocJournal& j, Document& d, const Document::Id& id, const std::vector<Dab>& path, Brush b) {
+    return stroke_pen(j, d, id, path, std::move(b), Jitter{});
+}
+
+bool stroke_pen(DocJournal& j, Document& d, const Document::Id& id, const std::vector<Dab>& path, Brush b, Jitter jit) {
     if (path.empty() || !refusal(d, id, b).empty()) return false;
     const auto l0 = *d.get(id);
     b.alpha_lock = (l0.locks & lock::Alpha) != 0;
     const pixel::TileMap original = l0.pixels ? *l0.pixels : d.blank();
     pixel::TileMap cov = new_coverage(original.width(), original.height());
     pixel::TileMap cur = original;
+    // s028 m2: the Brush with colour dynamics keeps a tint.
+    std::optional<pixel::TileMap> tint;
+    if (b.dyn.colour() && !b.erase && !b.source) tint = new_tint(original.format(), original.width(), original.height());
     j.begin(b.source ? "Clone Stamp" : b.erase ? "Eraser" : "Brush Stroke", {id});
     double carry = 1e9;   // the first dab lands at the first point
     for (std::size_t i = 0; i < path.size(); ++i) {
-        const auto dabs = dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, carry);
+        const auto dabs = jit.apply(dabs_along(path[i == 0 ? 0 : i - 1], path[i], b, carry), b);   // s028
         TileSet touched = tiles_of(d.image());
-        cov = add_pen_dabs(cov, b, dabs, touched);
-        cur = apply(original, cur, cov, d.selection(), b, touched);
+        cov = add_pen_dabs(cov, b, dabs, touched, tint ? &*tint : nullptr);
+        cur = apply(original, cur, cov, d.selection(), b, touched, tint ? &*tint : nullptr);
         Layer l = *d.get(id);
         l.pixels = cur.tile_count() ? std::make_shared<const pixel::TileMap>(cur) : nullptr;
         d.put(id, l);   // inside the gesture: the door is open

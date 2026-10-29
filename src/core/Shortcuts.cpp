@@ -213,10 +213,19 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
     reg.push_back({"View", "win.zoom-out",    {"<Ctrl>minus", "<Ctrl>KP_Subtract"}, "Ctrl+\u2212", "Zoom out"});
     reg.push_back({"View", "win.zoom-fit",    {"<Ctrl>0", "<Ctrl>KP_0"}, "Ctrl+0", "Fit the image in the window"});
     reg.push_back({"View", "win.zoom-actual", {"<Ctrl>1"}, "Ctrl+1", "Actual size (100%)"});
+    reg.push_back({"View", "win.view-rulers", {"<Ctrl>r"}, "Ctrl+R", "Show / hide the rulers"});   // s031
+    reg.push_back({"View", "win.view-guides", {"<Ctrl>semicolon"}, "Ctrl+;", "Show / hide the guides"});   // s032
+    reg.push_back({"View", "win.guides-lock", {"<Ctrl><Alt>semicolon"}, "Ctrl+Alt+;", "Lock / unlock the guides"});
+    reg.push_back({"View", "win.guides-snap", {"<Ctrl><Shift>semicolon"}, "Ctrl+Shift+;", "Snap on / off (guides, the picture's edges and centre)"});
+    reg.push_back({"View", "", {}, "Drag from a ruler", "A new guide (the top ruler: level; the left: upright)"});
+    reg.push_back({"View", "", {}, "Move tool on a guide", "Drag it; drag it off the picture to delete it"});
+    reg.push_back({"View", "", {}, "Drag from the rulers' corner", "Set the zero point (double-click the corner: back to the top-left)"});
+    reg.push_back({"View", "", {}, "Right-click a ruler", "Its unit: pixels, inches, cm, mm, points, picas, percent"});
     reg.push_back({"View", "", {}, "Ctrl+scroll", "Zoom at the pointer"});
     reg.push_back({"View", "", {}, "Scroll  /  Shift+scroll", "Pan up and down / sideways"});
     reg.push_back({"View", "", {}, "Space+drag  /  middle-drag", "Pan (any tool); the Hand tool drags too"});
     reg.push_back({"View", "", {}, "Click  /  Alt+click", "Zoom tool: zoom in / out where you click"});
+    reg.push_back({"View", "", {}, "Drag  /  Alt+drag", "Zoom tool: the box fills the view / the view shrinks into the box"});   // s030
     return reg;
     }();
     return kReg;

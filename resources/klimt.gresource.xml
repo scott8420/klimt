@@ -17,6 +17,7 @@
          scripts/make_icons.sh (strokes -> filled outlines, so GTK can recolour) -->
     <file preprocess="xml-stripblanks" alias="klimt-layer-mask-symbolic.svg">icons/scalable/apps/klimt-layer-mask-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-adjustment-symbolic.svg">icons/scalable/apps/klimt-adjustment-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="klimt-filter-layer-symbolic.svg">icons/scalable/apps/klimt-filter-layer-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-subject-symbolic.svg">icons/scalable/apps/klimt-subject-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-brush-symbolic.svg">icons/scalable/apps/klimt-tool-brush-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-smudge-symbolic.svg">icons/scalable/apps/klimt-tool-smudge-symbolic.svg</file>
@@ -31,5 +32,15 @@
     <file preprocess="xml-stripblanks" alias="klimt-tool-select-symbolic.svg">icons/scalable/apps/klimt-tool-select-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-text-symbolic.svg">icons/scalable/apps/klimt-tool-text-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-zoom-symbolic.svg">icons/scalable/apps/klimt-tool-zoom-symbolic.svg</file>
+  </gresource>
+  <!-- s027: the About window's painting panel -- Klimt's The Dancer, made with the app
+       icons by scripts/make_app_icon.py. Not an icon, so its own prefix. -->
+  <gresource prefix="/io/github/scott8420/Klimt/images">
+    <file alias="klimt-about-panel.jpg">images/klimt-about-panel.jpg</file>
+  </gresource>
+  <!-- s027: the About window's License tab reads the project's own LICENSE,
+       so the two can't drift. -->
+  <gresource prefix="/io/github/scott8420/Klimt/text">
+    <file alias="LICENSE">../LICENSE</file>
   </gresource>
 </gresources>

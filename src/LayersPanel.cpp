@@ -159,6 +159,24 @@ LayersPanel::LayersPanel(core::Document& doc, core::DocJournal& journal)
         adj->add_css_class("flat");
         bar->append(*adj);
     }
+    // s030: a new FILTER LAYER -- non-destructive filters, by submenu.
+    {
+        auto model = Gio::Menu::create();
+        for (const char* g : {"Blur", "Sharpen", "Noise", "Other"}) {
+            auto sec = Gio::Menu::create();
+            for (const auto k : core::filter::kinds())
+                if (core::filter::group(k) == g)
+                    sec->append(std::string(core::filter::label(k)), "win.filter-layer-" + std::string(core::filter::key(k)));
+            model->append_section(g, sec);
+        }
+        auto fx = Gtk::make_managed<Gtk::MenuButton>();
+        fx->set_name("layers.filter");
+        fx->set_icon_name("klimt-filter-layer-symbolic");
+        fx->set_menu_model(model);
+        fx->set_tooltip_text("New filter layer -- a filter over everything below, kept live: Blur, Sharpen, Noise, High Pass");
+        fx->add_css_class("flat");
+        bar->append(*fx);
+    }
     // The rest behind one button (s005: less clutter; each keeps its key).
     auto more_model = Gio::Menu::create();
     more_model->append("Group Layers", "win.layer-group");
@@ -297,10 +315,14 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
         box->append(*clip);
     }
     auto kind = Gtk::make_managed<Gtk::Image>();
-    const bool adj = l.kind == core::Kind::Adjustment;   // s013
+    const bool flt = l.kind == core::Kind::Filter;   // s030
+    const bool adj = l.kind == core::Kind::Adjustment || flt;   // s013 (a filter layer: alike -- no pixels, a mask)
     const Id target = mask_target();
-    kind->set_from_icon_name(group ? "folder-symbolic" : adj ? "klimt-adjustment-symbolic" : "image-x-generic-symbolic");
-    if (adj) kind->set_tooltip_text(std::string(core::adjust::label(l.adjust.kind)) + " -- an adjustment layer: "
+    kind->set_from_icon_name(group ? "folder-symbolic" : flt ? "klimt-filter-layer-symbolic" : adj ? "klimt-adjustment-symbolic" : "image-x-generic-symbolic");
+    if (flt && !l.filters.empty())
+        kind->set_tooltip_text(std::string(core::filter::label(l.filters[0].f.kind)) + " -- a filter layer: "
+                               "edit it in Properties; painting goes to its mask");
+    else if (adj) kind->set_tooltip_text(std::string(core::adjust::label(l.adjust.kind)) + " -- an adjustment layer: "
                                     "edit it in Properties; painting goes to its mask");
     if (l.mask && target != id && !adj && !group) kind->add_css_class("accent");   // s012: the pixels are what's painted
     if (l.mask && !adj && !group) {   // the layer's own icon: back to painting its pixels
@@ -379,7 +401,7 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
     if (l.opacity < 100) info += (info.empty() ? "" : " · ") + std::to_string(l.opacity) + "%";
     if (l.fill < 100) info += (info.empty() ? "" : " · ") + std::string("fill ") + std::to_string(l.fill) + "%";
     if (l.styles.any()) info += (info.empty() ? "" : " · ") + std::string("styles");   // s019
-    if (!l.filters.empty()) {   // s018: live filters under it
+    if (!l.filters.empty() && l.kind == core::Kind::Pixel) {   // s018: live filters under it (s030: not a filter layer's own)
         int on = 0;
         for (const auto& f : l.filters) on += f.on;
         info += (info.empty() ? "" : " · ") + std::string("fx ") + std::to_string(on) + (on == static_cast<int>(l.filters.size()) ? "" : "/" + std::to_string(l.filters.size()));
@@ -527,7 +549,7 @@ LayersPanel::Id LayersPanel::mask_target() const {
     if (m_sel.size() == 1) {
         const auto l = m_doc.get(m_sel.front());
         // No pixels of its own (an adjustment layer, s024 a group): painting goes to its mask.
-        if (l && (l->kind == core::Kind::Adjustment || l->kind == core::Kind::Group) && l->mask) return m_sel.front();
+        if (l && (l->kind == core::Kind::Adjustment || l->kind == core::Kind::Filter || l->kind == core::Kind::Group) && l->mask) return m_sel.front();
     }
     return {};
 }

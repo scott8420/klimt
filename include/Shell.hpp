@@ -12,6 +12,7 @@
 #include "core/Tabs.hpp"       // s020: several documents in one window
 #include "core/Fade.hpp"       // s020: Edit > Fade
 #include "CanvasView.hpp"
+#include "RulerView.hpp"     // s031
 #include "ContextStrip.hpp"
 #include "EdgeTab.hpp"
 #include "ChannelsPanel.hpp"   // s016: saved selections
@@ -228,6 +229,9 @@ private:
     void on_quick_mask();                        // category: select: s016 -- Q: Quick Mask on / off (view state)
     void on_save_selection();                    // category: select: s016 -- Select > Save Selection (a channel)
     void update_channels();                      // category: select: s016 -- the Channels tab follows the document
+    void on_filter_layer_new(core::FilterKind k);   // category: filter: s030 -- a new filter layer
+    void on_define_pattern();                       // category: filter: s033 -- Edit > Define Pattern
+    void show_tool_settings(const std::string& tool, Gtk::Widget& at, const Gdk::Rectangle* where);   // category: paint: s029 -- the settings popover
     void on_selection_stroke(const core::paint::Dab& p, bool erase, core::paint::Brush b, int smoothing);   // category: paint: s016 -- a Quick Mask stroke
     void on_patch(CanvasView::MoveAt at, int dx, int dy);   // category: paint: s016 -- Heal > Patch, the drag
     void patch_pump();                           // category: paint: one patch preview job at a time; the landing on release
@@ -294,6 +298,12 @@ private:
     widgets::Box       m_outer;                // vertical: split view, status
     widgets::Box       m_body;                 // horizontal: rail, centre
     widgets::Box       m_centre;               // vertical: strip, canvas
+    // s031: the rulers round the canvas, and their corner.
+    std::unique_ptr<RulerView> m_hruler, m_vruler;
+    RulerCorner        m_ruler_corner;
+    void update_rulers();                      // category: canvas: s031 -- their numbers from the document
+    void show_rulers(bool on);                 // category: canvas: s031 -- View > Rulers
+    void update_guides();                      // category: canvas: s032 -- the canvas's guides from the document
     widgets::Box       m_dock;                 // vertical: properties, stack switcher, stack
     widgets::Stack     m_dock_stack;           // Layers / Channels / History
     Gtk::Widget*       m_strip_box = nullptr;  // the strip's frame (Tab hides it); managed
@@ -350,6 +360,8 @@ private:
         std::vector<core::paint::Dab> pending;      // dabs not yet painted
         core::paint::Dab    last;
         core::paint::Smoother smoother;             // s012: the stabiliser (Smoothing)
+        core::paint::Jitter jitter;                 // s028: the dynamics' dice, one per stroke
+        std::shared_ptr<const pixel::TileMap> tint; // s028 m2: Color Dynamics -- the stroke's own colours
         bool                on_mask = false;        // s012: painting the layer's mask
         bool                on_selection = false;   // s016: Quick Mask -- painting the selection
         bool                on_filter_mask = false; // s018 m4: painting the layer's filter mask

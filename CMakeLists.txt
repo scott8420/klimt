@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s013")
+set(KLIMT_BUILD "s033")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -118,6 +118,9 @@ add_library(klimt_core STATIC
     src/core/Session.cpp      # s023: the open tabs, remembered
     src/core/ColourRange.cpp  # s024: Select > Color Range
     src/core/ColourChannels.cpp # s026: the colour channels
+    src/core/Patterns.cpp     # s028 m4: the built-in patterns (Pattern Overlay)
+    src/core/ToolDefaults.cpp # s029: each tool's saved defaults
+    src/core/Rulers.cpp       # s031: units, ruler ticks, the zero point
     src/core/Prefs.cpp        # s014 m4: the app's settings (the dock divider)
 )
 target_include_directories(klimt_core PUBLIC include)
@@ -132,7 +135,7 @@ if(KLIMT_FAST_PIXELS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(klimt_pixel PRIVATE -O2)
     set_source_files_properties(src/core/Composite.cpp src/core/Paint.cpp src/core/Canvas.cpp
                                 src/core/Move.cpp src/core/Selection.cpp src/core/Transform.cpp src/core/Gradient.cpp
-                                src/core/Adjust.cpp src/core/Filter.cpp src/core/Heal.cpp src/core/StylesRender.cpp src/core/Fade.cpp
+                                src/core/Adjust.cpp src/core/Filter.cpp src/core/Heal.cpp src/core/StylesRender.cpp src/core/Fade.cpp src/core/Patterns.cpp
                                 PROPERTIES COMPILE_OPTIONS "-O2")
 endif()
 # s007: libzip writes and reads the .klimt container (Fedora: libzip-devel).
@@ -147,7 +150,7 @@ add_executable(klimt_bench src/bench.cpp)
 target_link_libraries(klimt_bench PRIVATE klimt_core Threads::Threads)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp)
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads)
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -164,7 +167,9 @@ find_program(GLIB_COMPILE_RESOURCES glib-compile-resources REQUIRED)
 set(KLIMT_GRESOURCE_XML "${CMAKE_CURRENT_SOURCE_DIR}/resources/klimt.gresource.xml")
 set(KLIMT_RESOURCES_C   "${CMAKE_CURRENT_BINARY_DIR}/klimt-resources.c")
 file(GLOB KLIMT_RESOURCE_FILES
-     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/scalable/apps/*.svg")
+     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/scalable/apps/*.svg"
+     "${CMAKE_CURRENT_SOURCE_DIR}/resources/images/*.jpg"   # s027: the About painting
+     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")                  # s027: the License tab
 add_custom_command(
     OUTPUT  "${KLIMT_RESOURCES_C}"
     COMMAND "${GLIB_COMPILE_RESOURCES}"
@@ -212,6 +217,8 @@ add_executable(klimt
     src/CanvasView.cpp
     src/PropertiesPanel.cpp
     src/AdjustEditor.cpp      # s013: the adjustment controls
+    src/FilterLayerEditor.cpp   # s030: a filter layer's settings in Properties
+    src/RulerView.cpp   # s031: the rulers and their corner
     src/AdjustDialog.cpp      # s013: Image > Adjustments
     src/FilterDialog.cpp      # s014: the Filter menu
     src/FadeDialog.cpp        # s020: Edit > Fade

@@ -24,6 +24,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -134,6 +135,8 @@ public:
     sigc::signal<void()>& signal_transform_commit() { return m_xf_commit; }
     // s008 m3: the Eyedropper clicked at an image point; `background`: Alt.
     sigc::signal<void(int, int, bool)>& signal_pick() { return m_pick_signal; }
+    // s029: a right-click (a pen's barrel button) at (x, y), widget coordinates -- the tool's settings there.
+    sigc::signal<void(double, double)>& signal_settings_at() { return m_settings_at_signal; }
     // s015: Alt- / Ctrl-click with the Clone Stamp: the source point.
     sigc::signal<void(core::select::Pt)>& signal_source() { return m_source_signal; }
     // s015: the source's crosshair -- at `point` until a stroke fixes the
@@ -143,6 +146,33 @@ public:
     }
     // Told the zoom whenever it changes: 0.37 -> "37%".
     void set_on_zoom(std::function<void(double)> f) { m_on_zoom = std::move(f); }
+    // s031: the rulers -- told (at idle) when the view moves (zoom, pan,
+    // size) and where the pointer is (widget coords; -1, -1: it left).
+    void set_on_view(std::function<void()> f) { m_on_view = std::move(f); }
+    void set_on_pointer(std::function<void(double, double)> f) { m_on_pointer = std::move(f); }
+    double screen_x_of(double ix) const { return to_screen_x(ix); }
+    double screen_y_of(double iy) const { return to_screen_y(iy); }
+    double image_x_at(double sx) const { return to_image_x(sx); }
+    double image_y_at(double sy) const { return to_image_y(sy); }
+    // s031: the zero point being dragged from the rulers' corner -- a cross
+    // over the picture there (widget coords); nullopt: none.
+    // (A plain struct, never std::pair<double, double> by value: Scott's GCC 16
+    // prints the psabi note for it -- RULES.)
+    struct Cross { double x = 0, y = 0; };
+    void set_cross(std::optional<Cross> at) { m_cross = at; queue_draw(); }
+    bool dark() const { return m_dark; }
+    // s032: GUIDES -- drawn over the picture (when shown); with the Move
+    // tool, a guide under the pointer drags (unless locked) and its new place
+    // is told (index, image px; off the picture: the verb removes it). A
+    // guide being dragged out of a ruler shows as a preview.
+    void set_guides(const std::vector<core::Guide>& g, bool show, bool locked) {
+        m_guides = g; m_show_guides = show; m_lock_guides = locked; queue_draw();
+    }
+    void set_guide_preview(std::optional<core::Guide> g) { m_guide_preview = g; queue_draw(); }
+    sigc::signal<void(int, double)>& signal_guide_moved() { return m_guide_moved; }
+    // s032 m3: SNAP -- marquee, crop and guide drags pull to guides and the
+    // picture's edges / centre within a few screen px.
+    void set_snap(bool on) { m_snap = on; }
 
 private:
     void draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
@@ -189,16 +219,34 @@ private:
     std::string m_tool;
     int         m_variant = 0;
     std::function<void(double)> m_on_zoom;
+    std::function<void()> m_on_view;                         // s031
+    std::function<void(double, double)> m_on_pointer;
+    double m_told_cx = -1e300, m_told_cy = -1e300, m_told_vz = -1;
+    int m_told_vw = -1, m_told_vh = -1;
+    std::optional<Cross> m_cross;
+    std::vector<core::Guide> m_guides;                 // s032
+    bool m_show_guides = true, m_lock_guides = false, m_snap = true;
+    std::optional<core::Guide> m_guide_preview;
+    int m_guide_drag = -1;                             // the guide the Move tool drags
+    double m_guide_at = 0;
+    sigc::signal<void(int, double)> m_guide_moved;
+    int guide_near(double sx, double sy) const;        // within 4 screen px; -1: none
+    double snap_x(double ix) const;                    // m3: image x, pulled (when snapping)
+    double snap_y(double iy) const;
 
     // s008: the ants, and the shape being dragged.
     std::shared_ptr<const std::vector<core::select::Seg>> m_ants;
     double            m_ant_phase = 0;
     sigc::connection  m_ant_timer;
     bool              m_rubber = false;               // a marquee / lasso in progress
+    bool              m_zoom_box = false, m_zoom_box_shown = false;   // s030: the Zoom tool's drag box
+    double            m_zbx = 0, m_zby = 0;
+    void              zoom_to_box(double x0, double y0, double x1, double y1, bool out = false);
     Shape             m_drag;                          // its points so far (image coords)
     double            m_press_x = 0, m_press_y = 0;    // screen
     sigc::signal<void(const Shape&)> m_shape_signal;
     sigc::signal<void(int, int, bool)> m_pick_signal;
+    sigc::signal<void(double, double)> m_settings_at_signal;   // s029
     sigc::signal<void(core::select::Pt)> m_source_signal;   // s015
     bool   m_clone_set = false, m_clone_fixed = false;
     core::select::Pt m_clone_pt;

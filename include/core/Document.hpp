@@ -55,7 +55,7 @@ std::string_view     blend_key(Blend b);
 std::string_view     blend_label(Blend b);
 std::optional<Blend> blend_from_key(std::string_view key);
 
-enum class Kind : std::uint8_t { Pixel, Group, Adjustment };   // s013: Adjustment; Text later
+enum class Kind : std::uint8_t { Pixel, Group, Adjustment, Filter };   // s013: Adjustment; s030: Filter; Text later
 
 // Photoshop's four locks, as bits. Only All bites in the tree today: it
 // refuses opacity, fill, blend and clip on the layer and on everything inside
@@ -117,6 +117,14 @@ struct Layer {
 // document is made or opened (a load -- not a step). s009: it is a record of
 // the store too, under kImageId, so Crop / Image Size / Canvas Size are steps
 // like any other (core/Canvas.hpp).
+// s032: a GUIDE -- a line across the picture at `at` image pixels: a
+// vertical one (x = at) or a horizontal one (y = at).
+struct Guide {
+    bool   vertical = true;
+    double at = 0;
+    bool operator==(const Guide&) const = default;
+};
+
 struct Image {
     int           width = 0, height = 0;
     pixel::Format format;
@@ -125,6 +133,11 @@ struct Image {
     // a profile is a few KB and never changes.
     double        dpi = 72;
     std::shared_ptr<const std::vector<std::uint8_t>> icc{};
+    // s031: the rulers' ZERO POINT, image pixels (0, 0: the top-left
+    // corner). Crop, Canvas Size and Image Size carry it with the picture.
+    double        origin_x = 0, origin_y = 0;
+    // s032: the GUIDES (docs/guides.md) -- carried like the zero point.
+    std::vector<Guide> guides;
     bool operator==(const Image&) const = default;
 };
 
@@ -359,6 +372,19 @@ bool set_adjust(DocJournal& j, Document& d, const Id& id, const Adjust& a);
 void adjust_begin(DocJournal& j, Document& d, const Id& id);
 void adjust_to(DocJournal& j, Document& d, const Id& id, const Adjust& a);
 bool adjust_end(DocJournal& j);
+// s030 -- FILTER LAYERS (docs/filter-layers.md): a filter over everything
+// below it, non-destructive -- Affinity's live filter layers. Its one filter
+// is in Layer::filters[0]; no pixels; a mask, opacity, blend mode, clip like
+// an adjustment layer. Clipped, it filters its clip base alone. A new one
+// sits above `above`, named "Gaussian Blur 1" ..., with a mask (the
+// selection revealed, or Reveal All). One step.
+Id   add_filter_layer(DocJournal& j, Document& d, const Filter& f, const Id& above = {});
+// Its filter (normalised, the same kind). Presses inside the merge window
+// fold (merge key "filterlayer:<id>"); a slider drag is ONE step.
+bool set_filter_layer(DocJournal& j, Document& d, const Id& id, const Filter& f);
+void filter_layer_begin(DocJournal& j, Document& d, const Id& id);
+void filter_layer_to(DocJournal& j, Document& d, const Id& id, const Filter& f);
+bool filter_layer_end(DocJournal& j);
 // Image > Adjustments: `a` applied to a pixel layer's pixels for good,
 // through the selection. Refused on a group / adjustment layer, under an All
 // or a Pixels lock, on CMYK / Lab documents, or when it changes nothing.
@@ -395,6 +421,10 @@ const std::vector<Verb>& verbs();
 void load_fixture(Document& d);
 // s008: a rectangular selection, LOADED (a verb's setup; tests).
 void load_selection(Document& d, const pixel::Rect& r);
+// s030: a filter layer "L6" at the top (a verb's setup; tests).
+void load_filter_layer(Document& d, FilterKind k);
+// s032: these guides on the picture (a verb's setup; tests).
+void load_guides(Document& d, const std::vector<Guide>& g);
 // s012: a layer mask (a verb's setup; tests).
 void load_mask(Document& d, const Id& id);
 // s013: an adjustment layer "L6" of kind k at the top, its mask hiding all

@@ -7,6 +7,7 @@
 #include "core/Paint.hpp"       // s008 m4: and the brush
 #include "core/Move.hpp"        // s009 m1: and the Move tool
 #include "core/Canvas.hpp"      // s009 m2: Crop, Canvas Size, Image Size
+#include "core/Rulers.hpp"      // s031: the zero point
 #include "core/Transform.hpp"   // s011: Free Transform, flips, rotations
 #include "core/Gradient.hpp"    // s012: the Gradient tool
 #include "core/Heal.hpp"        // s015 m3: the healing brushes
@@ -285,6 +286,8 @@ std::string Document::check() const {
         }
         if ((l.kind == Kind::Adjustment) != (l.adjust.kind != AdjustKind::None))
             return id + ": an adjustment where there is no adjustment layer, or none where there is";
+        if (l.kind == Kind::Filter && (l.filters.size() != 1 || l.filters[0].f.kind == FilterKind::None))   // s030
+            return id + ": a filter layer without exactly one filter";
         if (l.kind == Kind::Adjustment && !adjust::refusal(l.adjust).empty())
             return id + ": an adjustment out of range (" + adjust::refusal(l.adjust) + ")";
         if (l.pixels) {
@@ -448,12 +451,72 @@ Id add_adjustment(DocJournal& j, Document& d, AdjustKind k, const Id& above) {
     }, "New Adjustment Layer");
 }
 
+// s030: a filter layer, with its mask, as one step.
+Id add_filter_layer(DocJournal& j, Document& d, const Filter& f_in, const Id& above) {
+    const Filter f = filter::normalised(f_in);
+    if (f.kind == FilterKind::None) return {};
+    const std::string base(filter::label(f.kind));
+    int n = 1;
+    for (const auto& [id, l] : d.snapshot())
+        if (l.kind == Kind::Filter && l.name.rfind(base + " ", 0) == 0) {
+            const std::string tail = l.name.substr(base.size() + 1);
+            if (!tail.empty() && tail.size() < 6 && std::all_of(tail.begin(), tail.end(), [](char c) { return c >= '0' && c <= '9'; }))
+                n = std::max(n, std::stoi(tail) + 1);
+        }
+    const auto* sel = d.selection();
+    const int w = d.image().width, h = d.image().height;
+    return add_kind(j, d, Kind::Filter, base + " " + std::to_string(n), above, [&](Layer& l) {
+        LiveFilter lf;
+        lf.f = f;
+        l.filters = {lf};
+        l.mask = std::make_shared<const pixel::TileMap>(sel ? select::inverted(sel, d.mask_format(), w, h)
+                                                            : pixel::TileMap(d.mask_format(), w, h));
+    }, "New Filter Layer");
+}
+
+namespace {
+std::optional<Layer> filter_set(const Document& d, const Id& id, const Filter& f) {
+    const auto l = d.get(id);
+    if (!l || l->kind != Kind::Filter || d.locked_all(id) || l->filters.size() != 1) return std::nullopt;
+    const Filter n = filter::normalised(f);
+    if (n.kind != l->filters[0].f.kind || n == l->filters[0].f) return std::nullopt;
+    Layer v = *l;
+    v.filters[0].f = n;
+    return v;
+}
+std::string filter_label(const Document& d, const Id& id) {
+    const auto l = d.get(id);
+    return std::string(filter::label(l->filters[0].f.kind)) + " of “" + l->name + "”";
+}
+}  // namespace
+
+bool set_filter_layer(DocJournal& j, Document& d, const Id& id, const Filter& f) {
+    const auto v = filter_set(d, id, f);
+    if (!v) return false;
+    return j.run(filter_label(d, id), {id}, [&] { d.put(id, *v); }, "filterlayer:" + id);
+}
+
+void filter_layer_begin(DocJournal& j, Document& d, const Id& id) {
+    const auto l = d.get(id);
+    if (l && l->kind == Kind::Filter && !d.locked_all(id) && l->filters.size() == 1) j.begin(filter_label(d, id), {id});
+}
+
+void filter_layer_to(DocJournal& j, Document& d, const Id& id, const Filter& f) {
+    if (!j.in_gesture()) return;
+    const auto v = filter_set(d, id, f);
+    if (!v) return;
+    j.run("Filter", {id}, [&] { d.put(id, *v); });   // inside the gesture: just writes
+}
+
+bool filter_layer_end(DocJournal& j) { return j.commit(); }
+
 std::string not_pixels(const Document& d, const Id& id) {
     const auto l = d.get(id);
     if (!l) return "no layer";
     const std::string q = "“" + l->name + "”";
     if (l->kind == Kind::Group) return q + " is a group -- pick a layer in it";
     if (l->kind == Kind::Adjustment) return q + " is an adjustment layer -- it has no pixels";
+    if (l->kind == Kind::Filter) return q + " is a filter layer -- it has no pixels";   // s030
     return {};
 }
 
@@ -956,6 +1019,26 @@ void load_adjustment(Document& d, AdjustKind k) {
     load_mask(d, "L6");
 }
 
+void load_guides(Document& d, const std::vector<Guide>& g) {   // s032
+    Document::Loading load(d);
+    Image im = d.image();
+    im.guides = g;
+    d.set_image(im);
+}
+
+void load_filter_layer(Document& d, FilterKind k) {   // s030
+    Document::Loading load(d);
+    Layer l;
+    l.kind = Kind::Filter;
+    l.name = std::string(filter::label(k)) + " 1";
+    l.pos = 4;
+    LiveFilter lf;
+    lf.f = filter::fresh(k);
+    l.filters = {lf};
+    l.mask = std::make_shared<const pixel::TileMap>(d.mask_format(), d.image().width, d.image().height);
+    d.put("L6", l);
+}
+
 // A selection already there (a verb's setup): LOADED, not a step.
 void load_selection(Document& d, const pixel::Rect& r) {
     Document::Loading load(d);
@@ -1219,6 +1302,33 @@ const std::vector<Verb>& verbs() {
         {"apply_adjust",  [](DocJournal& j, Document& d) {
              Adjust a = adjust::fresh(AdjustKind::HueSat); a.hue = 120; a.lightness = 20; apply_adjust(j, d, "L4", a); },
              [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        // s031: the rulers' zero point.
+        {"ruler_origin", [](DocJournal& j, Document& d) { canvas::set_ruler_origin(j, d, 100, 50); }},
+        // s032: guides.
+        {"add_guide",    [](DocJournal& j, Document& d) { canvas::add_guide(j, d, {true, 150.4}); }},
+        {"move_guide",   [](DocJournal& j, Document& d) { canvas::move_guide(j, d, 0, 120); },
+             [](Document& d) { load_guides(d, {{false, 80}}); }},
+        {"move_guide_off", [](DocJournal& j, Document& d) { canvas::move_guide(j, d, 0, -40); },   // dragged off: removed
+             [](Document& d) { load_guides(d, {{true, 50}, {false, 80}}); }},
+        {"remove_guide", [](DocJournal& j, Document& d) { canvas::remove_guide(j, d, 0); },
+             [](Document& d) { load_guides(d, {{true, 300}}); }},
+        {"clear_guides", [](DocJournal& j, Document& d) { canvas::clear_guides(j, d); },
+             [](Document& d) { load_guides(d, {{true, 10}, {false, 20}}); }},
+        {"crop_guides",  [](DocJournal& j, Document& d) { canvas::crop(j, d, {50, 40, 400, 300}, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_guides(d, {{true, 100}, {false, 100}}); }},
+        // s030: filter layers -- made (through a selection, at the top), set, dragged.
+        {"add_filter_layer", [](DocJournal& j, Document& d) { add_filter_layer(j, d, filter::fresh(FilterKind::GaussianBlur), "L4"); },
+             [](Document& d) { load_selection(d, {120, 110, 60, 60}); }},
+        {"add_filter_layer_top", [](DocJournal& j, Document& d) { add_filter_layer(j, d, filter::fresh(FilterKind::UnsharpMask)); }},
+        {"set_filter_layer", [](DocJournal& j, Document& d) {
+             Filter f = filter::fresh(FilterKind::GaussianBlur); f.radius = 9; set_filter_layer(j, d, "L6", f); },
+             [](Document& d) { load_filter_layer(d, FilterKind::GaussianBlur); }},
+        {"filter_layer_drag", [](DocJournal& j, Document& d) {
+             Filter f = filter::fresh(FilterKind::HighPass);
+             filter_layer_begin(j, d, "L6");
+             for (double r = 4; r <= 12; r += 2) { f.radius = r; filter_layer_to(j, d, "L6", f); }
+             filter_layer_end(j); },
+             [](Document& d) { load_filter_layer(d, FilterKind::HighPass); }},
         // s014: the Filter menu on the pixels -- through a selection, and whole.
         {"apply_filter_blur", [](DocJournal& j, Document& d) { apply_filter(j, d, "L4", filter::fresh(FilterKind::GaussianBlur)); },
              [](Document& d) { load_selection(d, {50, 120, 100, 80}); }},   // across the square's edge

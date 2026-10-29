@@ -35,6 +35,12 @@ ToolRail::ToolRail() : widgets::Box("rail", Gtk::Orientation::VERTICAL, 2) {
         b->set_tooltip_text(t.name + "  (" + std::string(1, static_cast<char>(t.key - 'a' + 'A')) + ")");
         b->set_size_request(38, 36);
         if (first) b->set_group(*first); else first = b;
+        {   // s029: right-click -- the tool's settings, without choosing it
+            auto rc = Gtk::GestureClick::create();
+            rc->set_button(GDK_BUTTON_SECONDARY);
+            rc->signal_pressed().connect([this, b, id = t.id](int, double, double) { m_settings_signal.emit(id, b); });
+            b->add_controller(rc);
+        }
         b->signal_toggled().connect([this, b, id = t.id] {
             if (!b->get_active()) return;
             m_tool = id;

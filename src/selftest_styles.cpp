@@ -6,6 +6,7 @@
 #include "core/File.hpp"
 #include "core/Live.hpp"
 #include "core/StylesRender.hpp"
+#include "core/Patterns.hpp"   // s028 m4
 
 #include <cmath>
 #include <filesystem>
@@ -431,5 +432,162 @@ void selftest_styles(const Check& check) {
         const auto back = core::file::open(path, err);
         fs::remove(path);
         check("satin: in the file", back && back->layers.at("L4").styles.satin == s.satin, err);
+    }
+    std::cout << "\n-- layer styles: pattern overlay (s028 m4) --\n";
+    {
+        namespace Pt = klimt::core::pattern;
+        const auto& pv = Pt::builtin();
+        check("patterns: eight built in", pv.size() == 8, num(static_cast<double>(pv.size())));
+        bool tiles = true, in01 = true, keys = true;
+        for (int id = 0; id < static_cast<int>(pv.size()); ++id) {
+            const double p = pv[static_cast<std::size_t>(id)].period;
+            keys = keys && Pt::index_of(pv[static_cast<std::size_t>(id)].key) == id;
+            for (int k = 0; k < 40; ++k) {
+                const double x = k * 7 + 3, y = k * 5 + 1;
+                const float g = Pt::grey(id, x, y, 1, 0, 0);
+                in01 = in01 && g >= 0.f && g <= 1.f;
+                tiles = tiles && std::abs(g - Pt::grey(id, x + p, y, 1, 0, 0)) < 1e-4f && std::abs(g - Pt::grey(id, x, y + 3 * p, 1, 0, 0)) < 1e-4f &&
+                        std::abs(Pt::grey(id, x, y, 2, 0, 0) - Pt::grey(id, x + 2 * p, y, 2, 0, 0)) < 1e-4f;
+            }
+        }
+        check("patterns: each repeats at its period (and twice it at 200 %)", tiles, "");
+        check("patterns: greys in 0..1", in01, "");
+        check("patterns: the keys find them; an unknown key doesn't", keys && Pt::index_of("nope") == -1, "");
+        // The geometric ones have dark and light; the textures sit round middle grey.
+        bool contrast = true, middle = true;
+        for (int id = 0; id < static_cast<int>(pv.size()); ++id) {
+            double lo = 1, hi = 0, sum = 0;
+            int n = 0;
+            for (int y = 0; y < 128; ++y)
+                for (int x = 0; x < 128; ++x) {
+                    const double g = Pt::grey(id, x, y, 1, 0, 0);
+                    lo = std::min(lo, g); hi = std::max(hi, g); sum += g; ++n;
+                }
+            const std::string key = pv[static_cast<std::size_t>(id)].key;
+            if (key == "paper" || key == "canvas") middle = middle && std::abs(sum / n - 0.5) < 0.1;
+            else contrast = contrast && lo < 0.3 && hi > 0.95;
+        }
+        check("patterns: the geometric ones dark on white", contrast, "");
+        check("patterns: Paper and Canvas round middle grey", middle, "");
+        check("patterns: the offset moves it", std::abs(Pt::grey(2, 40, 7, 1, 10, 0) - Pt::grey(2, 30, 7, 1, 0, 0)) < 1e-6f &&
+                                               Pt::grey(2, 10, 5, 1, 0, 0) != Pt::grey(2, 10, 5, 1, 16, 0), "");
+        check("patterns: small scales are box-filtered (Checker at 10 %, a pixel across two cells: grey between)",
+              [&] { const float g = Pt::grey(2, 51, 50, 0.1, 0, 0); return g > 0.2f && g < 0.95f; }(), num(Pt::grey(2, 51, 50, 0.1, 0, 0)));
+    }
+    {
+        const auto src = square();   // red 200 x 150 at (100, 100)
+        core::Styles s;
+        s.pattern.on = true;
+        s.pattern.pattern = 2;   // Checker: 16 px squares, (0..16, 0..16) light
+        const auto out = S::drawn(src, s, 100);
+        // (104, 104): cell (6, 6) -- light; (120, 104): cell (7, 6) -- dark.
+        check("pattern overlay: Normal 100 % -- the pattern replaces the colour", near(out.get(104, 104).c[0], 1, 0.02) && near(out.get(104, 104).c[1], 1, 0.02) &&
+                                                                              near(out.get(120, 104).c[0], 0.15, 0.03), num(out.get(120, 104).c[0]));
+        check("pattern overlay: the alpha kept; nothing outside", out.get(120, 104).c[3] > 0.99f && out.get(95, 150).c[3] == 0.f, "");
+        s.pattern.mode = P::Blend::Multiply;
+        const auto mul = S::drawn(src, s, 100);
+        check("pattern overlay: Multiply keeps the red, darkens it", near(mul.get(104, 104).c[0], 1, 0.02) && mul.get(104, 104).c[1] < 0.02f &&
+                                                                    near(mul.get(120, 104).c[0], 0.15, 0.03), num(mul.get(120, 104).c[0]));
+        s.pattern.mode = P::Blend::Normal;
+        s.pattern.opacity = 50;
+        const auto half = S::drawn(src, s, 100);
+        check("pattern overlay: opacity 50 % -- half-way", near(half.get(120, 104).c[0], 0.575, 0.03), num(half.get(120, 104).c[0]));
+        s.pattern.opacity = 100;
+        s.gradient.on = true;   // Gradient Overlay sits over it
+        const auto both = S::drawn(src, s, 100);
+        check("pattern overlay: under Gradient Overlay", near(both.get(120, 104).c[0], both.get(104, 104).c[0], 0.05), "");
+        s.gradient.on = false;
+        // Anchored to the image: the same pixel, the same grey, wherever the content is.
+        P::Format f; f.depth = P::Depth::F32;
+        const auto other = P::TileMap(f, 600, 400).fill({110, 90, 100, 100}, P::rgba(0, 1, 0, 1));
+        check("pattern overlay: fixed to the image, not the content's box", near(S::drawn(other, s, 100).get(120, 104).c[0], out.get(120, 104).c[0], 1e-4), "");
+        // The verb, undo, the file.
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        s.pattern.pattern = 0; s.pattern.mode = P::Blend::Overlay; s.pattern.scale = 250; s.pattern.x = -12; s.pattern.y = 30;
+        check("pattern overlay: a step", L::set_styles(j, d, "L4", s), "");
+        check("pattern overlay: on the layer", d.get("L4")->styles.pattern == s.pattern, "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_pattern_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image(); c.layers = d.snapshot(); c.next_id = d.next_id();
+        std::string err;
+        core::file::save_klimt(path, c, err);
+        const auto back = core::file::open(path, err);
+        fs::remove(path);
+        check("pattern overlay: in the file (by its key)", back && back->layers.at("L4").styles.pattern == s.pattern, err);
+        j.undo();
+        check("pattern overlay: undo", !d.get("L4")->styles.pattern.on, "");
+    }
+    std::cout << "\n-- your patterns (s033) --\n";
+    {
+        namespace Pt = klimt::core::pattern;
+        // A 4 x 2 pattern: left half red, right half transparent.
+        const P::Format pf{P::Depth::U8, P::Mode::RGB, true};
+        const auto pat = std::make_shared<const P::TileMap>(P::TileMap(pf, 4, 2).fill({0, 0, 2, 2}, P::rgba(1, 0, 0, 1)));
+        float o[4];
+        Pt::sample(*pat, 0, 0, 1, 0, 0, o);
+        check("sample: red where it's red", near(o[0], 1) && near(o[3], 1) && o[1] < 0.01f, "");
+        Pt::sample(*pat, 2, 0, 1, 0, 0, o);
+        check("sample: clear where it's clear", o[3] < 0.01f, "");
+        Pt::sample(*pat, 4, 3, 1, 0, 0, o);
+        check("sample: it tiles (4, 3) = (0, 1)", near(o[0], 1) && near(o[3], 1), "");
+        Pt::sample(*pat, 1, 0, 1, 1, 0, o);
+        check("sample: the offset moves it", near(o[3], 1), "");
+        Pt::sample(*pat, 0, 0, 0.25, 0, 0, o);
+        check("sample: at 25 % a pixel averages a whole tile (half covered)", near(o[3], 0.5, 0.02) && near(o[0], 1, 0.02), num(o[3]));
+        // Define: what the eye sees inside the rectangle.
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);   // white Background, a red square (100, 100) 200 x 150
+        std::string why;
+        const auto def = Pt::define(d.image(), d.snapshot(), {90, 90, 20, 20}, why);
+        check("define: the picture inside the rectangle", def && def->width() == 20 && def->height() == 20 &&
+                                                          def->get(0, 0) == P::rgba(1, 1, 1, 1) && near(def->get(15, 15).c[0], 1) && def->get(15, 15).c[1] < 0.01f, why);
+        const auto clipped = Pt::define(d.image(), d.snapshot(), {500, 0, 2000, 10}, why);
+        check("define: clipped to the picture (500 + 100 wide)", clipped && clipped->width() == 100 && clipped->height() == 10, why);
+        check("define: an empty rectangle refused", !Pt::define(d.image(), d.snapshot(), {700, 700, 10, 10}, why), why);
+        // The library: a folder of PNGs.
+        namespace fs = std::filesystem;
+        const auto dir = fs::temp_directory_path() / ("klimt_patterns_" + std::to_string(::getpid()));
+        fs::remove_all(dir);
+        Pt::set_library_dir(dir.string());
+        check("library: empty at first", Pt::library().empty(), "");
+        std::string err;
+        const auto n1 = Pt::add_to_library(*def, "Bricks/Red", err);
+        const auto n2 = Pt::add_to_library(*def, "Bricks_Red", err);
+        check("library: added, the name made safe and unique", n1 == "Bricks_Red" && n2 == "Bricks_Red 2" && fs::exists(dir / "Bricks_Red.png"), n1 + " / " + n2);
+        Pt::set_library_dir(dir.string());   // read back from the folder
+        check("library: read back from the folder, sorted", Pt::library().size() == 2 && Pt::library()[0].name == "Bricks_Red" &&
+                                                            Pt::find("Bricks_Red 2") && Pt::find("Bricks_Red")->get(15, 15) == def->get(15, 15), "");
+        check("library: remove", Pt::remove_from_library("Bricks_Red 2") && !fs::exists(dir / "Bricks_Red 2.png") && Pt::library().size() == 1, "");
+        Pt::set_library_dir("");
+        fs::remove_all(dir);
+        // Drawn: yours over the content, through its own alpha.
+        const auto src = square();
+        core::Styles st;
+        st.pattern.on = true;
+        st.pattern.user = "Half";
+        st.pattern.image = std::make_shared<const P::TileMap>(P::TileMap(pf, 4, 2).fill({0, 0, 2, 2}, P::rgba(0, 0, 1, 1)));   // blue | clear
+        const auto out = S::drawn(src, st, 100);
+        check("drawn: blue where the pattern is", out.get(100, 120).c[2] > 0.99f && out.get(100, 120).c[0] < 0.01f, "");
+        check("drawn: the content where the pattern is clear", out.get(102, 120).c[0] > 0.99f && out.get(102, 120).c[2] < 0.01f, "");
+        check("drawn: nothing outside the content", out.get(98, 120).c[3] == 0.f, "");
+        // The step and the file: yours travels inside the .klimt.
+        L::set_styles(j, d, "L4", st);
+        const auto path = (fs::temp_directory_path() / ("klimt_userpat_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image(); c.layers = d.snapshot(); c.next_id = d.next_id();
+        std::string ferr;
+        const bool saved = core::file::save_klimt(path, c, ferr);
+        const auto back = core::file::open(path, ferr);
+        fs::remove(path);
+        const auto& bp = back ? back->layers.at("L4").styles.pattern : core::PatternFx{};
+        check("file: your pattern kept -- its name, size, pixels", saved && back && bp.image && bp.user == "Half" && bp.image->width() == 4 &&
+                                                                    bp.image->height() == 2 && bp.image->get(1, 1) == st.pattern.image->get(1, 1) &&
+                                                                    bp.image->get(3, 0) == st.pattern.image->get(3, 0), ferr);
     }
 }

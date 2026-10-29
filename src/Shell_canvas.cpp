@@ -1,3 +1,4 @@
+#include "core/Rulers.hpp"   // s031
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "SizeDialog.hpp"
@@ -93,6 +94,32 @@ void Shell::on_canvas_size() {
     }
     const auto& im = m_doc.image();
     m_canvas_size->ask(im.width, im.height, im.dpi);
+}
+
+// s031: the rulers' numbers -- the document's resolution, the side each
+// measures, its zero point.
+void Shell::update_rulers() {
+    if (!m_hruler) return;
+    const auto& im = m_doc.image();
+    const bool any = im.width > 0 && im.height > 0;
+    m_hruler->set_doc({im.dpi, static_cast<double>(im.width), im.origin_x, any});
+    m_vruler->set_doc({im.dpi, static_cast<double>(im.height), im.origin_y, any});
+}
+
+// s032: the guides on the canvas follow the document and the View menu.
+void Shell::update_guides() {
+    m_canvas.set_guides(m_doc.image().guides, m_prefs.show_guides, m_prefs.lock_guides);
+    m_canvas.set_snap(m_prefs.snap);
+}
+
+void Shell::show_rulers(bool on) {
+    if (!m_hruler) return;
+    m_prefs.rulers = on;
+    m_hruler->set_visible(on);
+    m_vruler->set_visible(on);
+    m_ruler_corner.set_visible(on);
+    core::save_prefs(m_prefs_file, m_prefs);
+    update_rulers();
 }
 
 }  // namespace klimt

@@ -1,3 +1,5 @@
+#include "core/Patterns.hpp"   // s033: the pattern library
+#include <gtkmm/grid.h>   // s031: the canvas and its rulers
 #include "Shell.hpp"
 #include "Log.hpp"
 
@@ -84,6 +86,13 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     m_rail.add_css_class("klimt-chrome");
     m_rail.add_css_class("klimt-edge-right");
     m_rail.signal_tool().connect(sigc::mem_fun(*this, &Shell::on_tool));
+    // s029: right-click a tool in the rail, or the canvas -- the tool's settings.
+    m_rail.signal_settings().connect([this](const std::string& id, Gtk::Widget* b) { if (b) show_tool_settings(id, *b, nullptr); });
+    m_canvas.signal_settings_at().connect([this](double x, double y) {
+        if (!ContextStrip::has_settings(m_rail.tool())) return;
+        const Gdk::Rectangle r(static_cast<int>(x), static_cast<int>(y), 1, 1);
+        show_tool_settings(m_rail.tool(), m_canvas, &r);
+    });
     m_body.append(m_rail);
 
     auto strip_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL);
@@ -100,7 +109,17 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     build_tabs(m_centre);   // s020: the document tabs, over the strip
     m_strip_box = strip_box;
     m_centre.append(*strip_box);
-    m_centre.append(m_canvas);
+    // s031: the canvas with its rulers -- the corner, the top, the left.
+    m_hruler = std::make_unique<RulerView>(m_canvas, true);
+    m_vruler = std::make_unique<RulerView>(m_canvas, false);
+    auto canvas_grid = Gtk::make_managed<Gtk::Grid>();
+    canvas_grid->attach(m_ruler_corner, 0, 0);
+    canvas_grid->attach(*m_hruler, 1, 0);
+    canvas_grid->attach(*m_vruler, 0, 1);
+    canvas_grid->attach(m_canvas, 1, 1);
+    m_canvas.set_hexpand(true);
+    m_canvas.set_vexpand(true);
+    m_centre.append(*canvas_grid);
     m_centre.set_hexpand(true);
     // The rail's hiding tab rides the CANVAS side of the rail (on the rail
     // itself it covered the tools' buttons).
@@ -174,8 +193,17 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     auto* sm = adw_style_manager_get_default();
     m_canvas.set_dark(adw_style_manager_get_dark(sm));
     g_signal_connect(sm, "notify::dark", G_CALLBACK(+[](AdwStyleManager* m, GParamSpec*, gpointer self) {
-        static_cast<CanvasView*>(self)->set_dark(adw_style_manager_get_dark(m));
-    }), &m_canvas);
+        auto* sh = static_cast<Shell*>(self);
+        const bool dark = adw_style_manager_get_dark(m);
+        sh->m_canvas.set_dark(dark);
+        if (sh->m_hruler) { sh->m_hruler->set_dark(dark); sh->m_vruler->set_dark(dark); sh->m_ruler_corner.set_dark(dark); }   // s031
+    }), this);
+    if (m_hruler) {   // s031
+        const bool dark = adw_style_manager_get_dark(sm);
+        m_hruler->set_dark(dark);
+        m_vruler->set_dark(dark);
+        m_ruler_corner.set_dark(dark);
+    }
 }
 
 // The dock: ONE inspector (Properties) over the stack (Layers, Channels,
@@ -219,7 +247,15 @@ Gtk::Widget& Shell::build_dock() {  // zone
     // s014 m4: where Scott left it last time (360 the first time).
     m_prefs_file = Glib::build_filename(Glib::get_user_config_dir(), "klimt", "prefs.json");
     m_prefs = core::load_prefs(m_prefs_file);
+    if (m_hruler) {   // s031: the rulers as left last time
+        const auto u = core::rulers::from_key(m_prefs.ruler_unit);
+        m_hruler->set_unit(u);
+        m_vruler->set_unit(u);
+        show_rulers(m_prefs.rulers);
+    }
     m_strip.set_presets_file(Glib::build_filename(Glib::get_user_config_dir(), "klimt", "brushes.json"));   // s021
+    m_strip.set_defaults_file(Glib::build_filename(Glib::get_user_config_dir(), "klimt", "tools.json"));     // s029
+    core::pattern::set_library_dir(Glib::build_filename(Glib::get_user_config_dir(), "klimt", "patterns"));   // s033
     split->set_position(m_prefs.dock_split);
     split->property_position().signal_changed().connect([this, split] {
         if (!get_mapped()) return;   // GTK settling the layout, not a drag
@@ -262,6 +298,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     edit->append("Delete Selected Pixels", "win.delete-selection");
     // s011: transforms -- the selection's pixels, or the whole layer.
     edit->append("Free Transform", "win.free-transform");
+    edit->append("Define Pattern", "win.define-pattern");   // s033
     auto tr = Gio::Menu::create();
     tr->append("Flip Horizontal", "win.flip-h");
     tr->append("Flip Vertical", "win.flip-v");
@@ -304,6 +341,11 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     for (const auto k : core::adjust::kinds())
         nal->append(std::string(core::adjust::label(k)) + "…", "win.adjust-new-" + std::string(core::adjust::key(k)));
     layer->append_submenu("New Adjustment Layer", nal);
+    // s030: Layer > New Filter Layer.
+    auto nfl = Gio::Menu::create();
+    for (const auto k : core::filter::kinds())
+        nfl->append(std::string(core::filter::label(k)), "win.filter-layer-" + std::string(core::filter::key(k)));
+    layer->append_submenu("New Filter Layer", nfl);
     // s019: Layer > Layer Style.
     auto ls = Gio::Menu::create();
     auto ls_fx = Gio::Menu::create();
@@ -313,6 +355,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     ls_fx->append("Inner Glow", "win.style-inner-glow");   // s023
     ls_fx->append("Satin", "win.style-satin");   // s026
     ls_fx->append("Gradient Overlay", "win.style-gradient-overlay");   // s025
+    ls_fx->append("Pattern Overlay", "win.style-pattern-overlay");   // s028 m4
     ls_fx->append("Bevel & Emboss", "win.style-bevel-emboss");   // s021
     ls_fx->append("Color Overlay", "win.style-colour-overlay");
     ls_fx->append("Stroke", "win.style-stroke");
@@ -380,6 +423,13 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     view->append("Fit on Screen", "win.zoom-fit");
     view->append("Actual Size (100%)", "win.zoom-actual");
     view->append("Hide / Show Panels", "win.toggle-panels");
+    view->append("Rulers", "win.view-rulers");   // s031
+    auto guides = Gio::Menu::create();   // s032
+    guides->append("Show / Hide Guides", "win.view-guides");
+    guides->append("Lock / Unlock Guides", "win.guides-lock");
+    guides->append("Snap On / Off", "win.guides-snap");
+    guides->append("Clear Guides", "win.guides-clear");
+    view->append_section(guides);
     auto sub = Gio::Menu::create();
     sub->append_submenu("Image", image);
     sub->append_submenu("Layer", layer);

@@ -222,6 +222,7 @@ struct Walker {
                 adjust_into(id, l, dst, op * static_cast<float>(l.fill) / 100.f);
                 continue;
             }
+            if (l.kind == Kind::Filter) continue;   // s030: drawn as it looks (live::effective), else nothing
             // s010 m3: one opaque colour at full strength, Normal, unclipped:
             // it simply IS what's below from here up.
             if (l.blend == pixel::Blend::Normal && !l.clipped && l.opacity >= 100 && l.fill >= 100 && l.pixels &&
@@ -388,7 +389,7 @@ TileSet tiles_of(const Image& im) {
 namespace {
 // Every tile a layer's map holds (its footprint).
 void add_held(TileSet& t, const Layer* l) {
-    if (l && l->kind == Kind::Adjustment) { t.add_all(); return; }   // s013: it changes what's below, anywhere
+    if (l && (l->kind == Kind::Adjustment || l->kind == Kind::Filter)) { t.add_all(); return; }   // s013, s030: what's below, anywhere
     if (!l || !l->pixels) return;
     for (int row = 0; row < l->pixels->rows(); ++row)
         for (int col = 0; col < l->pixels->cols(); ++col)
@@ -437,6 +438,13 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
         t.add_all();
         return t;
     }
+    // s030: a filter layer reads everything below it (and a blur spreads):
+    // with one in either picture, any change redraws everything.
+    const auto has_filter = [](const Layers& ls) {
+        for (const auto& [id, l] : ls) if (l.kind == Kind::Filter) return true;
+        return false;
+    };
+    const bool filters = has_filter(before) || has_filter(after);
     std::vector<Document::Id> ids;
     for (const auto& [id, l] : before) ids.push_back(id);
     for (const auto& [id, l] : after) if (!before.count(id)) ids.push_back(id);
@@ -444,6 +452,16 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
         const Layer* a = find(before, id);
         const Layer* b = find(after, id);
         if (a && b && *a == *b) continue;
+        if (filters) {   // s030 -- unless only a name or a lock changed
+            if (a && b) {
+                Layer x = *a;
+                x.name = b->name;
+                x.locks = b->locks;
+                if (x == *b) continue;
+            }
+            t.add_all();
+            return t;
+        }
         // s018: a layer with live filters reaches past its own tiles (a blur
         // spreads): any change to it, or to its stack, redraws everything.
         if ((a && live::active(*a)) || (b && live::active(*b))) { t.add_all(); return t; }
@@ -479,12 +497,17 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
 
 Layers below(const Layers& all, const Document::Id& id) {
     Layers out = all;
+    // s030: the layer itself and its later siblings; at each group above it,
+    // only the group's LATER siblings -- never the group itself (hiding it
+    // hid everything under it too: a filter layer in a Pass Through group
+    // with the Background inside saw nothing, Scott, s030; and an
+    // adjustment's histogram there came out empty).
     for (Document::Id at = id; !at.empty();) {
         const auto it = all.find(at);
         if (it == all.end()) break;
         const Layer& me = it->second;
         for (auto& [oid, l] : out)
-            if (l.parent == me.parent && (oid == at || l.pos > me.pos)) l.visible = false;
+            if (l.parent == me.parent && ((oid == at && at == id) || l.pos > me.pos)) l.visible = false;
         at = me.parent;
     }
     return out;

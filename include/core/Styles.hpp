@@ -10,6 +10,10 @@
 // 0 leaves just the effects). Effects blend Normal within the layer.
 #include <cstdint>
 #include "pixel/Blend.hpp"   // s025: each effect's blend mode
+#include "pixel/Pixel.hpp"   // s033: a user pattern's pixels
+
+#include <memory>
+#include <string>
 
 namespace klimt::core {
 
@@ -94,6 +98,24 @@ struct GradientFx {
     bool operator==(const GradientFx&) const = default;
 };
 
+// s028 m4 -- Pattern Overlay: a built-in pattern (core::pattern, by index)
+// over the content, anchored to the image, at `scale` (%) and moved by
+// (x, y) px; under Gradient and Color Overlay (Photoshop's order).
+struct PatternFx {
+    bool on = false;
+    int  pattern = 0;      // core::pattern::builtin() index (when `image` is null)
+    // s033: YOUR pattern (Edit > Define Pattern): its name and its pixels
+    // (straight RGB + alpha, 8-bit), carried in the style itself -- so the
+    // .klimt keeps it -- and compared by pointer.
+    std::string user;
+    std::shared_ptr<const pixel::TileMap> image;
+    int  opacity = 100;
+    int  scale = 100;      // %, 10..1000
+    int  x = 0, y = 0;     // px, -1000..1000
+    pixel::Blend mode = pixel::Blend::Normal;
+    bool operator==(const PatternFx&) const = default;
+};
+
 // s026 -- Satin: the shape against itself, shifted `distance` px both ways
 // along `angle`; where the two copies differ, softened over `size` -- the
 // silky folds of a satin cloth -- over the content. Invert (Photoshop's
@@ -143,7 +165,8 @@ struct Styles {
     InnerGlowFx inner_glow;   // s023
     GradientFx gradient;      // s025
     SatinFx    satin;         // s026
-    bool any() const { return drop.on || outer.on || inner.on || overlay.on || stroke.on || bevel.on || inner_glow.on || gradient.on || satin.on; }
+    PatternFx  pattern;       // s028 m4
+    bool any() const { return drop.on || outer.on || inner.on || overlay.on || stroke.on || bevel.on || inner_glow.on || gradient.on || satin.on || pattern.on; }
     bool operator==(const Styles&) const = default;
 };
 

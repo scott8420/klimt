@@ -16,6 +16,7 @@ public:
     StatusLine();
     void set_summary(const std::string& text);
     void set_zoom(const std::string& text);
+    void set_position(const std::string& text);   // s032: the pointer, in the rulers' unit
     void show_job(const std::string& label, double fraction);
     void hide_job();
     sigc::signal<void()>& signal_cancel() { return m_cancel_signal; }
@@ -26,6 +27,7 @@ private:
     Gtk::ProgressBar m_job_progress;
     widgets::Button  m_job_cancel;
     widgets::Label   m_zoom;
+    widgets::Label   m_position;   // s032
     sigc::signal<void()> m_cancel_signal;
 };
 

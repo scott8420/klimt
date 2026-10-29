@@ -109,6 +109,10 @@ void selftest_adjust(const std::function<void(const std::string&, bool, const st
 void selftest_filter(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_retouch(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_brush(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_dynamics(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s028
+void selftest_tooldefaults(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s029
+void selftest_filterlayers(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s030
+void selftest_rulers(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s031
 void selftest_styles(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_fade(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_partly(const std::function<void(const std::string&, bool, const std::string&)>& check);
@@ -1231,6 +1235,10 @@ int main() {
     selftest_filter([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_retouch([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_brush([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_dynamics([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_tooldefaults([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_filterlayers([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_rulers([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_styles([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_tabs([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_fade([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });

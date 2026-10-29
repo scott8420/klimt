@@ -14,6 +14,9 @@ namespace klimt::core {
 
 struct Prefs {
     int dock_split = 360;   // the dock's divider: Properties' height, px (120 .. 4000)
+    bool rulers = true;             // s031: View > Rulers
+    std::string ruler_unit = "px";  // s031: core::rulers key
+    bool show_guides = true, lock_guides = false, snap = true;   // s032
     bool operator==(const Prefs&) const = default;
 };
 

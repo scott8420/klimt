@@ -96,12 +96,18 @@ void Shell::bind_actions() {  // bindings
         m_layer_acts["adjust-new-" + key] = add_action("adjust-new-" + key, [this, k] { on_adjust_new(k); });
         m_layer_acts["adjust-apply-" + key] = add_action("adjust-apply-" + key, [this, k] { on_adjust_apply(k); });
     }
+    // s033: Edit > Define Pattern (Shell_filter.cpp).
+    m_layer_acts["define-pattern"] = add_action("define-pattern", [this] { on_define_pattern(); });
+    // s030: a new filter layer (Shell_filter.cpp).
+    for (const auto k : core::filter::kinds())
+        m_layer_acts["filter-layer-" + std::string(core::filter::key(k))] =
+            add_action("filter-layer-" + std::string(core::filter::key(k)), [this, k] { on_filter_layer_new(k); });
     // s014: the Filter menu (Shell_filter.cpp).
     for (const auto k : core::filter::kinds())
         m_layer_acts["filter-" + std::string(core::filter::key(k))] =
             add_action("filter-" + std::string(core::filter::key(k)), [this, k] { on_filter(k); });
     // s019: Layer > Layer Style (Shell_filter.cpp).
-    for (const char* v : {"drop-shadow", "outer-glow", "inner-shadow", "inner-glow", "satin", "gradient-overlay", "bevel-emboss", "colour-overlay", "stroke", "copy", "paste", "clear", "rasterize"})
+    for (const char* v : {"drop-shadow", "outer-glow", "inner-shadow", "inner-glow", "satin", "pattern-overlay", "gradient-overlay", "bevel-emboss", "colour-overlay", "stroke", "copy", "paste", "clear", "rasterize"})
         m_layer_acts[std::string("style-") + v] = add_action(std::string("style-") + v, [this, v] { on_style(v); });
     m_layer_acts["filter-last"] = add_action("filter-last", [this] { on_filter_last(false); });
     m_layer_acts["filter-last-dialog"] = add_action("filter-last-dialog", [this] { on_filter_last(true); });
@@ -144,6 +150,84 @@ void Shell::bind_actions() {  // bindings
         if (id == m_rail.tool()) m_canvas.set_tool(id, v);
     });
     add_action("toggle-panels", sigc::mem_fun(*this, &Shell::on_toggle_panels));
+    // s031: the rulers -- View > Rulers; the unit (right-click a ruler); the
+    // zero point (drag from the corner; double-click it to reset).
+    add_action("view-rulers", [this] { show_rulers(!m_prefs.rulers); });
+    m_canvas.set_on_view([this] { update_rulers(); });
+    m_canvas.set_on_pointer([this](double x, double y) {
+        if (!m_hruler) return;
+        m_hruler->set_pointer(x);
+        m_vruler->set_pointer(y);
+        // s032: where, in the rulers' unit, from the zero point.
+        const auto& im = m_doc.image();
+        if (x < 0 || !has_image()) { m_status.set_position(""); return; }
+        const auto u = core::rulers::from_key(m_prefs.ruler_unit);
+        const double ix = m_canvas.image_x_at(x) - im.origin_x, iy = m_canvas.image_y_at(y) - im.origin_y;
+        m_status.set_position("x " + core::rulers::format(ix, u, im.dpi, im.width) + "   y " + core::rulers::format(iy, u, im.dpi, im.height));
+    });
+    // s032: GUIDES -- dragged out of a ruler (the top one: level; the left:
+    // upright), moved with the Move tool, and the View menu's verbs.
+    const auto ruler_guide = [this](RulerView& r, bool vertical) {
+        const auto at_canvas = [this, &r](double x, double y, double& cx, double& cy) {
+            cx = x; cy = y;
+            r.translate_coordinates(m_canvas, x, y, cx, cy);
+        };
+        r.signal_guide_drag().connect([this, vertical, at_canvas](double x, double y) {
+            if (!has_image()) return;
+            double cx = 0, cy = 0;
+            at_canvas(x, y, cx, cy);
+            const bool over = cx >= 0 && cy >= 0 && cx < m_canvas.get_width() && cy < m_canvas.get_height();
+            if (!over) { m_canvas.set_guide_preview(std::nullopt); return; }
+            const double at = vertical ? m_canvas.image_x_at(cx) : m_canvas.image_y_at(cy);
+            m_canvas.set_guide_preview(core::Guide{vertical, std::round(at)});
+            if (!m_prefs.show_guides) { m_prefs.show_guides = true; update_guides(); }   // a new guide shows them
+        });
+        r.signal_guide_drop().connect([this, vertical, at_canvas](double x, double y) {
+            m_canvas.set_guide_preview(std::nullopt);
+            if (!has_image() || x < -1e8) return;
+            double cx = 0, cy = 0;
+            at_canvas(x, y, cx, cy);
+            if (cx < 0 || cy < 0 || cx >= m_canvas.get_width() || cy >= m_canvas.get_height()) return;   // back on the rulers
+            const double at = vertical ? m_canvas.image_x_at(cx) : m_canvas.image_y_at(cy);
+            if (!core::canvas::add_guide(m_journal, m_doc, {vertical, at})) toast("Guide: on the picture only");
+        });
+    };
+    if (m_hruler) { ruler_guide(*m_hruler, false); ruler_guide(*m_vruler, true); }
+    m_canvas.signal_guide_moved().connect([this](int i, double at) {
+        if (i >= 0) core::canvas::move_guide(m_journal, m_doc, static_cast<std::size_t>(i), at);
+    });
+    const auto toggle_pref = [this](bool core::Prefs::*f) {
+        m_prefs.*f = !(m_prefs.*f);
+        core::save_prefs(m_prefs_file, m_prefs);
+        update_guides();
+    };
+    add_action("view-guides", [toggle_pref] { toggle_pref(&core::Prefs::show_guides); });
+    add_action("guides-lock", [toggle_pref] { toggle_pref(&core::Prefs::lock_guides); });
+    add_action("guides-snap", [toggle_pref] { toggle_pref(&core::Prefs::snap); });
+    m_layer_acts["guides-clear"] = add_action("guides-clear", [this] {
+        if (!core::canvas::clear_guides(m_journal, m_doc)) toast("Clear Guides: there are none");
+    });
+    for (auto* r : {m_hruler.get(), m_vruler.get()})
+        if (r) r->signal_unit().connect([this](core::rulers::Unit u) {
+            m_hruler->set_unit(u);
+            m_vruler->set_unit(u);
+            m_prefs.ruler_unit = std::string(core::rulers::key(u));
+            core::save_prefs(m_prefs_file, m_prefs);
+        });
+    m_ruler_corner.signal_drag().connect([this](double x, double y) {
+        double cx = x, cy = y;
+        m_ruler_corner.translate_coordinates(m_canvas, x, y, cx, cy);
+        if (has_image()) m_canvas.set_cross(CanvasView::Cross{cx, cy});
+    });
+    m_ruler_corner.signal_drop().connect([this](double x, double y) {
+        m_canvas.set_cross(std::nullopt);
+        if (!has_image() || x < -1e8) return;
+        double cx = x, cy = y;
+        m_ruler_corner.translate_coordinates(m_canvas, x, y, cx, cy);
+        if (cx < 0 || cy < 0) return;   // dropped back on the rulers: nothing
+        core::canvas::set_ruler_origin(m_journal, m_doc, std::round(m_canvas.image_x_at(cx)), std::round(m_canvas.image_y_at(cy)));
+    });
+    m_ruler_corner.signal_reset().connect([this] { if (has_image()) core::canvas::set_ruler_origin(m_journal, m_doc, 0, 0); });
     add_action("command-palette", sigc::mem_fun(*this, &Shell::on_palette));
     // win.tool("brush") -- the palette's tool rows (a parameterised action).
     add_action_with_parameter("tool", Glib::Variant<Glib::ustring>::variant_type(),

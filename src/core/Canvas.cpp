@@ -466,6 +466,9 @@ std::optional<Reshape> crop_plan(const Before& b, const pixel::Rect& r, const pi
     Image next = im;
     next.width = r.w;
     next.height = r.h;
+    next.origin_x = im.origin_x - r.x;   // s031: the zero point stays on the picture
+    next.origin_y = im.origin_y - r.y;
+    for (auto& g : next.guides) g.at -= g.vertical ? r.x : r.y;   // s032: and the guides
     const pixel::Px fill = im.format.alpha ? pixel::transparent() : background;
     Reshape out;
     out.image = std::make_shared<const Image>(next);
@@ -485,6 +488,9 @@ std::optional<Reshape> canvas_plan(const Before& b, int w, int h, int anchor_x, 
     Image next = im;
     next.width = w;
     next.height = h;
+    next.origin_x = im.origin_x + ox;   // s031
+    next.origin_y = im.origin_y + oy;
+    for (auto& g : next.guides) g.at += g.vertical ? ox : oy;   // s032
     const pixel::Px fill = im.format.alpha ? pixel::transparent() : background;
     Reshape out;
     out.image = std::make_shared<const Image>(next);
@@ -509,6 +515,9 @@ std::optional<Reshape> size_plan(const Before& b, int w, int h, double dpi, Filt
     next.width = w;
     next.height = h;
     next.dpi = dpi;
+    next.origin_x = im.origin_x * w / std::max(1, im.width);   // s031: scaled with the picture
+    next.origin_y = im.origin_y * h / std::max(1, im.height);
+    for (auto& g : next.guides) g.at = g.at * (g.vertical ? w : h) / std::max(1, g.vertical ? im.width : im.height);   // s032
     if (w == im.width && h == im.height) {   // the resolution alone: no pixel changes
         Reshape out = same_layers(b);
         out.image = std::make_shared<const Image>(next);

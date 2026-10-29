@@ -1,8 +1,11 @@
 #include "Shell.hpp"
+#include "core/Patterns.hpp"   // s033: the brush's texture
 #include "core/ColourChannels.hpp"   // s026
 #include "Log.hpp"
 #include "core/Composite.hpp"
 #include "core/Heal.hpp"   // s015 m4
+
+#include <chrono>
 
 // Shell_paint.cpp -- PAINT (s008 m4). A Brush / Eraser stroke from the canvas.
 //
@@ -22,6 +25,13 @@ namespace Pa = core::paint;
 namespace {
 // s018 m4: the tools that only ever paint pixels (not a mask).
 bool erase_only_pixels(bool sampled, bool smudge) { return sampled || smudge; }
+// s028: a seed for a stroke's dice -- the clock and a count, so two strokes
+// in the same tick still differ.
+std::uint64_t stroke_seed() {
+    static std::uint64_t n = 0;
+    const auto t = static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    return (t ^ (++n * 0x9E3779B97F4A7C15ULL)) | 1;
+}
 // s015 m4: the very same tiles? (A stroke off the image, or a heal that found
 // nothing, writes nothing -- and so leaves no step.)
 bool same_tiles(const pixel::TileMap& a, const pixel::TileMap& b) {
@@ -62,6 +72,35 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         b.roundness = o.roundness / 100.0;
         b.tilt = o.tilt;
         b.strength = o.strength / 100.0;          // s017: Smudge
+        // s028: the dynamics
+        b.dyn.size_jitter = o.size_jitter / 100.0;
+        b.dyn.min_size = o.min_size / 100.0;
+        b.dyn.angle_jitter = o.angle_jitter / 100.0;
+        b.dyn.roundness_jitter = o.roundness_jitter / 100.0;
+        b.dyn.min_roundness = o.min_roundness / 100.0;
+        b.dyn.scatter = o.scatter / 100.0;
+        b.dyn.both_axes = o.both_axes;
+        b.dyn.count = o.count;
+        b.dyn.count_jitter = o.count_jitter / 100.0;
+        // s033: the texture -- a built-in by key, or yours from the library.
+        if (o.tex_on) {
+            b.texture.on = true;
+            b.texture.scale = o.tex_scale / 100.0;
+            b.texture.depth = o.tex_depth / 100.0;
+            b.texture.subtract = o.tex_subtract;
+            b.texture.invert = o.tex_invert;
+            if (o.tex_pattern.rfind("u:", 0) == 0) {
+                b.texture.image = core::pattern::find(o.tex_pattern.substr(2));
+                if (!b.texture.image) b.texture.on = false;   // gone from the library
+            } else b.texture.builtin = std::max(0, core::pattern::index_of(o.tex_pattern));
+        }
+        if (!erase && !clone && !heal && !smudge) {   // colour: the Brush's own
+            b.dyn.fg_bg = o.fg_bg / 100.0;
+            b.dyn.hue = o.hue / 100.0;
+            b.dyn.sat = o.sat / 100.0;
+            b.dyn.bri = o.bri / 100.0;
+            b.dyn.per_tip = o.per_tip;
+        }
         const auto fmt = m_doc.image().format;
         const auto fg = m_rail.foreground(), bg = m_rail.background();
         b.colour = core::from_srgb(fmt, fg.r, fg.g, fg.b);
@@ -113,6 +152,15 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         m_stroke.cov = std::make_shared<const pixel::TileMap>(Pa::new_coverage(m_doc.image().width, m_doc.image().height));
         m_stroke.mask = m_doc.selection_ptr();
         m_stroke.carry = 1e9;   // the first dab lands at the press
+        m_stroke.jitter = Pa::Jitter(stroke_seed());   // s028: fresh dice each stroke
+        // s028 m2: Color Dynamics -- the Brush on pixels only; the colours from
+        // the colour pair, each dab's made in the document's mode.
+        if (b.dyn.colour() && !erase && !sampled && !smudge && !on_mask) {
+            const float f3[3] = {static_cast<float>(fg.r), static_cast<float>(fg.g), static_cast<float>(fg.b)};
+            const float b3[3] = {static_cast<float>(bg.r), static_cast<float>(bg.g), static_cast<float>(bg.b)};
+            m_stroke.jitter.colours(fmt, f3, b3);
+            m_stroke.tint = std::make_shared<const pixel::TileMap>(Pa::new_tint(fmt, m_doc.image().width, m_doc.image().height));
+        }
         m_journal.begin(on_fmask ? (erase ? "Eraser on Filter Mask" : "Brush on Filter Mask") : on_mask ? (erase ? "Eraser on Mask" : "Brush on Mask") : (sampled || smudge ? verb : erase ? "Eraser" : "Brush Stroke"), {id});
         if (smudge) m_stroke.smudge = std::make_shared<Pa::SmudgeCarry>();   // s017
         // Shift-click: a straight line from where the last stroke ended.
@@ -156,7 +204,7 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
             }
             if (!spot) show_clone_marker();
         }
-        const auto dabs = Pa::dabs_along(from, p, b, m_stroke.carry);
+        const auto dabs = m_stroke.jitter.apply(Pa::dabs_along(from, p, b, m_stroke.carry), m_stroke.brush);   // s028
         m_stroke.pending.insert(m_stroke.pending.end(), dabs.begin(), dabs.end());
         m_stroke.last = p;
         // s012: Smoothing -- a string of up to 60 screen px, in image px.
@@ -170,7 +218,7 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
     if (at == A::Move) {
         const auto q = m_stroke.smoother.push(p);   // where the brush is, after the string
         if (!q) return;
-        const auto dabs = Pa::dabs_along(m_stroke.last, *q, m_stroke.brush, m_stroke.carry);
+        const auto dabs = m_stroke.jitter.apply(Pa::dabs_along(m_stroke.last, *q, m_stroke.brush, m_stroke.carry), m_stroke.brush);
         m_stroke.pending.insert(m_stroke.pending.end(), dabs.begin(), dabs.end());
         m_stroke.last = *q;
         paint_pump();
@@ -179,7 +227,7 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
     // End: the brush catches up to the pen; finish once the work in flight has landed.
     m_stroke.smoother.push(p);
     if (const auto q = m_stroke.smoother.finish()) {
-        const auto dabs = Pa::dabs_along(m_stroke.last, *q, m_stroke.brush, m_stroke.carry);
+        const auto dabs = m_stroke.jitter.apply(Pa::dabs_along(m_stroke.last, *q, m_stroke.brush, m_stroke.carry), m_stroke.brush);
         m_stroke.pending.insert(m_stroke.pending.end(), dabs.begin(), dabs.end());
         m_stroke.last = *q;
     }
@@ -205,21 +253,25 @@ void Shell::paint_pump() {
     const auto im = m_doc.image();
     m_stroke.job = m_jobs.submit("Paint", [this, im, dabs = std::move(dabs), original = m_stroke.original,
                                            current = m_stroke.current, cov = m_stroke.cov, mask = m_stroke.mask,
-                                           b = m_stroke.brush, carry = m_stroke.smudge](core::Jobs::Token&) -> core::Jobs::Landing {
+                                           b = m_stroke.brush, carry = m_stroke.smudge, tint = m_stroke.tint](core::Jobs::Token&) -> core::Jobs::Landing {
         core::TileSet touched = core::tiles_of(im);
-        std::shared_ptr<const pixel::TileMap> cov2 = cov, cur2;
+        std::shared_ptr<const pixel::TileMap> cov2 = cov, cur2, tint2 = tint;
         if (carry)   // s017: Smudge -- dab by dab on what's there (one job at a time owns the finger)
             cur2 = std::make_shared<const pixel::TileMap>(Pa::smudge(*current, mask.get(), b, dabs, *carry, touched));
         else {
-            cov2 = std::make_shared<const pixel::TileMap>(Pa::add_pen_dabs(*cov, b, dabs, touched));
-            cur2 = std::make_shared<const pixel::TileMap>(Pa::apply(*original, *current, *cov2, mask.get(), b, touched));
+            std::optional<pixel::TileMap> t;   // s028 m2: the stroke's colours, moved on
+            if (tint) t = *tint;
+            cov2 = std::make_shared<const pixel::TileMap>(Pa::add_pen_dabs(*cov, b, dabs, touched, t ? &*t : nullptr));
+            if (t) tint2 = std::make_shared<const pixel::TileMap>(std::move(*t));
+            cur2 = std::make_shared<const pixel::TileMap>(Pa::apply(*original, *current, *cov2, mask.get(), b, touched, tint2.get()));
         }
-        return [this, cov2, cur2] {
+        return [this, cov2, cur2, tint2] {
             m_stroke.job = 0;
             // The stroke was ended from outside (an undo mid-stroke closed
             // the gesture): its work is dropped, nothing written around the door.
             if (!m_stroke.active || !m_journal.in_gesture()) { m_stroke = {}; return; }
             m_stroke.cov = cov2;
+            m_stroke.tint = tint2;   // s028 m2
             const bool unchanged = same_tiles(*cur2, *m_stroke.current);
             m_stroke.current = cur2;
             if (m_stroke.on_selection && !unchanged) {   // s016: Quick Mask -- the selection record
@@ -296,8 +348,9 @@ void Shell::on_selection_stroke(const Pa::Dab& p, bool erase, Pa::Brush b, int s
     m_stroke.current = m_stroke.original;
     m_stroke.cov = std::make_shared<const pixel::TileMap>(Pa::new_coverage(im.width, im.height));
     m_stroke.carry = 1e9;
+    m_stroke.jitter = Pa::Jitter(stroke_seed());   // s028
     m_journal.begin(erase ? "Quick Mask: Erase" : "Quick Mask: Paint", {core::kSelectionId});
-    const auto dabs = Pa::dabs_along(p, p, b, m_stroke.carry);
+    const auto dabs = m_stroke.jitter.apply(Pa::dabs_along(p, p, b, m_stroke.carry), m_stroke.brush);   // s028
     m_stroke.pending.insert(m_stroke.pending.end(), dabs.begin(), dabs.end());
     m_stroke.last = p;
     const double zoom = std::max(1e-3, m_canvas.zoom());
@@ -439,6 +492,25 @@ void Shell::on_clone_source(core::select::Pt p) {
 
 void Shell::show_clone_marker() {
     m_canvas.set_clone_marker(m_clone.set, m_clone.point, m_clone.fixed, m_clone.dx, m_clone.dy);
+}
+
+// s029: the tool's SETTINGS in a popover -- from a right-click on its rail
+// button (any tool, chosen or not) or on the canvas (at the pointer). The
+// popover is made for the occasion and goes when it closes.
+void Shell::show_tool_settings(const std::string& tool, Gtk::Widget& at, const Gdk::Rectangle* where) {
+    auto* pop = new Gtk::Popover();
+    pop->set_parent(at);
+    // Beside what it points at, never above / below: the Brush's panel is
+    // taller than the room over or under the pointer in a short window, and
+    // GTK closes a popover it can't place (seen under Xvfb, 620 px high).
+    // Beside, it slides up and down to fit. The side with more room.
+    pop->set_position(where && where->get_x() > at.get_width() / 2 ? Gtk::PositionType::LEFT : Gtk::PositionType::RIGHT);
+    if (where) pop->set_pointing_to(*where);
+    pop->set_child(*m_strip.settings_panel(tool, pop));
+    pop->signal_closed().connect([pop] {
+        Glib::signal_idle().connect_once([pop] { pop->unparent(); delete pop; });
+    });
+    pop->popup();
 }
 
 }  // namespace klimt

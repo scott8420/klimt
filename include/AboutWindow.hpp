@@ -1,5 +1,6 @@
 #pragma once
 #include <gtkmm/window.h>
+#include <gtkmm/label.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AboutWindow -- the DIALOG-LIFETIME exemplar (a stone the README backlog named:
@@ -17,13 +18,14 @@
 //      the older heap-allocated self-deleting dialog is the legacy-rescue shape,
 //      not the default.
 //
-// The hero logo is a symbolic icon resolved from the compiled-in gresource
-// bundle (the RESOURCE-PIPELINE paradigm -- App::on_activate registers it), so
-// the window also exercises resource resolution + theme recolour.
+// s027: two columns -- the app icon's painting (Klimt's The Dancer), whole and
+// full height on the left, a JPEG in the compiled-in gresource bundle (the
+// RESOURCE-PIPELINE paradigm -- App::on_activate registers it); name, build
+// and credit on the right. Until s027 the hero was klimt-logo-symbolic, which
+// still serves the headerbar's logo button.
 //
-// It is deliberately minimal: this is a paradigm seed, not a product About box,
-// so there's no branded chrome (credits, licence, links) -- just enough to prove
-// the lifetime and the resource icon. See docs/resources-and-dialog-lifetime.md.
+// The right column is four tabs (s027): About, Credits, License, System;
+// the painting stays. See docs/resources-and-dialog-lifetime.md.
 // ─────────────────────────────────────────────────────────────────────────────
 namespace klimt {
 
@@ -31,6 +33,12 @@ class AboutWindow : public Gtk::Window {
 public:
     explicit AboutWindow(Gtk::Window& parent);
     ~AboutWindow() override;
+
+private:
+    // s027: the System tab is filled each time the window maps -- the scale
+    // and the display are only known once it is on a screen.
+    void fill_system();
+    Gtk::Label* m_system = nullptr;
 };
 
 }  // namespace klimt

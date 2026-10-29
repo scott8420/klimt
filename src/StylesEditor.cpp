@@ -1,5 +1,6 @@
 #include "StylesEditor.hpp"
 #include "core/Document.hpp"   // s025: blend_modes()
+#include "core/Patterns.hpp"   // s028 m4
 
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/colordialog.h>
@@ -79,6 +80,43 @@ StylesEditor::StylesEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 2) {
         slider(*b, "Scale", 10, 150, "%", &m_s.gradient.scale);
         choice(*b, "Reverse", {"No", "Yes"}, [this] { return m_s.gradient.reverse ? 1 : 0; }, [this](int v) { m_s.gradient.reverse = v == 1; });
     }
+    {   // s028 m4: Pattern Overlay
+        auto* b = section("Pattern Overlay", &m_s.pattern.on);
+        // s033: the built-ins and YOUR patterns (Edit > Define Pattern).
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        auto l = Gtk::make_managed<Gtk::Label>("Pattern");
+        l->set_size_request(64, -1);
+        l->set_xalign(0.0f);
+        l->add_css_class("dim-label");
+        row->append(*l);
+        m_pattern_dd = Gtk::make_managed<Gtk::DropDown>();
+        m_pattern_dd->set_name("properties.styles.pattern.which");
+        m_pattern_dd->set_tooltip_text("The built-in patterns, then yours (Edit > Define Pattern makes one from the selection)");
+        m_pattern_dd->property_selected().signal_changed().connect([this] {
+            if (m_painting || !m_pattern_dd) return;
+            const auto i = m_pattern_dd->get_selected();
+            if (i >= m_pattern_items.size()) return;
+            const auto& it = m_pattern_items[i];
+            if (it.image) { m_s.pattern.user = it.user; m_s.pattern.image = it.image; }
+            else { m_s.pattern.pattern = it.builtin; m_s.pattern.user.clear(); m_s.pattern.image = nullptr; }
+            emit();
+        });
+        m_painters.push_back([this] {
+            fill_patterns();
+            for (std::size_t i = 0; i < m_pattern_items.size(); ++i) {
+                const auto& it = m_pattern_items[i];
+                const bool match = m_s.pattern.image ? it.image == m_s.pattern.image : (!it.image && it.builtin == m_s.pattern.pattern);
+                if (match) { m_pattern_dd->set_selected(static_cast<guint>(i)); break; }
+            }
+        });
+        row->append(*m_pattern_dd);
+        b->append(*row);
+        mode(*b, &m_s.pattern.mode);
+        slider(*b, "Opacity", 0, 100, "%", &m_s.pattern.opacity);
+        slider(*b, "Scale", 10, 1000, "%", &m_s.pattern.scale);
+        slider(*b, "Offset X", -200, 200, "px", &m_s.pattern.x);
+        slider(*b, "Offset Y", -200, 200, "px", &m_s.pattern.y);
+    }
     {   // Color Overlay
         auto* b = section("Color Overlay", &m_s.overlay.on);
         colour(*b, &m_s.overlay.colour);
@@ -125,6 +163,38 @@ StylesEditor::StylesEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 2) {
         slider(*b, "Opacity", 0, 100, "%", &m_s.bevel.shadow_opacity);
     }
     paint();
+}
+
+// s033: the list's items -- rebuilt only when they change (a new / removed
+// library pattern, a layer whose own pattern isn't in the library).
+void StylesEditor::fill_patterns() {
+    if (!m_pattern_dd) return;
+    std::vector<PatternItem> items;
+    for (int k = 0; k < static_cast<int>(core::pattern::builtin().size()); ++k) items.push_back({k, {}, nullptr});
+    bool have_own = !m_s.pattern.image;
+    for (const auto& p : core::pattern::library()) {
+        items.push_back({-1, p.name, p.image});
+        if (p.image == m_s.pattern.image) have_own = true;
+    }
+    if (!have_own) items.push_back({-1, m_s.pattern.user, m_s.pattern.image});   // from the file, not in the library
+    bool same = items.size() == m_pattern_items.size();
+    for (std::size_t i = 0; same && i < items.size(); ++i)
+        same = items[i].builtin == m_pattern_items[i].builtin && items[i].image == m_pattern_items[i].image;
+    if (same) return;
+    m_pattern_items = std::move(items);
+    std::vector<Glib::ustring> names;
+    for (const auto& it : m_pattern_items) {
+        if (!it.image) names.emplace_back(core::pattern::builtin()[static_cast<std::size_t>(it.builtin)].name);
+        else {
+            bool in_lib = false;
+            for (const auto& p : core::pattern::library()) in_lib = in_lib || p.image == it.image;
+            names.emplace_back(it.user + (in_lib ? "" : " (this file)"));
+        }
+    }
+    const bool was = m_painting;
+    m_painting = true;
+    m_pattern_dd->set_model(Gtk::StringList::create(names));
+    m_painting = was;
 }
 
 void StylesEditor::mode(Gtk::Box& into, pixel::Blend* field, const char* label) {

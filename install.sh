@@ -10,7 +10,8 @@
 # the binary):
 #   PREFIX/bin/klimt
 #   PREFIX/share/applications/io.github.scott8420.Klimt.desktop
-#   PREFIX/share/icons/hicolor/scalable/apps/io.github.scott8420.Klimt.svg
+#   PREFIX/share/icons/hicolor/NxN[@2]/apps/io.github.scott8420.Klimt.png
+#       (s027: The Dancer -- 16 to 512 px, sharpened at 1x, plain at @2)
 #   PREFIX/share/icons/hicolor/symbolic/apps/io.github.scott8420.Klimt-symbolic.svg
 #   PREFIX/share/klimt/install-manifest.txt   (what uninstall.sh takes out)
 #
@@ -29,7 +30,7 @@ while (( $# )); do
         --prefix) shift; [[ $# -gt 0 ]] || { echo "--prefix needs a folder" >&2; exit 1; }; prefix="$1" ;;
         --prefix=*) prefix="${1#--prefix=}" ;;
         --build) build=1 ;;
-        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1  (try --help)" >&2; exit 1 ;;
     esac
     shift
@@ -59,13 +60,19 @@ icondir="$prefix/share/icons/hicolor"
 datadir="$prefix/share/klimt"
 manifest="$datadir/install-manifest.txt"
 
+# s027: the app icon is a set of PNGs, one per hicolor size folder
+# (data/icons/hicolor/, made by scripts/make_app_icon.py).
+icons=()
+for f in data/icons/hicolor/*/apps/"$APP_ID".png; do [[ -e "$f" ]] && icons+=("${f#data/icons/hicolor/}"); done
+(( ${#icons[@]} )) || { echo "No app icons in data/icons/hicolor/ -- run scripts/make_app_icon.py." >&2; exit 1; }
+
 files=(
     "$bindir/klimt"
     "$appdir/$APP_ID.desktop"
-    "$icondir/scalable/apps/$APP_ID.svg"
     "$icondir/symbolic/apps/$APP_ID-symbolic.svg"
     "$manifest"
 )
+for i in "${icons[@]}"; do files+=("$icondir/$i"); done
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -74,7 +81,11 @@ printf '%s\n' "# Klimt install manifest -- uninstall.sh removes these" "# prefix
 
 "${SUDO[@]}" install -Dm755 "$BIN"                                              "$bindir/klimt"
 "${SUDO[@]}" install -Dm644 "$tmp/$APP_ID.desktop"                              "$appdir/$APP_ID.desktop"
-"${SUDO[@]}" install -Dm644 "data/$APP_ID.svg"                                  "$icondir/scalable/apps/$APP_ID.svg"
+for i in "${icons[@]}"; do
+    "${SUDO[@]}" install -Dm644 "data/icons/hicolor/$i"                         "$icondir/$i"
+done
+# before s027 the icon was one SVG; take it out so the theme can't pick it
+"${SUDO[@]}" rm -f "$icondir/scalable/apps/$APP_ID.svg"
 "${SUDO[@]}" install -Dm644 "resources/icons/scalable/apps/klimt-logo-symbolic.svg" "$icondir/symbolic/apps/$APP_ID-symbolic.svg"
 "${SUDO[@]}" install -Dm644 "$tmp/manifest"                                     "$manifest"
 

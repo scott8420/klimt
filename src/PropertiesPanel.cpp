@@ -134,6 +134,16 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
     });
     m_adjust.signal_end().connect([this] { L::adjust_end(m_journal); });
     m_fields.append(m_adjust);
+    // s030: a filter layer's filter.
+    m_filter.set_visible(false);
+    m_filter.signal_begin().connect([this] { if (!m_filter_id.empty()) L::filter_layer_begin(m_journal, m_doc, m_filter_id); });
+    m_filter.signal_changed().connect([this](const core::Filter& f) {
+        if (m_painting || m_filter_id.empty()) return;
+        if (m_journal.in_gesture()) L::filter_layer_to(m_journal, m_doc, m_filter_id, f);
+        else L::set_filter_layer(m_journal, m_doc, m_filter_id, f);
+    });
+    m_filter.signal_end().connect([this] { L::filter_layer_end(m_journal); });
+    m_fields.append(m_filter);
 
     // s019: the layer's styles -- live; a slider drag is ONE step, presses fold.
     m_styles.set_visible(false);
@@ -187,6 +197,7 @@ void PropertiesPanel::paint() {
     m_title.set_text(l->name.empty() ? "Untitled" : l->name);
     std::string sub = l->kind == core::Kind::Group ? "group of " + std::to_string(m_doc.panel(primary()).size())
                     : l->kind == core::Kind::Adjustment ? std::string("adjustment layer")
+                    : l->kind == core::Kind::Filter ? std::string("filter layer")   // s030
                     : std::string("pixel layer");
     if (m_sel.size() > 1) sub += " · +" + std::to_string(m_sel.size() - 1) + " more";
     m_subtitle.set_text(sub);
@@ -209,7 +220,15 @@ void PropertiesPanel::paint() {
     // s013: one adjustment layer picked: its controls.
     const bool adj = l->kind == core::Kind::Adjustment && m_sel.size() == 1;
     m_adjust.set_visible(adj);
-    m_later.set_visible(!adj);
+    // s030: one filter layer picked: its filter.
+    const bool flt = l->kind == core::Kind::Filter && m_sel.size() == 1 && l->filters.size() == 1;
+    m_filter.set_visible(flt);
+    m_filter_id = flt ? primary() : Id{};
+    if (flt) {
+        m_filter.set_sensitive(!m_doc.locked_all(primary()));
+        if (!m_journal.in_gesture()) m_filter.set(l->filters[0].f);
+    }
+    m_later.set_visible(!adj && !flt);
     paint_live(*l);   // s018
     // s019: one pixel layer picked: its styles.
     const bool styled = (l->kind == core::Kind::Pixel || l->kind == core::Kind::Group) && m_sel.size() == 1;   // s024: groups too

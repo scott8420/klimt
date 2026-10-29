@@ -10,6 +10,7 @@
 // Writes nothing itself: every control is one call into core::layers (the
 // journal's one door). A repaint sets fields under m_painting -- not a choice.
 #include "AdjustEditor.hpp"
+#include "FilterLayerEditor.hpp"   // s030
 #include "StylesEditor.hpp"   // s019
 #include "widgets/Widgets.hpp"
 #include "core/Document.hpp"
@@ -27,6 +28,7 @@ class PropertiesPanel : public widgets::Box {
 public:
     using Id = core::Document::Id;
     PropertiesPanel(core::Document& doc, core::DocJournal& journal);
+    void patterns_changed() { m_styles.patterns_changed(); }   // s033: Define Pattern
     // What is selected (panel order). Repaints the fields from the document.
     void show(const std::vector<Id>& selection);
     // s013: an adjustment layer's controls (Levels / Curves draw the
@@ -65,6 +67,8 @@ private:
     widgets::Label        m_later;
     AdjustEditor          m_adjust;     // s013
     Id                    m_adjust_id;  // the layer m_adjust shows
+    FilterLayerEditor     m_filter;     // s030: a filter layer's settings
+    Id                    m_filter_id;  // the layer m_filter shows
     Id                    m_hist_id;    // the layer whose histogram m_adjust has (or was asked for)
     sigc::signal<void(const Id&)> m_hist_wanted;
     // s018: the live filters -- a heading, a row each, Rasterize.

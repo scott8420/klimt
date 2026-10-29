@@ -1,3 +1,4 @@
+#include "core/Patterns.hpp"   // s033
 // Shell_filter.cpp -- THE FILTER MENU (s014). docs/filters.md.
 //
 //   * Filter > ...: a dialog with a live preview -- what the view shows,
@@ -205,9 +206,41 @@ void Shell::on_style(const std::string& verb) {
     else if (verb == "inner-glow") s.inner_glow.on = true;   // s023
     else if (verb == "gradient-overlay") s.gradient.on = true;   // s025
     else if (verb == "satin") s.satin.on = true;   // s026
+    else if (verb == "pattern-overlay") s.pattern.on = true;   // s028 m4
     else if (verb == "colour-overlay") s.overlay.on = true;
     else if (verb == "stroke") s.stroke.on = true;
     if (!L::set_styles(m_journal, m_doc, id, s)) toast("Layer Style: already on -- its settings are in Properties");
+}
+
+// s030: a new FILTER LAYER above the picked layer, picked; its filter's
+// settings in Properties.
+void Shell::on_filter_layer_new(core::FilterKind k) {
+    if (!has_image()) return;
+    if (m_doc.image().format.mode != pixel::Mode::RGB) { toast("Filter layers: RGB documents only, for now"); return; }
+    const auto id = L::add_filter_layer(m_journal, m_doc, core::filter::fresh(k), m_layers.primary());
+    if (id.empty()) { toast("New Filter Layer: refused"); return; }
+    m_journal.reselect({id});
+    m_layers.select({id}, false);
+    if (m_doc.selection()) toast("“" + m_doc.get(id)->name + "” -- only inside the selection (its mask); paint the mask to change where");
+}
+
+// s033: Edit > DEFINE PATTERN -- what the eye sees inside the selection's
+// bounds (no selection: the whole picture), into the app's pattern library;
+// Pattern Overlay lists it. App settings: no step.
+void Shell::on_define_pattern() {
+    if (!has_image()) return;
+    const auto& im = m_doc.image();
+    pixel::Rect r{0, 0, im.width, im.height};
+    if (const auto* sel = m_doc.selection()) r = core::select::bounds(*sel);
+    std::string why;
+    const auto pat = core::pattern::define(im, m_doc.snapshot(), r, why);
+    if (!pat) { toast("Define Pattern: " + why); return; }
+    std::string err;
+    const auto name = core::pattern::add_to_library(*pat, "Pattern", err);
+    if (name.empty()) { toast("Define Pattern: " + err); return; }
+    m_properties.patterns_changed();
+    toast("Saved as “" + name + "” (" + std::to_string(pat->width()) + " × " + std::to_string(pat->height()) +
+          ") -- Layer Style > Pattern Overlay lists it");
 }
 
 }  // namespace klimt

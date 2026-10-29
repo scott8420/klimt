@@ -7,7 +7,11 @@
 #include "widgets/Widgets.hpp"
 #include "core/Tools.hpp"
 #include "core/BrushPresets.hpp"   // s021
+#include "core/ToolDefaults.hpp"   // s029
 
+#include <gtkmm/popover.h>
+
+#include <functional>
 #include <map>
 #include <sigc++/signal.h>
 #include <string>
@@ -35,6 +39,18 @@ public:
         int tip = 0, angle = 0, roundness = 100;                // s017: core::paint::Tip, degrees, %
         bool tilt = false;                                      // s017: the pen's lean shapes the tip
         int strength = 50;                                      // s017: Smudge's strength (%)
+        // s028: DYNAMICS (core::paint::Dynamics in %; scatter 0..1000 %, count 1..16).
+        int size_jitter = 0, min_size = 0, angle_jitter = 0, roundness_jitter = 0, min_roundness = 25;
+        int scatter = 0, count = 1, count_jitter = 0;
+        bool both_axes = false;
+        int fg_bg = 0, hue = 0, sat = 0, bri = 0;
+        bool per_tip = true;
+        // s033: TEXTURE (core::paint::Texture): a pattern's key -- a built-in's, or "u:" + yours.
+        bool tex_on = false;
+        std::string tex_pattern = "paper";
+        int tex_scale = 100, tex_depth = 50;
+        bool tex_subtract = false, tex_invert = false;
+        bool dynamics() const { return size_jitter || angle_jitter || roundness_jitter || scatter || count > 1 || fg_bg || hue || sat || bri; }
     };
     BrushOpts brush(const std::string& tool) const;
     // s015: the Clone Stamp's own options (its brush is brush("clone")).
@@ -50,6 +66,24 @@ public:
     void apply_preset(const std::string& tool, std::size_t i);   // the tool's options become preset i
     std::size_t save_preset(const std::string& tool, const std::string& name);   // the tool's options as a new preset; its index
     void delete_preset(std::size_t i);
+    // s029: the tool's SETTINGS -- every option on tabs (Brush, Tip, Shape,
+    // Scatter, Colour, Source; Gradient, Crop, Magic Wand). The strip's
+    // dropdown, a right-click on the tool in the rail, a right-click on the
+    // canvas all show it. `pop` is the popover it sits in (closed before a
+    // rebuild); `changed` is told after each change.
+    Gtk::Widget* settings_panel(const std::string& tool, Gtk::Popover* pop, std::function<void()> changed = {});
+    static bool has_settings(const std::string& tool);
+    // s029: SAVED DEFAULTS (~/.config/klimt/tools.json) -- every tool starts
+    // from them. Reset: the saved ones (none: the factory's); Save as
+    // Default: the tool as it is; Factory: the built-in values, the saved
+    // ones forgotten.
+    void set_defaults_file(const std::string& file);
+    void reset_tool(const std::string& tool);
+    void save_tool_default(const std::string& tool);
+    void factory_tool(const std::string& tool);
+    bool has_saved_default(const std::string& tool) const;
+    static bool is_brush_tool(const std::string& tool);
+    static std::string tip_label(const BrushOpts& o);   // "Round 45% · jitter"
     // s008: told when the user picks a variant (tool id, index).
     sigc::signal<void(const std::string&, int)>& signal_variant() { return m_variant_signal; }
 
@@ -64,6 +98,10 @@ private:
     std::vector<core::BrushPreset> m_presets = core::default_presets();
     std::string m_presets_file;
     void store_presets();
+    void refresh_strip(const std::string& tool);
+    core::ToolDefaults m_defaults;                            // s029
+    std::string m_defaults_file;
+    void apply_defaults(const std::string& tool, bool factory);   // s029: the strip shows `tool` again (at idle)
     Gtk::Widget* presets_button(const std::string& tool);   // the strip's "Brushes" button and its popover
     std::string m_shown;                                      // the tool the strip shows
     sigc::signal<void()> m_brush_signal;

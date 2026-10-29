@@ -48,5 +48,41 @@ void selftest_presets(const Check& check) {
     check("load: bad rows dropped, duplicates renamed", g.size() == 2 && g[0].name == "A" && g[1].name == "A 2", std::to_string(g.size()));
     check("load: clamped", g.size() == 2 && g[0].size == 2500 && g[0].hardness == 0 && g[0].angle == -90 && g[0].roundness == 5,
           g.empty() ? "" : std::to_string(g[0].angle));
+    // s028: dynamics -- round trip, clamped, and a plain preset writes none.
+    {
+        auto w = d;
+        core::BrushPreset q;
+        q.name = "Jittery";
+        q.size_jitter = 60; q.min_size = 10; q.angle_jitter = 100; q.roundness_jitter = 30; q.min_roundness = 40;
+        q.scatter = 350; q.count = 5; q.count_jitter = 20; q.both_axes = true;
+        q.fg_bg = 50; q.hue = 10; q.sat = 20; q.bri = 30; q.per_tip = false;
+        w.push_back(q);
+        core::save_presets(file, w);
+        check("dynamics: saved and read back", core::load_presets(file) == w, "");
+        std::ifstream in(file);
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        core::save_presets(file, {d[0]});
+        std::ifstream in2(file);
+        const std::string plain((std::istreambuf_iterator<char>(in2)), std::istreambuf_iterator<char>());
+        check("dynamics: a plain preset writes no dynamics keys", plain.find("scatter") == std::string::npos && text.find("scatter") != std::string::npos, "");
+        { std::ofstream(file) << R"({"presets":[{"name":"X","scatter":5000,"count":40,"hue":-3,"size_jitter":250}]})"; }
+        const auto c = core::load_presets(file);
+        check("dynamics: clamped on reading", c.size() == 1 && c[0].scatter == 1000 && c[0].count == 16 && c[0].hue == 0 && c[0].size_jitter == 100, "");
+        bool some = false;
+        for (const auto& e : d) some = some || e.scatter > 0;
+        check("dynamics: a default with scatter (Foliage / Spatter)", some, "");
+    }
+    // s033: the texture -- round trip; a preset without it writes none.
+    {
+        core::BrushPreset q;
+        q.name = "Grainy";
+        q.tex_on = true; q.tex_pattern = "u:My Paper"; q.tex_scale = 250; q.tex_depth = 80; q.tex_subtract = true; q.tex_invert = true;
+        core::save_presets(file, {q});
+        const auto back = core::load_presets(file);
+        check("texture: saved and read back", back.size() == 1 && back[0] == q, "");
+        { std::ofstream(file) << R"({"presets":[{"name":"T","tex_on":true,"tex_scale":5000,"tex_depth":-3,"tex_pattern":""}]})"; }
+        const auto t = core::load_presets(file);
+        check("texture: clamped on reading", t.size() == 1 && t[0].tex_scale == 1000 && t[0].tex_depth == 0 && t[0].tex_pattern == "paper", "");
+    }
     fs::remove_all(dir);
 }

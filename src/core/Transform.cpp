@@ -440,6 +440,20 @@ std::optional<canvas::Reshape> reshape(const canvas::Before& b, int w, int h, co
     Image next = *b.image;
     next.width = w;
     next.height = h;
+    // s031 / s032: the zero point maps with the picture; a guide too when the
+    // turn keeps it upright or level (90-degree turns, flips) -- otherwise
+    // it stays where it was, as Photoshop's do.
+    {
+        const Pt o = m.apply({b.image->origin_x, b.image->origin_y});
+        next.origin_x = o.x;
+        next.origin_y = o.y;
+        for (auto& g : next.guides) {
+            const Pt p0 = m.apply(g.vertical ? Pt{g.at, 0} : Pt{0, g.at});
+            const Pt p1 = m.apply(g.vertical ? Pt{g.at, 1} : Pt{1, g.at});
+            if (std::abs(p0.x - p1.x) < 1e-9) g = {true, p0.x};
+            else if (std::abs(p0.y - p1.y) < 1e-9) g = {false, p0.y};
+        }
+    }
     canvas::Reshape out;
     out.image = std::make_shared<const Image>(next);
     const pixel::Format f = next.format;

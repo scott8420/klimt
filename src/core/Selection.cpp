@@ -302,6 +302,17 @@ TileMap inverted(const TileMap* old, const pixel::Format& mf, int w, int h) {
 
 bool empty(const TileMap& m) { return m.tile_count() == 0; }
 
+pixel::Rect bounds(const TileMap& m) {   // s033: exact (extent is whole tiles)
+    const pixel::Rect e = extent(m);
+    if (e.empty()) return {};
+    int x0 = e.x + e.w, y0 = e.y + e.h, x1 = e.x - 1, y1 = e.y - 1;
+    for (int y = e.y; y < e.y + e.h; ++y)
+        for (int x = e.x; x < e.x + e.w; ++x)
+            if (coverage(m, x, y) > 0.f) { x0 = std::min(x0, x); x1 = std::max(x1, x); y0 = std::min(y0, y); y1 = std::max(y1, y); }
+    if (x1 < x0) return {};
+    return {x0, y0, x1 - x0 + 1, y1 - y0 + 1};
+}
+
 pixel::Rect extent(const TileMap& m) {
     int c0 = m.cols(), r0 = m.rows(), c1 = -1, r1 = -1;
     for (int row = 0; row < m.rows(); ++row)
