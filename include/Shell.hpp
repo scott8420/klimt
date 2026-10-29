@@ -240,6 +240,10 @@ private:
     void on_live_edit(const core::Document::Id& id, std::size_t i);
     void on_style(const std::string& verb);      // category: layer: s019 -- Layer > Layer Style   // category: filter: s018 -- a live filter's dialog
     void on_colour_range();                      // category: select: s024 -- Select > Color Range (the dialog)
+    void on_channel_view(int k);                 // category: select: s026 -- a colour channel alone, as grey (-1: the picture)
+    void on_colour_load(int k, int op);          // category: select: s026 -- a colour channel as the selection (a job)
+    void on_colour_dup(int k);                   // category: select: s026 -- a colour channel as a saved channel (a job)
+    int                m_channel_view = -1;      // s026: the colour channel the canvas shows alone (-1: the picture)
     void range_preview_soon();                   // category: select: its preview, a moment after the last change
     void range_run();                            // category: select: OK -- a job, ONE step
     void on_fade();                              // category: fade: s020 -- Edit > Fade (the dialog)

@@ -74,6 +74,9 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["select-save"] = add_action("select-save", sigc::mem_fun(*this, &Shell::on_save_selection));
     m_layer_acts["select-range"] = add_action("select-range", sigc::mem_fun(*this, &Shell::on_colour_range));   // s024
     m_channels.signal_save().connect(sigc::mem_fun(*this, &Shell::on_save_selection));
+    m_channels.signal_view().connect(sigc::mem_fun(*this, &Shell::on_channel_view));           // s026
+    m_channels.signal_load_colour().connect(sigc::mem_fun(*this, &Shell::on_colour_load));
+    m_channels.signal_dup_colour().connect(sigc::mem_fun(*this, &Shell::on_colour_dup));
     m_channels.signal_load().connect([this](const std::string& id, int op) {
         core::select::load_channel(m_journal, m_doc, id, static_cast<core::select::Op>(op));
     });
@@ -98,7 +101,7 @@ void Shell::bind_actions() {  // bindings
         m_layer_acts["filter-" + std::string(core::filter::key(k))] =
             add_action("filter-" + std::string(core::filter::key(k)), [this, k] { on_filter(k); });
     // s019: Layer > Layer Style (Shell_filter.cpp).
-    for (const char* v : {"drop-shadow", "outer-glow", "inner-shadow", "inner-glow", "gradient-overlay", "bevel-emboss", "colour-overlay", "stroke", "copy", "paste", "clear", "rasterize"})
+    for (const char* v : {"drop-shadow", "outer-glow", "inner-shadow", "inner-glow", "satin", "gradient-overlay", "bevel-emboss", "colour-overlay", "stroke", "copy", "paste", "clear", "rasterize"})
         m_layer_acts[std::string("style-") + v] = add_action(std::string("style-") + v, [this, v] { on_style(v); });
     m_layer_acts["filter-last"] = add_action("filter-last", [this] { on_filter_last(false); });
     m_layer_acts["filter-last-dialog"] = add_action("filter-last-dialog", [this] { on_filter_last(true); });

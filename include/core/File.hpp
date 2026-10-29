@@ -35,6 +35,7 @@ struct Contents {
     Image                     image;
     std::map<Document::Id, Layer> layers;
     std::map<Document::Id, Layer> channels;   // s016: the saved selections
+    std::shared_ptr<const pixel::TileMap> selection;   // s026: the selection as it was (nullptr: none)
     int                       next_id = 1;
     formats::Kind             kind = formats::Kind::Unknown;   // what it was opened from
     std::vector<std::string>  notes;                           // "first page of 3"

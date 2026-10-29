@@ -15,6 +15,38 @@ ChannelsPanel::ChannelsPanel() : Gtk::Box(Gtk::Orientation::VERTICAL, 6) {
     set_margin_start(8);
     set_margin_end(8);
     set_margin_bottom(8);
+    // s026: the colour channels.
+    m_colour.set_name("dock.channels.colour");
+    m_colour.set_selection_mode(Gtk::SelectionMode::SINGLE);
+    m_colour.add_css_class("navigation-sidebar");
+    append(m_colour);
+    auto colour_click = Gtk::GestureClick::create();
+    colour_click->set_button(GDK_BUTTON_PRIMARY);
+    colour_click->signal_released().connect([this, colour_click](int n, double x, double y) {
+        auto* row = m_colour.get_row_at_y(static_cast<int>(y));
+        if (!row || n != 1) return;
+        // Its own buttons handle themselves.
+        if (auto* w = row->pick(x - row->get_allocation().get_x(), y - row->get_allocation().get_y()))
+            for (auto* p = w; p && p != row; p = p->get_parent())
+                if (dynamic_cast<Gtk::Button*>(p)) return;
+        const int k = row->get_index() - 1;   // row 0: the picture
+        const auto st = colour_click->get_current_event_state();
+        const bool ctrl = (st & Gdk::ModifierType::CONTROL_MASK) != Gdk::ModifierType{};
+        if (ctrl && k >= 0) {
+            const bool shift = (st & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{};
+            const bool alt = (st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+            m_load_colour.emit(k, shift && alt ? 3 : shift ? 1 : alt ? 2 : 0);
+            return;
+        }
+        m_view.emit(k);
+    });
+    m_colour.add_controller(colour_click);
+    auto* sep = Gtk::make_managed<Gtk::Label>();
+    sep->set_markup("<small>Saved selections</small>");
+    sep->set_xalign(0.f);
+    sep->add_css_class("dim-label");
+    append(*sep);
+
     auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
     scroll->set_vexpand(true);
     scroll->set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
@@ -101,6 +133,39 @@ void ChannelsPanel::show(const std::vector<Item>& items, bool can_save) {
         if (m_items[i].id == picked) m_list.select_row(*m_list.get_row_at_index(static_cast<int>(i)));
     m_empty.set_visible(m_items.empty());
     m_remove_button.set_sensitive(m_list.get_selected_row() != nullptr);
+}
+
+void ChannelsPanel::show_colour(const std::vector<std::string>& names, const std::string& composite, int viewing) {
+    if (names != m_colour_names) {
+        m_colour_names = names;
+        while (auto* c = m_colour.get_first_child()) m_colour.remove(*c);
+        for (int k = -1; k < static_cast<int>(names.size()); ++k) {
+            auto* row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            row->set_margin(2);
+            auto* l = Gtk::make_managed<Gtk::Label>(k < 0 ? composite : names[static_cast<std::size_t>(k)]);
+            l->set_xalign(0.0f);
+            l->set_hexpand(true);
+            row->append(*l);
+            if (k >= 0) {
+                const auto button = [&](const char* icon, const char* tip, auto act) {
+                    auto* b = Gtk::make_managed<Gtk::Button>();
+                    b->set_icon_name(icon);
+                    b->add_css_class("flat");
+                    b->set_tooltip_text(tip);
+                    b->signal_clicked().connect(act);
+                    row->append(*b);
+                };
+                button("edit-select-all-symbolic", "Load this channel as a selection (or Ctrl-click the row; Shift adds, Alt subtracts)",
+                       [this, k] { m_load_colour.emit(k, 0); });
+                button("edit-copy-symbolic", "Duplicate: this channel as a saved channel below (to push with Quick Mask)",
+                       [this, k] { m_dup_colour.emit(k); });
+            }
+            m_colour.append(*row);
+        }
+        if (names.empty()) m_colour.set_visible(false);
+        else m_colour.set_visible(true);
+    }
+    if (auto* r = m_colour.get_row_at_index(viewing + 1)) m_colour.select_row(*r);
 }
 
 void ChannelsPanel::rename_row(int index) {

@@ -1,4 +1,5 @@
 #include "Shell.hpp"
+#include "core/ColourChannels.hpp"   // s026
 #include "Log.hpp"
 #include "core/Composite.hpp"
 #include "core/Heal.hpp"   // s015 m4
@@ -316,6 +317,10 @@ void Shell::update_channels() {
     std::vector<ChannelsPanel::Item> items;
     for (const auto& id : m_doc.channel_order()) items.push_back({id, m_doc.get(id)->name});
     m_channels.show(items, m_doc.selection() != nullptr);
+    // s026: the colour channels (the picture's name: its mode).
+    const auto f = m_doc.image().format;
+    const char* comp = f.mode == pixel::Mode::RGB ? "RGB" : f.mode == pixel::Mode::CMYK ? "CMYK" : f.mode == pixel::Mode::Gray ? "Gray" : "Lab";
+    m_channels.show_colour(has_image() ? core::select::colour_channels(f) : std::vector<std::string>{}, comp, m_channel_view);
 }
 
 // s016: Q -- Quick Mask on / off. View state: the strokes made in it are the steps.

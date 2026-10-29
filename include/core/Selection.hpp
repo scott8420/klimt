@@ -110,6 +110,9 @@ bool modify(DocJournal& j, Document& d, Modify k, double r);   // s011 m4: "Expa
 // Load: the channel into the selection by `op`. Remove: the channel gone.
 // Rename: a new name (not empty). Each ONE step.
 Document::Id save_channel(DocJournal& j, Document& d, const std::string& name = {});
+// s026: a mask as a new saved channel (the same naming), `step` the step's label.
+Document::Id save_channel_mask(DocJournal& j, Document& d, std::shared_ptr<const pixel::TileMap> mask,
+                               const std::string& name, const std::string& step);
 bool load_channel(DocJournal& j, Document& d, const Document::Id& id, Op op = Op::Replace);
 bool remove_channel(DocJournal& j, Document& d, const Document::Id& id);
 bool rename_channel(DocJournal& j, Document& d, const Document::Id& id, const std::string& name);

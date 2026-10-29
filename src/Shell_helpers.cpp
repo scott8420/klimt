@@ -7,6 +7,7 @@
 #include <glibmm/main.h>
 #include "core/Composite.hpp"
 #include "core/Selection.hpp"   // s013: the preview's mask
+#include "core/ColourChannels.hpp"   // s026
 
 #include <cmath>
 
@@ -129,7 +130,7 @@ void Shell::update_layer_actions() {
         // s019: a pixel layer takes styles; Paste wants something copied.
         // s024: groups take styles too (Rasterize: pixel layers only).
         const bool styleable = pixel_layer || (pl && pl->kind == core::Kind::Group);
-        for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-gradient-overlay", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear"})
+        for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-satin", "style-gradient-overlay", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear"})
             on(v, img && styleable);
         on("style-rasterize", img && pixel_layer);
         on("style-paste", img && styleable && m_style_clip);
@@ -327,7 +328,7 @@ void Shell::queue_render() {
         for (std::size_t i = 0; i < owed.size(); i += kBatch) {
             std::vector<std::pair<int, int>> batch;
             for (std::size_t k = i; k < std::min(owed.size(), i + kBatch); ++k) batch.emplace_back(owed[k].col, owed[k].row);
-            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch, view = m_mask_view, qm, qm_on = qm_flag](core::Jobs::Token& t) -> core::Jobs::Landing {
+            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch, view = m_mask_view, qm, qm_on = qm_flag, chan = m_channel_view](core::Jobs::Token& t) -> core::Jobs::Landing {
                 auto out = std::make_shared<std::vector<CanvasView::Tile>>();
                 for (const auto& [col, row] : batch) {
                     if (t.cancelled()) return [] {};
@@ -339,6 +340,13 @@ void Shell::queue_render() {
                         core::mask_tile_argb(*shared->at(view).mask, col, row, *px, tile.w, tile.h);
                     else
                         core::composite_tile_argb(im, *shared, col, row, *px, tile.w, tile.h);
+                    // s026: one colour channel alone, as grey.
+                    if (chan >= 0 && view.empty())
+                        for (auto& v : *px) {
+                            const float r = ((v >> 16) & 0xff) / 255.f, g = ((v >> 8) & 0xff) / 255.f, b = (v & 0xff) / 255.f;
+                            const auto q = static_cast<std::uint32_t>(std::lround(std::clamp(core::select::channel_grey(im.format.mode, chan, r, g, b), 0.f, 1.f) * 255.f));
+                            v = (v & 0xff000000u) | (q << 16) | (q << 8) | q;
+                        }
                     // s016: Quick Mask -- the unselected under a half-strong red.
                     if (qm_on && qm) {
                         for (int y = 0; y < tile.h; ++y)

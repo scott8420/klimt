@@ -2,6 +2,7 @@
 #include "core/Fade.hpp"   // s020: the verb table's fade
 #include "core/Transfer.hpp"   // s022: the verb table's paste
 #include "core/ColourRange.hpp"   // s024
+#include "core/ColourChannels.hpp"   // s026
 #include "core/Selection.hpp"   // s008: the verb table carries the selection verbs
 #include "core/Paint.hpp"       // s008 m4: and the brush
 #include "core/Move.hpp"        // s009 m1: and the Move tool
@@ -1095,6 +1096,9 @@ const std::vector<Verb>& verbs() {
         // s022: layers from another document (here, a copy of this one's group).
         {"paste",         [](DocJournal& j, Document& d) { paste(j, d, transfer::take(d, {"L2"}), "L5"); }},
         {"copy_to",       [](DocJournal& j, Document& d) { copy_to(j, d, {"L4", "L5"}, "L1", Where::Above); }},
+        // s026: the colour channels -- Red loaded, Blue duplicated.
+        {"load_channel_k", [](DocJournal& j, Document& d) { select::load_colour_channel(j, d, 0); }},
+        {"dup_channel_k",  [](DocJournal& j, Document& d) { select::duplicate_colour_channel(j, d, 2); }},
         // s024: Select > Color Range -- the red square.
         {"colour_range",  [](DocJournal& j, Document& d) {
              select::ColourRange r; r.samples = {{1, 0, 0}}; select::colour_range(j, d, r); }},

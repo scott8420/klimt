@@ -78,6 +78,7 @@ int reach(const Styles& s) {
     if (s.inner.on) r = std::max(r, s.inner.distance + blur_reach(s.inner.size) + 1);
     if (s.bevel.on) r = std::max(r, blur_reach(s.bevel.size) + blur_reach(s.bevel.soften) + 2);   // s021
     if (s.inner_glow.on) r = std::max(r, blur_reach(s.inner_glow.size) + 1);   // s023
+    if (s.satin.on) r = std::max(r, s.satin.distance + blur_reach(s.satin.size) + 1);   // s026
     return r;
 }
 
@@ -244,6 +245,22 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
         }
     }
     const float gro = static_cast<float>(s.gradient.opacity) / 100.f;
+    // s026: Satin -- |A shifted one way - A shifted the other|, softened.
+    std::vector<float> satin;
+    if (s.satin.on) {
+        const double a = s.satin.angle * M_PI / 180;
+        const int dx = static_cast<int>(std::lround(std::cos(a) * s.satin.distance));
+        const int dy = static_cast<int>(std::lround(-std::sin(a) * s.satin.distance));
+        satin.assign(N, 0.f);
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                satin[static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)] =
+                    std::abs(at(A, x - dx, y - dy) - at(A, x + dx, y + dy));
+        blur(satin, W, H, sigma_of(s.satin.size));
+        if (s.satin.invert) for (auto& v : satin) v = 1.f - std::clamp(v, 0.f, 1.f);
+    }
+    const auto sac = colour_of(s.satin.colour);
+    const float sao = static_cast<float>(s.satin.opacity) / 100.f;
     const auto igc = colour_of(s.inner_glow.colour);
     const float igo = static_cast<float>(s.inner_glow.opacity) / 100.f;
     const auto ov = colour_of(s.overlay.colour), ish = colour_of(s.inner.colour);
@@ -254,6 +271,8 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
         // The content's own straight colour, overlaid, inner-shadowed.
         float col[pixel::kMaxChannels];
         for (int k = 0; k < cc; ++k) col[k] = P[i * static_cast<std::size_t>(C) + static_cast<std::size_t>(k)] / a;
+        if (!satin.empty())   // s026: under the overlays (Photoshop's order)
+            mix(col, sac, std::clamp(satin[i], 0.f, 1.f) * sao, s.satin.mode, i);
         if (!grad_t.empty()) {   // s025: under Color Overlay (Photoshop's order)
             pixel::Px gc{};
             for (int k = 0; k < cc; ++k)

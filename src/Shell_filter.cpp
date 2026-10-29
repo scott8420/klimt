@@ -204,6 +204,7 @@ void Shell::on_style(const std::string& verb) {
     else if (verb == "bevel-emboss") s.bevel.on = true;   // s021
     else if (verb == "inner-glow") s.inner_glow.on = true;   // s023
     else if (verb == "gradient-overlay") s.gradient.on = true;   // s025
+    else if (verb == "satin") s.satin.on = true;   // s026
     else if (verb == "colour-overlay") s.overlay.on = true;
     else if (verb == "stroke") s.stroke.on = true;
     if (!L::set_styles(m_journal, m_doc, id, s)) toast("Layer Style: already on -- its settings are in Properties");

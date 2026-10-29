@@ -27,10 +27,22 @@ public:
     sigc::signal<void()>& signal_save() { return m_save; }
     sigc::signal<void(const std::string&)>& signal_remove() { return m_remove; }
     sigc::signal<void(const std::string&, const std::string&)>& signal_rename() { return m_rename; }
+    // s026: THE COLOUR CHANNELS above the saved ones: the picture ("RGB") and
+    // each channel. Click: view it alone, as grey (the picture: back); Ctrl-
+    // click or its button: load it as a selection (Shift adds, Alt
+    // subtracts); its copy button: a saved channel of it.
+    void show_colour(const std::vector<std::string>& names, const std::string& composite, int viewing);
+    sigc::signal<void(int)>& signal_view() { return m_view; }               // -1: the picture
+    sigc::signal<void(int, int)>& signal_load_colour() { return m_load_colour; }   // channel, select::Op as int
+    sigc::signal<void(int)>& signal_dup_colour() { return m_dup_colour; }
 
 private:
     void rename_row(int index);
     std::vector<Item>  m_items;
+    std::vector<std::string> m_colour_names;
+    Gtk::ListBox       m_colour;   // s026
+    sigc::signal<void(int)> m_view, m_dup_colour;
+    sigc::signal<void(int, int)> m_load_colour;
     Gtk::ListBox       m_list;
     Gtk::Label         m_empty;
     Gtk::Button        m_save_button, m_remove_button;

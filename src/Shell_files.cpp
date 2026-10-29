@@ -75,6 +75,13 @@ void Shell::adopt(core::file::Contents c, const std::string& path, const std::st
         core::Document::Loading load(m_doc);
         m_doc.replace(c.image, std::move(c.layers), c.next_id);
         m_doc.replace_channels(std::move(c.channels));   // s016
+        if (c.selection && c.selection->width() == c.image.width && c.selection->height() == c.image.height &&
+            c.selection->format() == m_doc.mask_format()) {   // s026: the selection as it was saved
+            core::Layer s;
+            s.name = "Selection";
+            s.pixels = c.selection;
+            m_doc.put(core::kSelectionId, s);
+        }
     }
     m_journal.clear();
     m_tabs.live_info().saved_mark = m_journal.mark();
@@ -424,6 +431,7 @@ void Shell::save_to(const std::string& path, std::function<void()> then) {
     c.image = m_doc.image();
     c.layers = m_doc.snapshot();
     c.channels = m_doc.channels();   // s016
+    c.selection = m_doc.selection_ptr();   // s026
     c.next_id = m_doc.next_id();
     const auto mark = m_journal.mark();
     const std::string name = fs::path(path).filename().string();

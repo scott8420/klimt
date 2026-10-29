@@ -117,6 +117,7 @@ add_library(klimt_core STATIC
     src/core/Transfer.cpp     # s022: layers between documents
     src/core/Session.cpp      # s023: the open tabs, remembered
     src/core/ColourRange.cpp  # s024: Select > Color Range
+    src/core/ColourChannels.cpp # s026: the colour channels
     src/core/Prefs.cpp        # s014 m4: the app's settings (the dock divider)
 )
 target_include_directories(klimt_core PUBLIC include)
@@ -146,7 +147,7 @@ add_executable(klimt_bench src/bench.cpp)
 target_link_libraries(klimt_bench PRIVATE klimt_core Threads::Threads)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp)
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads)
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -217,6 +218,7 @@ add_executable(klimt
     src/Shell_fade.cpp        # s020: Edit > Fade
     src/ColourRangeDialog.cpp # s024: Select > Color Range
     src/Shell_range.cpp       # s024: Select > Color Range
+    src/Shell_channels.cpp    # s026: the colour channels
     src/ChannelsPanel.cpp     # s016: saved selections
     src/StylesEditor.cpp      # s019: layer styles in Properties
     src/StatusLine.cpp

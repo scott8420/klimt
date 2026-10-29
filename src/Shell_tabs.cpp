@@ -238,6 +238,7 @@ void Shell::after_switch() {
     m_ants_known = false;
     m_nudge = {};
     m_stroke_last_valid = false;
+    m_channel_view = -1;   // s026: the picture, in the tab that comes in
     m_preview.clear();
     m_shown = {};
     m_shown_image = {};

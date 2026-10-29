@@ -94,6 +94,22 @@ struct GradientFx {
     bool operator==(const GradientFx&) const = default;
 };
 
+// s026 -- Satin: the shape against itself, shifted `distance` px both ways
+// along `angle`; where the two copies differ, softened over `size` -- the
+// silky folds of a satin cloth -- over the content. Invert (Photoshop's
+// default): the shading where they agree instead.
+struct SatinFx {
+    bool on = false;
+    Rgb  colour{0, 0, 0};
+    int  opacity = 50;
+    int  angle = 19;
+    int  distance = 11;    // px, 1..250
+    int  size = 14;        // px, 0..250
+    bool invert = true;
+    pixel::Blend mode = pixel::Blend::Multiply;
+    bool operator==(const SatinFx&) const = default;
+};
+
 // s021 -- Bevel & Emboss (Smooth): the alpha as a height field, lit from
 // `angle` at `altitude` -- a highlight where the slope faces the light, a
 // shadow where it faces away. Inner Bevel: inside the content's edge;
@@ -126,7 +142,8 @@ struct Styles {
     BevelFx   bevel;   // s021
     InnerGlowFx inner_glow;   // s023
     GradientFx gradient;      // s025
-    bool any() const { return drop.on || outer.on || inner.on || overlay.on || stroke.on || bevel.on || inner_glow.on || gradient.on; }
+    SatinFx    satin;         // s026
+    bool any() const { return drop.on || outer.on || inner.on || overlay.on || stroke.on || bevel.on || inner_glow.on || gradient.on || satin.on; }
     bool operator==(const Styles&) const = default;
 };
 

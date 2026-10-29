@@ -117,6 +117,7 @@ void selftest_transfer(const std::function<void(const std::string&, bool, const 
 void selftest_session(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_groups(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_range(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_channels(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_tabs(const std::function<void(const std::string&, bool, const std::string&)>& check);
 
 int main() {
@@ -1239,6 +1240,7 @@ int main() {
     selftest_session([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_groups([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_range([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_channels([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
 
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";

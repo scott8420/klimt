@@ -139,6 +139,11 @@ json styles_json(const Styles& s) {
                                              {"mode", std::string(blend_key(s.overlay.mode))}};
     if (s.stroke.on) o["stroke"] = {{"on", true}, {"colour", rgb_json(s.stroke.colour)}, {"opacity", s.stroke.opacity},
                                     {"size", s.stroke.size}, {"position", s.stroke.position}, {"mode", std::string(blend_key(s.stroke.mode))}};
+    if (s.satin.on) {   // s026
+        const auto& t = s.satin;
+        o["satin"] = {{"on", true}, {"colour", rgb_json(t.colour)}, {"opacity", t.opacity}, {"angle", t.angle},
+                      {"distance", t.distance}, {"size", t.size}, {"invert", t.invert}, {"mode", std::string(blend_key(t.mode))}};
+    }
     if (s.gradient.on) {   // s025
         const auto& g = s.gradient;
         o["gradient_overlay"] = {{"on", true}, {"from", rgb_json(g.from)}, {"to", rgb_json(g.to)}, {"opacity", g.opacity},
@@ -200,6 +205,18 @@ Styles styles_from(const json& o) {
         s.stroke.size = std::clamp(j.value("size", s.stroke.size), 1, 250);
         s.stroke.position = std::clamp(j.value("position", s.stroke.position), 0, 2);
         s.stroke.mode = fx_mode(j, "mode");
+    }
+    if (o.contains("satin")) {   // s026
+        const auto& j = o.at("satin");
+        auto& t = s.satin;
+        t.on = j.value("on", true);
+        t.colour = rgb_from(j.value("colour", json()), t.colour);
+        t.opacity = pct(j, "opacity", t.opacity);
+        t.angle = std::clamp(j.value("angle", t.angle), -180, 180);
+        t.distance = std::clamp(j.value("distance", t.distance), 1, 250);
+        t.size = std::clamp(j.value("size", t.size), 0, 250);
+        t.invert = j.value("invert", true);
+        t.mode = fx_mode(j, "mode");
     }
     if (o.contains("gradient_overlay")) {   // s025
         const auto& j = o.at("gradient_overlay");
@@ -504,6 +521,12 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 C.mask = std::make_shared<const P::TileMap>(std::move(m));
                 c.channels[id] = std::move(C);
             }
+        // s026: the selection as it was saved.
+        if (doc.contains("selection")) {
+            P::TileMap m;
+            if (!read_map(doc.at("selection"), "mask", "mask_outside", P::Format{f.depth, P::Mode::Gray, false}, m)) return std::nullopt;
+            c.selection = std::make_shared<const P::TileMap>(m.without_outside());
+        }
     } catch (const json::exception& e) {
         error = std::string("a damaged Klimt file (") + e.what() + ")";
         return std::nullopt;
@@ -663,6 +686,11 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
             chans.push_back(std::move(ch));
         }
         doc["channels"] = std::move(chans);
+    }
+    if (c.selection) {   // s026: the selection, kept
+        json sel = json::object();
+        if (!write_map(sel, *c.selection, "mask", "mask_outside")) return false;
+        doc["selection"] = std::move(sel);
     }
     doc_text = doc.dump(1);
     if (!add("document.json", doc_text.data(), doc_text.size(), ZIP_CM_DEFLATE, 6)) { error = zip_strerror(z); return false; }

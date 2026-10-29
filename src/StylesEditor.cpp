@@ -58,6 +58,16 @@ StylesEditor::StylesEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 2) {
         slider(*b, "Choke", 0, 100, "%", &m_s.inner_glow.choke);
         slider(*b, "Size", 0, 100, "px", &m_s.inner_glow.size);
     }
+    {   // s026: Satin
+        auto* b = section("Satin", &m_s.satin.on);
+        colour(*b, &m_s.satin.colour);
+        mode(*b, &m_s.satin.mode);
+        slider(*b, "Opacity", 0, 100, "%", &m_s.satin.opacity);
+        slider(*b, "Angle", -180, 180, "°", &m_s.satin.angle);
+        slider(*b, "Distance", 1, 100, "px", &m_s.satin.distance);
+        slider(*b, "Size", 0, 100, "px", &m_s.satin.size);
+        choice(*b, "Invert", {"No", "Yes"}, [this] { return m_s.satin.invert ? 1 : 0; }, [this](int v) { m_s.satin.invert = v == 1; });
+    }
     {   // s025: Gradient Overlay
         auto* b = section("Gradient Overlay", &m_s.gradient.on);
         colour(*b, &m_s.gradient.from, "From");

@@ -397,4 +397,39 @@ void selftest_styles(const Check& check) {
         fs::remove(path);
         check("gradient overlay: in the file", back && back->layers.at("L4").styles.gradient == s.gradient, err);
     }
+    std::cout << "\n-- layer styles: satin (s026) --\n";
+    {
+        const auto src = square();   // red 200 x 150 at (100, 100)
+        core::Styles s;
+        s.satin.on = true;
+        s.satin.invert = false;
+        s.satin.opacity = 100;
+        s.satin.mode = P::Blend::Normal;
+        s.satin.angle = 0;
+        s.satin.distance = 10;
+        s.satin.size = 0;
+        const auto out = S::drawn(src, s, 100);
+        // Shifted 10 px left and right: they differ within 10 px of the left / right edges; agree in the middle.
+        check("satin: dark near the edges along its angle", out.get(105, 175).c[0] < 0.05f && out.get(295, 175).c[0] < 0.05f, num(out.get(105, 175).c[0]));
+        check("satin: untouched where the copies agree", out.get(200, 175).c[0] > 0.99f, num(out.get(200, 175).c[0]));
+        check("satin: nothing outside the content", out.get(95, 175).c[3] == 0.f, "");
+        s.satin.invert = true;
+        const auto inv = S::drawn(src, s, 100);
+        check("satin inverted: the middle shaded, the edges not", inv.get(200, 175).c[0] < 0.05f && inv.get(105, 175).c[0] > 0.95f, "");
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        s.satin.colour = {0.1f, 0.2f, 0.9f}; s.satin.mode = P::Blend::Overlay; s.satin.size = 9;
+        L::set_styles(j, d, "L4", s);
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_satin_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image(); c.layers = d.snapshot(); c.next_id = d.next_id();
+        std::string err;
+        core::file::save_klimt(path, c, err);
+        const auto back = core::file::open(path, err);
+        fs::remove(path);
+        check("satin: in the file", back && back->layers.at("L4").styles.satin == s.satin, err);
+    }
 }

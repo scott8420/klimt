@@ -835,6 +835,13 @@ bool feather(DocJournal& j, Document& d, double radius) {
 Document::Id save_channel(DocJournal& j, Document& d, const std::string& name) {
     const auto sel = d.selection_ptr();
     if (!sel) return {};
+    return save_channel_mask(j, d, sel, name, "Save Selection");
+}
+
+// s026: any mask as a new saved channel (Save Selection; Duplicate a colour channel).
+Document::Id save_channel_mask(DocJournal& j, Document& d, std::shared_ptr<const TileMap> sel, const std::string& name,
+                               const std::string& step) {
+    if (!sel) return {};
     int n = 1;
     double pos = 1;
     for (const auto& [id, c] : d.channels()) {
@@ -855,7 +862,7 @@ Document::Id save_channel(DocJournal& j, Document& d, const std::string& name) {
     c.name = label;
     c.pos = pos;
     c.mask = sel;
-    if (!j.run("Save Selection", {id}, [&] { d.put(id, c); })) return {};
+    if (!j.run(step, {id}, [&] { d.put(id, c); })) return {};
     return id;
 }
 
