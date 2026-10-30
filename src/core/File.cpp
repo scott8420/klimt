@@ -359,6 +359,9 @@ json live_json(const LiveFilter& lf) {
             {"zoom", f.zoom}, {"quality", f.quality}, {"cx", f.cx}, {"cy", f.cy},   // s040: Radial Blur
             {"axis", f.axis},   // s040 m4: Spherize
             {"depth_channel", f.depth_channel},   // s041 m4
+            {"from_left", f.from_left},           // s042 m2
+            {"c1", f.c1}, {"c2", f.c2},           // s042 m3: the clouds' colours
+            {"generators", f.generators}, {"wl_min", f.wl_min}, {"amp_min", f.amp_min},   // s042 m4: Wave
             {"ridges", f.ridges}, {"scale_h", f.scale_h}, {"scale_v", f.scale_v}, {"wrap", f.wrap}};   // s041 m3
 }
 std::optional<LiveFilter> live_from(const json& j) {
@@ -402,12 +405,21 @@ std::optional<LiveFilter> live_from(const json& j) {
     lf.f.axis = j.value("axis", 0);   // s040 m4
     lf.f.ridges = j.value("ridges", 5.0);   // s041 m3
     lf.f.depth_channel = j.value("depth_channel", std::string());   // s041 m4
+    lf.f.from_left = j.value("from_left", false);                     // s042 m2
+    // s042 m4: Wave's generators -- absent (s041's file): one, the min the max (as it looked).
+    lf.f.generators = j.value("generators", 1.0);
+    lf.f.wl_min = j.value("wl_min", lf.f.radius);
+    lf.f.amp_min = j.value("amp_min", lf.f.amount);
+    if (j.contains("c1") && j["c1"].is_array() && j["c1"].size() == 3) for (std::size_t i = 0; i < 3; ++i) lf.f.c1[i] = j["c1"][i].get<float>();   // s042 m3
+    if (j.contains("c2") && j["c2"].is_array() && j["c2"].size() == 3) for (std::size_t i = 0; i < 3; ++i) lf.f.c2[i] = j["c2"][i].get<float>();
     lf.f.scale_h = j.value("scale_h", 100.0);
     lf.f.scale_v = j.value("scale_v", 100.0);
     lf.f.wrap = j.value("wrap", false);
     const std::uint32_t seed = lf.f.seed;
     lf.f = filter::normalised(lf.f);
-    lf.f.seed = (lf.f.kind == FilterKind::AddNoise || lf.f.kind == FilterKind::LensBlur) ? seed : lf.f.seed;   // s039: Lens Blur's Noise
+    lf.f.seed = (lf.f.kind == FilterKind::AddNoise || lf.f.kind == FilterKind::LensBlur || lf.f.kind == FilterKind::Diffuse ||
+                 lf.f.kind == FilterKind::Wind || lf.f.kind == FilterKind::Clouds || lf.f.kind == FilterKind::DifferenceClouds ||
+                 lf.f.kind == FilterKind::Wave) ? seed : lf.f.seed;   // s039; s042
     return lf;
 }
 

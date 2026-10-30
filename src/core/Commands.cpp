@@ -93,6 +93,13 @@ const std::vector<Command>& commands() {
             {"Ripple", "Filter", "win.filter-ripple", "", "filter distort ripple water wobble", ""},
             {"Wave", "Filter", "win.filter-wave", "", "filter distort wave sine triangle square wrap", ""},
             {"ZigZag", "Filter", "win.filter-zigzag", "", "filter distort zigzag pond ripples rings water drop", ""},
+            {"Find Edges", "Filter", "win.filter-find-edges", "", "filter stylize edges outline sketch line drawing", ""},   // s042 m1
+            {"Emboss", "Filter", "win.filter-emboss", "", "filter stylize emboss relief stamp metal", ""},
+            {"Solarize", "Filter", "win.filter-solarize", "", "filter stylize solarize sabattier invert tones", ""},
+            {"Diffuse", "Filter", "win.filter-diffuse", "", "filter stylize diffuse scatter frosted glass dither", ""},   // s042 m2
+            {"Wind", "Filter", "win.filter-wind", "", "filter stylize wind blast stagger streaks speed", ""},
+            {"Clouds", "Filter", "win.filter-clouds", "", "filter render clouds noise fractal smoke sky texture", ""},   // s042 m3
+            {"Difference Clouds", "Filter", "win.filter-difference-clouds", "", "filter render clouds difference marble texture", ""},
             {"Median", "Filter", "win.filter-median", "", "filter noise despeckle dust remove smooth", ""},
             // s034
             {"Smart Sharpen", "Filter", "win.filter-smart-sharpen", "", "filter sharpen crisp detail lens deblur focus halo", ""},
@@ -117,6 +124,13 @@ const std::vector<Command>& commands() {
             {"New Filter Layer: Ripple", "Layer", "win.filter-layer-ripple", "", "filter layer live non-destructive distort ripple", ""},
             {"New Filter Layer: Wave", "Layer", "win.filter-layer-wave", "", "filter layer live non-destructive distort wave", ""},
             {"New Filter Layer: ZigZag", "Layer", "win.filter-layer-zigzag", "", "filter layer live non-destructive distort zigzag pond", ""},
+            {"New Filter Layer: Find Edges", "Layer", "win.filter-layer-find-edges", "", "filter layer live non-destructive stylize edges", ""},   // s042 m1
+            {"New Filter Layer: Emboss", "Layer", "win.filter-layer-emboss", "", "filter layer live non-destructive stylize emboss relief", ""},
+            {"New Filter Layer: Solarize", "Layer", "win.filter-layer-solarize", "", "filter layer live non-destructive stylize solarize", ""},
+            {"New Filter Layer: Diffuse", "Layer", "win.filter-layer-diffuse", "", "filter layer live non-destructive stylize diffuse", ""},   // s042 m2
+            {"New Filter Layer: Wind", "Layer", "win.filter-layer-wind", "", "filter layer live non-destructive stylize wind", ""},
+            {"New Filter Layer: Clouds", "Layer", "win.filter-layer-clouds", "", "filter layer live non-destructive render clouds", ""},   // s042 m3
+            {"New Filter Layer: Difference Clouds", "Layer", "win.filter-layer-difference-clouds", "", "filter layer live non-destructive render clouds difference", ""},
             {"New Filter Layer: Median", "Layer", "win.filter-layer-median", "", "filter layer live non-destructive despeckle dust", ""},
             {"New Filter Layer: Smart Sharpen", "Layer", "win.filter-layer-smart-sharpen", "", "filter layer live non-destructive sharpen crisp lens deblur", ""},
             {"New Filter Layer: Dust & Scratches", "Layer", "win.filter-layer-dust-scratches", "", "filter layer live non-destructive despeckle dust scratch", ""},

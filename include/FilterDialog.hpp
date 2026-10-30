@@ -77,6 +77,7 @@ private:
     void extreme_rows();
     void lens_rows();                                  // s039
     void radial_rows();                                // s040
+    void randomize_button();                           // s042 m3: a new seed
     // s041 m3: a labelled dropdown, synced with the filter.
     struct Choice { Gtk::DropDown* dd; std::function<int()> get; };
     std::vector<Choice> m_choices;

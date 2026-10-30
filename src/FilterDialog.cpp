@@ -204,6 +204,44 @@ void FilterDialog::rebuild() {
             break;
         case FilterKind::LensBlur: lens_rows(); break;   // s037, s039
         case FilterKind::RadialBlur: radial_rows(); break;   // s040
+        case FilterKind::FindEdges:   // s042 m1: Stylize
+        case FilterKind::Solarize: {
+            auto l = Gtk::make_managed<Gtk::Label>(m_f.kind == FilterKind::FindEdges
+                                                       ? "No settings: the edges drawn dark on white, in their colours."
+                                                       : "No settings: the tones past half turned over -- a print flashed with light.");
+            l->set_wrap(true);
+            l->set_xalign(0.0f);
+            l->add_css_class("dim-label");
+            m_body.append(*l);
+            break;
+        }
+        case FilterKind::Clouds:   // s042 m3: Render
+        case FilterKind::DifferenceClouds: {
+            auto l = Gtk::make_managed<Gtk::Label>(m_f.kind == FilterKind::Clouds
+                                                       ? "From the foreground colour to the background colour."
+                                                       : "The clouds' difference with what is there -- run it again for marble.");
+            l->set_wrap(true);
+            l->set_xalign(0.0f);
+            l->add_css_class("dim-label");
+            m_body.append(*l);
+            randomize_button();
+            break;
+        }
+        case FilterKind::Diffuse:   // s042 m2
+            choice("filter.diffuse_mode", "Mode", {"Normal", "Darken Only", "Lighten Only", "Anisotropic"}, [this] { return m_f.axis; },
+                   [this](int v) { m_f.axis = v; }, "Normal: each pixel takes a neighbour's colour; Darken / Lighten Only: only a darker / lighter one; "
+                   "Anisotropic: the most alike -- grain smoothed along the edges");
+            break;
+        case FilterKind::Wind:
+            choice("filter.wind_method", "Method", {"Wind", "Blast", "Stagger"}, [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; });
+            choice("filter.wind_from", "Direction", {"From the Right", "From the Left"}, [this] { return m_f.from_left ? 1 : 0; },
+                   [this](int v) { m_f.from_left = v == 1; });
+            break;
+        case FilterKind::Emboss:
+            row("filter.angle", "Angle", -180, 180, 0, false, "°", &m_angle);
+            row("filter.height", "Height", 1, 10, 0, false, "pixels", &m_f.radius);
+            row("filter.amount", "Amount", 1, 500, 0, false, "%", &m_f.amount);
+            break;
         case FilterKind::PolarCoordinates:   // s041 m3
             choice("filter.polar", "Mode", {"Rectangular to Polar", "Polar to Rectangular"}, [this] { return m_f.axis; },
                    [this](int v) { m_f.axis = v; }, "Rectangular to Polar: the top edge gathers into the middle, rows become rings");
@@ -213,13 +251,17 @@ void FilterDialog::rebuild() {
             choice("filter.size", "Size", {"Small", "Medium", "Large"}, [this] { return m_f.quality; }, [this](int v) { m_f.quality = v; });
             break;
         case FilterKind::Wave:
-            row("filter.wavelength", "Wavelength", 2, 999, 0, true, "pixels", &m_f.radius);
-            row("filter.amplitude", "Amplitude", 1, 999, 0, true, "pixels", &m_f.amount);
+            row("filter.generators", "Number of Generators", 1, 999, 0, true, "", &m_f.generators);   // s042 m4
+            row("filter.wl_min", "Wavelength Min.", 2, 999, 0, true, "pixels", &m_f.wl_min);
+            row("filter.wavelength", "Wavelength Max.", 2, 999, 0, true, "pixels", &m_f.radius);
+            row("filter.amp_min", "Amplitude Min.", 1, 999, 0, true, "pixels", &m_f.amp_min);
+            row("filter.amplitude", "Amplitude Max.", 1, 999, 0, true, "pixels", &m_f.amount);
             row("filter.scale_h", "Horizontal", 0, 100, 0, false, "%", &m_f.scale_h);
             row("filter.scale_v", "Vertical", 0, 100, 0, false, "%", &m_f.scale_v);
             choice("filter.wave_type", "Type", {"Sine", "Triangle", "Square"}, [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; });
             choice("filter.undefined", "Undefined Areas", {"Repeat Edge Pixels", "Wrap Around"}, [this] { return m_f.wrap ? 1 : 0; },
                    [this](int v) { m_f.wrap = v == 1; }, "What fills in where the picture moved away from its edge");
+            randomize_button();   // s042 m4: other wavelengths, amplitudes and phases
             break;
         case FilterKind::ZigZag:
             row("filter.amount", "Amount", -100, 100, 0, false, "", &m_f.amount);
@@ -472,6 +514,20 @@ void FilterDialog::choice(const char* name, const char* label, std::vector<Glib:
         put(static_cast<int>(dd->get_selected()));
         m_changed.emit();
     });
+}
+
+// s042 m3: Randomize -- a new pattern (the seed).
+void FilterDialog::randomize_button() {
+    auto b = Gtk::make_managed<Gtk::Button>("Randomize");
+    b->set_name("filter.randomize");
+    b->set_halign(Gtk::Align::START);
+    b->set_tooltip_text("Another pattern");
+    b->signal_clicked().connect([this] {
+        m_f.seed = m_f.seed * 1664525u + 1013904223u;
+        if (m_f.seed == 0) m_f.seed = 1;
+        m_changed.emit();
+    });
+    m_body.append(*b);
 }
 
 void FilterDialog::centre_from(double x, double y) {

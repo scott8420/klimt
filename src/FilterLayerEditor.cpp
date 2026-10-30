@@ -2,6 +2,7 @@
 
 #include <glibmm/markup.h>
 #include <gtkmm/gesturedrag.h>
+#include <gtkmm/button.h>
 #include <gtkmm/label.h>
 
 #include <gtkmm/expander.h>
@@ -177,6 +178,30 @@ void FilterLayerEditor::rebuild() {
             row("filter_layer.cy", "Centre Y", 0, 100, 1, false, "%", &m_f.cy);
             break;
         }
+        case FilterKind::Clouds:   // s042 m3
+        case FilterKind::DifferenceClouds:
+        case FilterKind::Diffuse:   // s042 m2 (Clouds join here for the Randomize button)
+            if (m_f.kind != FilterKind::Diffuse) {
+                auto rb = Gtk::make_managed<Gtk::Button>("Randomize");
+                rb->set_name("filter_layer.randomize");
+                rb->set_halign(Gtk::Align::START);
+                rb->signal_clicked().connect([this] { m_f.seed = m_f.seed * 1664525u + 1013904223u; if (!m_f.seed) m_f.seed = 1; emit(); });
+                m_body.append(*rb);
+                break;
+            }
+            choice("filter_layer.diffuse_mode", "Mode", {"Normal", "Darken Only", "Lighten Only", "Anisotropic"}, [this] { return m_f.axis; },
+                   [this](int v) { m_f.axis = v; });
+            break;
+        case FilterKind::Wind:
+            choice("filter_layer.wind_method", "Method", {"Wind", "Blast", "Stagger"}, [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; });
+            choice("filter_layer.wind_from", "Direction", {"From the Right", "From the Left"}, [this] { return m_f.from_left ? 1 : 0; },
+                   [this](int v) { m_f.from_left = v == 1; });
+            break;
+        case FilterKind::Emboss:   // s042 m1 (Find Edges, Solarize: nothing to set)
+            row("filter_layer.angle", "Angle", -180, 180, 0, false, "°", &m_angle);
+            row("filter_layer.height", "Height", 1, 10, 0, false, "px", &m_f.radius);
+            row("filter_layer.amount", "Amount", 1, 500, 0, false, "%", &m_f.amount);
+            break;
         case FilterKind::PolarCoordinates:   // s041 m3
             choice("filter_layer.polar", "Mode", {"Rectangular to Polar", "Polar to Rectangular"}, [this] { return m_f.axis; },
                    [this](int v) { m_f.axis = v; });
@@ -186,13 +211,23 @@ void FilterLayerEditor::rebuild() {
             choice("filter_layer.size", "Size", {"Small", "Medium", "Large"}, [this] { return m_f.quality; }, [this](int v) { m_f.quality = v; });
             break;
         case FilterKind::Wave:
-            row("filter_layer.wavelength", "Wavelength", 2, 999, 0, true, "px", &m_f.radius);
-            row("filter_layer.amplitude", "Amplitude", 1, 999, 0, true, "px", &m_f.amount);
+            row("filter_layer.generators", "Generators", 1, 999, 0, true, "", &m_f.generators);   // s042 m4
+            row("filter_layer.wl_min", "Wavelength Min.", 2, 999, 0, true, "px", &m_f.wl_min);
+            row("filter_layer.wavelength", "Wavelength Max.", 2, 999, 0, true, "px", &m_f.radius);
+            row("filter_layer.amp_min", "Amplitude Min.", 1, 999, 0, true, "px", &m_f.amp_min);
+            row("filter_layer.amplitude", "Amplitude Max.", 1, 999, 0, true, "px", &m_f.amount);
             row("filter_layer.scale_h", "Horizontal", 0, 100, 0, false, "%", &m_f.scale_h);
             row("filter_layer.scale_v", "Vertical", 0, 100, 0, false, "%", &m_f.scale_v);
             choice("filter_layer.wave_type", "Type", {"Sine", "Triangle", "Square"}, [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; });
             choice("filter_layer.undefined", "Undefined Areas", {"Repeat Edge Pixels", "Wrap Around"}, [this] { return m_f.wrap ? 1 : 0; },
                    [this](int v) { m_f.wrap = v == 1; });
+            {
+                auto rb = Gtk::make_managed<Gtk::Button>("Randomize");
+                rb->set_name("filter_layer.randomize");
+                rb->set_halign(Gtk::Align::START);
+                rb->signal_clicked().connect([this] { m_f.seed = m_f.seed * 1664525u + 1013904223u; if (!m_f.seed) m_f.seed = 1; emit(); });
+                m_body.append(*rb);
+            }
             break;
         case FilterKind::ZigZag:
             row("filter_layer.amount", "Amount", -100, 100, 0, false, "", &m_f.amount);

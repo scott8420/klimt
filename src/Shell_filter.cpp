@@ -182,10 +182,19 @@ void Shell::on_focal_point(int x, int y) {
     toast("Focal distance " + std::to_string(static_cast<int>(m_filter_dialog->value().focal)) + " -- the depth there");
 }
 
+// s042 m3: Clouds take the rail's foreground and background colours.
+void Shell::with_colours(core::Filter& f) const {
+    if (f.kind != core::FilterKind::Clouds && f.kind != core::FilterKind::DifferenceClouds) return;
+    const auto fg = m_rail.foreground(), bg = m_rail.background();
+    f.c1 = {fg.r, fg.g, fg.b};
+    f.c2 = {bg.r, bg.g, bg.b};
+}
+
 void Shell::on_filter(core::FilterKind k) {
     if (!filter_layer_ok(std::string(F::label(k)))) return;
     core::Filter start = (m_last_filter && m_last_filter->kind == k) ? *m_last_filter : F::fresh(k);
     start.seed = ++m_filter_seed;   // Add Noise: new noise each time the dialog opens
+    with_colours(start);            // s042 m3: Clouds -- today's foreground / background
     m_filter_edit.reset();
     if (!m_filter_dialog) {
         m_filter_dialog = std::make_unique<FilterDialog>(*this);
@@ -276,7 +285,10 @@ void Shell::on_style(const std::string& verb) {
 void Shell::on_filter_layer_new(core::FilterKind k) {
     if (!has_image()) return;
     if (m_doc.image().format.mode != pixel::Mode::RGB) { toast("Filter layers: RGB documents only, for now"); return; }
-    const auto id = L::add_filter_layer(m_journal, m_doc, core::filter::fresh(k), m_layers.primary());
+    auto f = core::filter::fresh(k);
+    with_colours(f);   // s042 m3: Clouds -- the foreground and background colours
+    f.seed = ++m_filter_seed;
+    const auto id = L::add_filter_layer(m_journal, m_doc, f, m_layers.primary());
     if (id.empty()) { toast("New Filter Layer: refused"); return; }
     m_journal.reselect({id});
     m_layers.select({id}, false);

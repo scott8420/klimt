@@ -11,6 +11,7 @@
 #include "core/Selection.hpp"   // s041 m4: a saved channel
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -917,6 +918,269 @@ void selftest_sharpen(const Check& check) {
         // Live: no channel to see -- even (the layer's mask is never taken for it).
         const auto live = core::live::run(*before, {{v, true}}, nullptr, {}, nullptr);
         check("channel depth: live, it sees no channel -- the blur is even everywhere", live && !same_in(*before, *live, {W / 2 + 16, 8, W / 2 - 24, H - 16}), "");
+    }
+
+    std::cout << "\n-- filters: Stylize -- Find Edges, Emboss, Solarize (s042 m1) --\n";
+    {
+        const auto fe = F::fresh(FilterKind::FindEdges), em = F::fresh(FilterKind::Emboss), so = F::fresh(FilterKind::Solarize);
+        check("stylize: Photoshop's defaults (Emboss 135 deg, 3 px, 100 %), under Stylize",
+              em.angle == 135 && em.radius == 3 && em.amount == 100 && F::group(FilterKind::FindEdges) == "Stylize" &&
+              F::group(FilterKind::Emboss) == "Stylize" && F::group(FilterKind::Solarize) == "Stylize", "");
+        {
+            auto t = em; t.angle = 400; t.radius = 30; t.amount = 900;
+            const auto n = F::normalised(t);
+            check("stylize: Emboss normalised -- angle -180..180, height 1..10, amount 1..500", n.angle == 180 && n.radius == 10 && n.amount == 500, "");
+        }
+        // Solarize: below half as it was, above turned over.
+        const auto greys = P::TileMap(f32(), 40, 10).fill({0, 0, 20, 10}, P::rgba(0.3f, 0.3f, 0.3f, 1)).fill({20, 0, 20, 10}, P::rgba(0.8f, 0.8f, 0.8f, 1));
+        const auto sz = F::filtered(greys, so, nullptr);
+        check("stylize: Solarize -- 0.3 stays, 0.8 becomes 0.2", sz && near(sz->get(5, 5).c[0], 0.3, 1e-5) && near(sz->get(30, 5).c[0], 0.2, 1e-5), "");
+        // Find Edges on a step: white where flat, dark on the edge.
+        const auto st = step();
+        const auto ed = F::filtered(st, fe, nullptr);
+        check("stylize: Find Edges -- flat ground white", ed && near(ed->get(100, 200).c[0], 1, 1e-5) && near(ed->get(500, 200).c[0], 1, 1e-5), "");
+        check("stylize: Find Edges -- the edge dark", ed && ed->get(299, 200).c[0] < 0.6f && ed->get(300, 200).c[0] < 0.6f, ed ? num(ed->get(300, 200).c[0]) : "");
+        // Emboss: flat -> mid grey; the step's edge lighter with the light on its bright side, darker from the other.
+        auto right = em; right.angle = 0;   // light from the right: the step (dark left, light right) faces it
+        auto left = em; left.angle = 180;
+        const auto er = F::filtered(st, right, nullptr), el = F::filtered(st, left, nullptr);
+        check("stylize: Emboss -- flat ground mid grey", er && near(er->get(100, 200).c[0], 0.5, 1e-5), "");
+        check("stylize: Emboss -- the light from the right: the edge lighter; from the left: darker",
+              er && el && er->get(300, 200).c[0] > 0.6f && el->get(300, 200).c[0] < 0.4f, er && el ? num(er->get(300, 200).c[0]) + " " + num(el->get(300, 200).c[0]) : "");
+        // Transparent pixels stay transparent; the preview's rectangle == the result.
+        const auto sq = P::TileMap(f32(), 120, 120).fill({40, 40, 40, 40}, P::rgba(1, 0, 0, 1));   // red on clear
+        const auto fs2 = F::filtered(sq, fe, nullptr);
+        check("stylize: transparent pixels stay transparent", fs2 && fs2->get(5, 5).c[3] == 0.f, "");
+        const P::Rect view{280, 150, 60, 80};
+        check("stylize: the preview's rectangle == the result there (Emboss, Find Edges)",
+              same_in(*F::filtered(st, em, nullptr), *F::filtered(st, em, nullptr, false, &view), view) &&
+              same_in(*F::filtered(st, fe, nullptr), *F::filtered(st, fe, nullptr, false, &view), view), "");
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        auto lv = em; lv.angle = -45; lv.radius = 6; lv.amount = 220;
+        check("stylize: live Emboss", L::add_live(j, d, "L4", lv), "");
+        check("stylize: a Find Edges filter layer", !L::add_filter_layer(j, d, fe, "L4").empty(), "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_s042_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image();
+        c.layers = d.snapshot();
+        c.next_id = d.next_id();
+        std::string err;
+        check("stylize: saved", core::file::save_klimt(path, c, err), err);
+        const auto back = core::file::open(path, err);
+        check("stylize: Emboss's angle, height and amount back from the file", back && back->layers.at("L4").filters == d.get("L4")->filters, err);
+        fs::remove(path);
+    }
+
+    std::cout << "\n-- filters: Stylize -- Diffuse, Wind (s042 m2) --\n";
+    {
+        auto df = F::fresh(FilterKind::Diffuse), wd = F::fresh(FilterKind::Wind);
+        df.seed = 5; wd.seed = 5;
+        check("weather: defaults (Diffuse Normal; Wind, From the Right), under Stylize",
+              df.axis == 0 && wd.axis == 0 && !wd.from_left && F::group(FilterKind::Diffuse) == "Stylize" && F::group(FilterKind::Wind) == "Stylize", "");
+        {
+            auto t = df; t.axis = 9; auto u = wd; u.axis = 9; u.from_left = true;
+            check("weather: normalised -- Diffuse's mode 0..3, Wind's 0..2; their seed and direction kept",
+                  F::normalised(t).axis == 3 && F::normalised(u).axis == 2 && F::normalised(u).from_left && F::normalised(t).seed == 5, "");
+            auto g = F::fresh(FilterKind::GaussianBlur); g.from_left = true;
+            check("weather: Wind's direction goes back on another kind", !F::normalised(g).from_left, "");
+        }
+        auto rnd = P::TileMap(f32(), 120, 100);
+        std::uint32_t seed = 3;
+        for (int y = 0; y < 100; ++y)
+            for (int x = 0; x < 120; ++x) {
+                seed = seed * 1664525u + 1013904223u;
+                const float v = static_cast<float>((seed >> 24) % 256) / 255.f;
+                rnd = rnd.fill({x, y, 1, 1}, P::rgba(v, v * 0.5f, 1 - v, 1));
+            }
+        const auto lum = [](const P::Px& p) { return 0.299 * p.c[0] + 0.587 * p.c[1] + 0.114 * p.c[2]; };
+        const auto dn = F::filtered(rnd, df, nullptr);
+        bool from_nb = dn.has_value(), changed = false;
+        for (int y = 2; y < 98 && from_nb; y += 3)
+            for (int x = 2; x < 118 && from_nb; x += 3) {
+                bool hit = false;
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) if (std::abs(dn->get(x, y).c[0] - rnd.get(x + dx, y + dy).c[0]) < 1e-6f) hit = true;
+                from_nb = hit;
+                changed = changed || std::abs(dn->get(x, y).c[0] - rnd.get(x, y).c[0]) > 1e-6f;
+            }
+        check("weather: Diffuse -- every pixel a neighbour's colour (and most moved)", from_nb && changed, "");
+        auto dk = df; dk.axis = 1; auto lt = df; lt.axis = 2;
+        const auto dd = F::filtered(rnd, dk, nullptr), dl = F::filtered(rnd, lt, nullptr);
+        bool darker = dd.has_value(), lighter = dl.has_value();
+        for (int y = 1; y < 99; y += 2)
+            for (int x = 1; x < 119; x += 2) {
+                darker = darker && lum(dd->get(x, y)) <= lum(rnd.get(x, y)) + 1e-6;
+                lighter = lighter && lum(dl->get(x, y)) >= lum(rnd.get(x, y)) - 1e-6;
+            }
+        check("weather: Diffuse Darken Only never lightens; Lighten Only never darkens", darker && lighter, "");
+        const auto st = step();
+        auto an = df; an.axis = 3;
+        const auto as = F::filtered(st, an, nullptr);
+        check("weather: Diffuse Anisotropic -- a clean step stays as it was", as && same_in(st, *as, {0, 0, 600, 400}, 1e-6f), "");
+        // Wind: one bright dot on black.
+        const auto dot = P::TileMap(f32(), 200, 60).fill({0, 0, 200, 60}, P::rgba(0, 0, 0, 1)).fill({100, 30, 1, 1}, P::rgba(1, 1, 1, 1));
+        const auto wr = F::filtered(dot, wd, nullptr);
+        auto wl = wd; wl.from_left = true;
+        const auto wlf = F::filtered(dot, wl, nullptr);
+        check("weather: Wind from the right -- the dot streaks to its left, nothing to its right",
+              wr && wr->get(97, 30).c[0] > 0.3f && wr->get(103, 30).c[0] == 0.f && wr->get(97, 29).c[0] == 0.f, wr ? num(wr->get(97, 30).c[0]) : "");
+        check("weather: Wind from the left -- the other way", wlf && wlf->get(103, 30).c[0] > 0.3f && wlf->get(97, 30).c[0] == 0.f, "");
+        auto bl = wd; bl.axis = 1;
+        const auto bw = F::filtered(dot, bl, nullptr);
+        int run_w = 0, run_b = 0;
+        for (int x = 100; x >= 0 && wr->get(x, 30).c[0] > 0.05f; --x) ++run_w;
+        for (int x = 100; x >= 0 && bw->get(x, 30).c[0] > 0.05f; --x) ++run_b;
+        check("weather: Blast streaks further than Wind (the same row)", bw && run_b > run_w, num(run_w) + " vs " + num(run_b));
+        const P::Rect view{40, 20, 60, 50};
+        check("weather: the preview's rectangle == the result there (Diffuse exactly, Wind within a level)",
+              same_in(*F::filtered(rnd, df, nullptr), *F::filtered(rnd, df, nullptr, false, &view), view) &&
+              same_in(*F::filtered(rnd, wd, nullptr), *F::filtered(rnd, wd, nullptr, false, &view), view, 1.f / 255), "");
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        auto lv = wd; lv.axis = 2; lv.from_left = true; lv.seed = 44;
+        check("weather: live Wind", L::add_live(j, d, "L4", lv), "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_s042w_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image();
+        c.layers = d.snapshot();
+        c.next_id = d.next_id();
+        std::string err;
+        check("weather: saved", core::file::save_klimt(path, c, err), err);
+        const auto back = core::file::open(path, err);
+        check("weather: Wind's method, direction and seed back from the file",
+              back && back->layers.at("L4").filters == d.get("L4")->filters && back->layers.at("L4").filters.back().f.seed == 44, err);
+        fs::remove(path);
+    }
+
+    std::cout << "\n-- filters: Render -- Clouds, Difference Clouds (s042 m3) --\n";
+    {
+        auto cl = F::fresh(FilterKind::Clouds);
+        cl.seed = 9; cl.c1 = {1, 0, 0}; cl.c2 = {0, 0, 1};   // red to blue
+        check("clouds: under Render; black to white until given colours", F::group(FilterKind::Clouds) == "Render" &&
+              F::fresh(FilterKind::Clouds).c1 == (std::array<float, 3>{0, 0, 0}) && F::fresh(FilterKind::Clouds).c2 == (std::array<float, 3>{1, 1, 1}), "");
+        {
+            auto t = cl; t.c1 = {2, -1, 0.5f};
+            check("clouds: normalised -- colours 0..1, the seed kept", F::normalised(t).c1 == (std::array<float, 3>{1, 0, 0.5f}) && F::normalised(t).seed == 9, "");
+            auto g = F::fresh(FilterKind::GaussianBlur); g.c1 = {1, 1, 1};
+            check("clouds: their colours go back on another kind", F::normalised(g).c1 == (std::array<float, 3>{0, 0, 0}), "");
+        }
+        double s1 = 0, s2 = 0, jump = 0; int n = 0;
+        float lo = 1, hi = 0;
+        bool in01 = true, same = true, other = false;
+        for (int y = 0; y < 512; y += 2)
+            for (int x = 0; x < 512; x += 2) {
+                const float v = F::clouds_at(x, y, 9);
+                in01 = in01 && v >= 0 && v <= 1;
+                lo = std::min(lo, v); hi = std::max(hi, v);
+                s1 += v; s2 += v * v; ++n;
+                jump = std::max(jump, static_cast<double>(std::abs(F::clouds_at(x + 1, y, 9) - v)));
+                same = same && F::clouds_at(x, y, 9) == v;
+                other = other || std::abs(F::clouds_at(x, y, 10) - v) > 0.05f;
+            }
+        const double sd = std::sqrt(std::max(0.0, s2 / n - (s1 / n) * (s1 / n)));
+        check("clouds: values in 0..1, spread (sd > 0.12, from < 0.2 to > 0.8)", in01 && sd > 0.12 && lo < 0.2f && hi > 0.8f,
+              num(sd) + " " + num(lo) + ".." + num(hi));
+        check("clouds: smooth -- a pixel's neighbour differs by under 0.12", jump < 0.12, num(jump));
+        check("clouds: the same seed, the same clouds; another, others", same && other, "");
+        // On a clear layer: filled, every pixel between the two colours.
+        const auto clear = P::TileMap(f32(), 200, 150);
+        const auto c = F::filtered(clear, cl, nullptr);
+        bool filled = c.has_value();
+        for (int y = 0; y < 150 && filled; y += 7)
+            for (int x = 0; x < 200 && filled; x += 7) {
+                const auto p = c->get(x, y);
+                const float v = F::clouds_at(x, y, 9);
+                filled = p.c[3] == 1.f && std::abs(p.c[0] - (1 - v)) < 1e-5f && p.c[1] == 0.f && std::abs(p.c[2] - v) < 1e-5f;
+            }
+        check("clouds: a clear layer filled -- red to blue by the clouds, opaque", filled, "");
+        const auto locked = F::filtered(clear, cl, nullptr, true);
+        check("clouds: transparency locked -- the clear stays clear", locked && locked->get(50, 50).c[3] == 0.f, "");
+        // Difference Clouds twice on black: black again.
+        auto dc = F::fresh(FilterKind::DifferenceClouds);
+        dc.seed = 4;
+        const auto black = P::TileMap(f32(), 200, 150).fill({0, 0, 200, 150}, P::rgba(0, 0, 0, 1));
+        const auto once = F::filtered(black, dc, nullptr);
+        const auto twice = once ? F::filtered(*once, dc, nullptr) : std::nullopt;
+        check("clouds: Difference Clouds on black -- the clouds; twice -- black again",
+              once && twice && std::abs(once->get(60, 40).c[0] - F::clouds_at(60, 40, 4)) < 1e-5f && same_in(black, *twice, {0, 0, 200, 150}, 1e-5f), "");
+        const P::Rect view{30, 20, 90, 60};
+        check("clouds: the preview's rectangle == the result there",
+              same_in(*F::filtered(clear, cl, nullptr), *F::filtered(clear, cl, nullptr, false, &view), view), "");
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        check("clouds: live", L::add_live(j, d, "L4", cl), "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_s042c_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents ct;
+        ct.image = d.image();
+        ct.layers = d.snapshot();
+        ct.next_id = d.next_id();
+        std::string err;
+        check("clouds: saved", core::file::save_klimt(path, ct, err), err);
+        const auto back = core::file::open(path, err);
+        check("clouds: the colours and the seed back from the file",
+              back && back->layers.at("L4").filters == d.get("L4")->filters && back->layers.at("L4").filters.back().f.c2[2] == 1.f, err);
+        fs::remove(path);
+    }
+
+    std::cout << "\n-- filters: Wave's generators (s042 m4) --\n";
+    {
+        auto wv = F::fresh(FilterKind::Wave);
+        check("generators: Photoshop's defaults -- 5 generators, wavelength 10..120, amplitude 5..35",
+              wv.generators == 5 && wv.wl_min == 10 && wv.radius == 120 && wv.amp_min == 5 && wv.amount == 35, "");
+        {
+            auto t = wv; t.generators = 5000; t.wl_min = 400; t.amp_min = 0;
+            const auto n = F::normalised(t);
+            check("generators: normalised -- 1..999, each minimum no more than its maximum", n.generators == 999 && n.wl_min == 120 && n.amp_min == 1, "");
+            auto g = F::fresh(FilterKind::GaussianBlur); g.generators = 7;
+            check("generators: back to one on another kind", F::normalised(g).generators == 1, "");
+        }
+        // One generator: s041's Wave exactly -- A x sin(2 pi (y - top) / L) across.
+        auto one = wv; one.generators = 1; one.wl_min = one.radius; one.amp_min = one.amount; one.scale_v = 0; one.seed = 77;
+        double sx = 0, sy = 0;
+        F::warp_source(one, 100, 100, 100, 100, 50.5, 30.5, sx, sy);
+        check("generators: one -- the s041 wave (phase 0, the seed ignored)",
+              std::abs(sx - (50.5 + 35 * std::sin(2 * 3.14159265358979 * 30.5 / 120))) < 1e-9 && sy == 30.5, num(sx));
+        auto a = wv; a.seed = 3; auto b = wv; b.seed = 4;
+        double ax = 0, ay = 0, bx = 0, by = 0, worst = 0;
+        bool differ = false;
+        for (int y = 0; y < 200; y += 9)
+            for (int x = 0; x < 200; x += 9) {
+                F::warp_source(a, 100, 100, 100, 100, x + 0.5, y + 0.5, ax, ay);
+                F::warp_source(b, 100, 100, 100, 100, x + 0.5, y + 0.5, bx, by);
+                differ = differ || std::abs(ax - bx) > 1;
+                worst = std::max(worst, std::abs(ax - x - 0.5));
+            }
+        check("generators: another seed (Randomize), other waves", differ, "");
+        check("generators: five summed stay within the amplitude x sqrt(5)", worst <= 35 * std::sqrt(5.0) + 1e-9 && worst > 5, num(worst));
+        // An s041 file's Wave (no generator keys) comes back as it was: one, min = max.
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        auto lv = wv; lv.seed = 21; lv.generators = 12;
+        check("generators: live Wave, 12 generators", L::add_live(j, d, "L4", lv), "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_s042g_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image();
+        c.layers = d.snapshot();
+        c.next_id = d.next_id();
+        std::string err;
+        check("generators: saved", core::file::save_klimt(path, c, err), err);
+        const auto back = core::file::open(path, err);
+        check("generators: the count, the ranges and the seed back from the file",
+              back && back->layers.at("L4").filters == d.get("L4")->filters && back->layers.at("L4").filters.back().f.generators == 12, err);
+        fs::remove(path);
     }
 
     std::cout << "\n-- s034: live, filter layers, the file --\n";

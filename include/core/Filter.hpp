@@ -15,6 +15,7 @@
 #include "pixel/Pixel.hpp"
 #include "pixel/Blend.hpp"   // s023: a live filter's blending
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -30,7 +31,10 @@ enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass
                                        LensBlur,                          // s037
                                        RadialBlur,                        // s040
                                        Twirl, Pinch, Spherize,            // s040 m4: Distort
-                                       PolarCoordinates, Ripple, Wave, ZigZag };   // s041 m3
+                                       PolarCoordinates, Ripple, Wave, ZigZag,   // s041 m3
+                                       FindEdges, Emboss, Solarize,       // s042 m1: Stylize
+                                       Diffuse, Wind,                     // s042 m2
+                                       Clouds, DifferenceClouds };        // s042 m3: Render
 
 // s034: what Smart Sharpen takes away -- the blur it undoes.
 enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
@@ -119,7 +123,23 @@ struct Filter {
     // 0 Sine, 1 Triangle, 2 Square, `wrap` Wrap Around (else Repeat Edge).
     // ZigZag (in the ellipse): `amount` -100 .. 100, `ridges` 1 .. 20, `axis`
     // the Style 0 Around Center, 1 Out From Center, 2 Pond Ripples.
+    // s042 -- STYLIZE. Find Edges, Solarize: no settings. Emboss: `angle`
+    // -180 .. 180 degrees (the light's direction, 135 up-left), `radius` the
+    // Height 1 .. 10 px, `amount` 1 .. 500 %.
+    // s042 m2 -- Diffuse: `axis` the Mode 0 Normal, 1 Darken Only, 2 Lighten
+    // Only, 3 Anisotropic; `seed`. Wind: `axis` the Method 0 Wind, 1 Blast,
+    // 2 Stagger; `from_left` the Direction (else From the Right); `seed`.
+    bool from_left = false;
+    // s042 m3 -- RENDER > Clouds / Difference Clouds: from `c1` (the
+    // foreground colour, RGB 0..1) to `c2` (the background), the pattern by
+    // `seed`; Difference Clouds: |what is there - the clouds|.
+    std::array<float, 3> c1{0, 0, 0}, c2{1, 1, 1};
     double ridges = 5;
+    // s042 m4 -- Wave's GENERATORS: `generators` 1 .. 999, each a wave of its
+    // own Wavelength between `wl_min` and `radius`, Amplitude between
+    // `amp_min` and `amount`, and phase -- picked by `seed` (Randomize); one
+    // generator keeps phase 0 (s041's Wave).
+    double generators = 1, wl_min = 120, amp_min = 35;
     double scale_h = 100, scale_v = 100;
     bool wrap = false;
     bool operator==(const Filter&) const = default;
@@ -185,6 +205,9 @@ bool warp_source(const Filter& f, double ex, double ey, double rx, double ry, do
 // Add Noise, Lens Blur's Noise, Radial Blur, Distort: a live look of it is
 // always made whole, never in part.
 bool placed(const Filter& f);
+// s042 m3: the clouds' value at an image pixel, 0 .. 1 (fractal value noise,
+// 8 octaves from 256 px down; the seed picks the pattern).
+float clouds_at(int x, int y, std::uint32_t seed);
 
 // The 1-D blur Gaussian Blur, Unsharp Mask and High Pass share, along a line of n samples with
 // stride `stride` floats (edges clamp): sigma < 3 an exact Gaussian kernel,
