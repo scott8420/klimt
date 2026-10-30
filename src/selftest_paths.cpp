@@ -315,6 +315,7 @@ void selftest_paths(const Check& check) {
 
 // ── s035 m7: the max-flow and Isolate ───────────────────────────────────────
 #include "core/Isolate.hpp"
+#include "core/Matte.hpp"
 #include "core/MaxFlow.hpp"
 
 #include <queue>
@@ -466,5 +467,39 @@ void selftest_isolate(const Check& check) {
         L::set_path_switches(t.j, t.d, id, true, false);   // masking: isolate still reads the picture whole
         check("Isolate (verb): ONE step, the selection ~ the figure", core::paths::isolate(t.j, t.d, id, 16) && t.j.undo_label() == "Isolate (Path)" &&
               t.d.selection() && iou(*t.d.selection(), S::ellipse_mask(t.d.mask_format(), W, H, 80, 80, 220, 220)) > 0.95, t.j.undo_label());
+    }
+
+    // s036 m3 -- the SOFT EDGE: a blurred figure edge (hair, soft focus) --
+    // coverage read from colour where the hard cut can only say yes or no.
+    std::cout << "\n-- paths: Isolate's soft edge (s036) --\n";
+    {
+        const int W = 300, H = 200;
+        // Red (x < 140) ramping to green over 20 px (x 140..160): a soft edge.
+        P::TileMap pic(P::Format{}, W, H);
+        pic = pic.paint({0, 0, W, H}, [](int x, int, const P::Px&) {
+            const float k = std::clamp((x + 0.5f - 140) / 20.f, 0.f, 1.f);
+            return P::rgba(1 - k, k, 0, 1);
+        });
+        const auto hard = S::rect_mask(mf8(), W, H, {0, 0, 150, H});   // the cut, mid-ramp
+        const auto soft = core::matte::soft_edge(pic, hard, 16);
+        check("soft edge: made", soft.has_value(), "");
+        if (soft) {
+            const float at145 = S::coverage(*soft, 145, 100), at155 = S::coverage(*soft, 155, 100);
+            check("soft edge: a quarter in -- about 3/4 figure", std::abs(at145 - 0.75f) < 0.08f, num(at145));
+            check("soft edge: a quarter out -- about 1/4 figure", std::abs(at155 - 0.25f) < 0.08f, num(at155));
+            check("soft edge: well inside / outside as the cut", S::coverage(*soft, 60, 100) > 0.99f && S::coverage(*soft, 250, 100) < 0.01f, "");
+        }
+        // A cut where figure and background are one colour: nothing to read -- the hard edge stands.
+        P::TileMap flat(P::Format{}, W, H);
+        flat = flat.fill({0, 0, W, H}, P::rgba(0.5f, 0.5f, 0.5f, 1));
+        const auto same = core::matte::soft_edge(flat, hard, 16);
+        check("soft edge: alike colours keep the hard edge", same && S::coverage(*same, 145, 100) > 0.99f && S::coverage(*same, 155, 100) < 0.01f, "");
+        // Through Isolate: a loose path round the textured disc, soft edge on.
+        const auto pf = figure(W, H, 150, 100, 60);
+        const auto path = core::paths::rect_path(70, 20, 230, 180);
+        core::isolate::Options o;
+        o.soft = 6;
+        const auto m = core::isolate::isolated(pf, path, mf8(), o);
+        check("soft edge: Isolate takes it -- the figure still found", m && iou(*m, disc_mask(W, H, 150, 100, 60)) > 0.9, m ? num(iou(*m, disc_mask(W, H, 150, 100, 60))) : "");
     }
 }

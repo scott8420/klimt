@@ -1,6 +1,7 @@
 #include "core/Patterns.hpp"   // s033: the pattern library
 #include <gtkmm/grid.h>   // s031: the canvas and its rulers
 #include "Shell.hpp"
+#include "widgets/Wheel.hpp"   // s036
 #include "Log.hpp"
 
 #include <adwaita.h>
@@ -216,6 +217,7 @@ Gtk::Widget& Shell::build_dock() {  // zone
     props->set_name("dock.properties");
     props->set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
     props->set_child(m_properties);
+    widgets::wheel_scrolls_panel(*props);   // s036: scrolling past a slider leaves it be
     auto lower = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
 
     auto tabs = Gtk::make_managed<Gtk::StackSwitcher>();

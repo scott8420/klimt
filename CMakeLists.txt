@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s035")
+set(KLIMT_BUILD "s036")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -109,6 +109,7 @@ add_library(klimt_core STATIC
     src/core/Canvas.cpp    # s009 m2: Crop, Canvas Size, Image Size
     src/core/Transform.cpp # s011 m1: Free Transform, flips, rotations
     src/core/Mask.cpp      # s012 m2: layer masks
+    src/core/Matte.cpp     # s036: a cut-out's edge -- colour estimates, Defringe, the soft matte
     src/core/Gradient.cpp  # s012 m4: the Gradient tool
     src/core/Adjust.cpp       # s013: adjustments -- the maths
     src/core/Adjustments.cpp  # s013: adjustment layer verbs (s014: apply_filter)
@@ -140,7 +141,7 @@ if(KLIMT_FAST_PIXELS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     set_source_files_properties(src/core/Composite.cpp src/core/Paint.cpp src/core/Canvas.cpp
                                 src/core/Move.cpp src/core/Selection.cpp src/core/Transform.cpp src/core/Gradient.cpp
                                 src/core/Adjust.cpp src/core/Filter.cpp src/core/Heal.cpp src/core/StylesRender.cpp src/core/Fade.cpp src/core/Patterns.cpp
-                                src/core/Path.cpp src/core/Paths.cpp src/core/Isolate.cpp
+                                src/core/Path.cpp src/core/Paths.cpp src/core/Isolate.cpp src/core/Matte.cpp
                                 PROPERTIES COMPILE_OPTIONS "-O2")
 endif()
 # s007: libzip writes and reads the .klimt container (Fedora: libzip-devel).
@@ -238,6 +239,7 @@ add_executable(klimt
     src/CommandPalette.cpp
     src/EdgeTab.cpp
     src/Registry.cpp
+    src/Wheel.cpp             # s036: the wheel scrolls the panel
     src/Log.cpp
 )
 target_include_directories(klimt PRIVATE include ${GTKMM_INCLUDE_DIRS} ${ADW_INCLUDE_DIRS})

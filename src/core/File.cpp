@@ -613,6 +613,12 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 L.mask = std::make_shared<const P::TileMap>(std::move(m));
                 L.mask_on = l.value("mask_on", true);
             }
+            if (l.contains("mask_edges")) {   // s036: density / feather / defringe
+                const auto& e = l.at("mask_edges");
+                L.edges.density = std::clamp(e.value("density", 100.0), 0.0, 100.0);
+                L.edges.feather = std::clamp(e.value("feather", 0.0), 0.0, 250.0);
+                L.edges.defringe = std::clamp(e.value("defringe", 0.0), 0.0, 64.0);
+            }
             c.layers[id] = std::move(L);
         }
         // s016: the saved selections.
@@ -818,6 +824,8 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
             if (!write_map(l, *L.mask, "mask", "mask_outside")) return false;
             l["mask_on"] = L.mask_on;
         }
+        if (L.edges.any())   // s036
+            l["mask_edges"] = {{"density", L.edges.density}, {"feather", L.edges.feather}, {"defringe", L.edges.defringe}};
         layers.push_back(std::move(l));
     }
     doc["layers"] = std::move(layers);

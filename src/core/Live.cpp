@@ -3,6 +3,7 @@
 #include "core/StylesRender.hpp"   // s019
 #include "core/Fade.hpp"           // s023: a live filter's blending
 #include "core/Paths.hpp"          // s035: path layers as masks
+#include "core/Matte.hpp"          // s036: Defringe
 
 #include <algorithm>
 #include <atomic>
@@ -179,6 +180,7 @@ bool any(const Layers& ls) {
         if (active(l)) return true;
         if (l.kind == Kind::Filter) return true;   // s030
         if (l.kind == Kind::Path && l.path_mask && l.visible) return true;   // s035: a path masking its neighbour
+        if (l.kind != Kind::Path && l.mask && l.mask_on && l.edges.any()) return true;   // s036: a mask's edges
         if (l.kind == Kind::Group && l.styles.any()) return true;   // s024
     }
     return false;
@@ -463,26 +465,115 @@ std::shared_ptr<const pixel::TileMap> path_cover(const std::shared_ptr<const pat
 }
 
 std::shared_ptr<const pixel::TileMap> path_hide(const std::shared_ptr<const path::Path>& p, const std::shared_ptr<const pixel::TileMap>& own,
-                                                const pixel::Format& mf, int w, int h) {
+                                                const pixel::Format& mf, int w, int h, const MaskEdges& ed) {
     struct Entry { std::shared_ptr<const path::Path> p; std::shared_ptr<const pixel::TileMap> own; int w, h; pixel::Format f;
-                   std::shared_ptr<const pixel::TileMap> hide; };
+                   double density, feather; std::shared_ptr<const pixel::TileMap> hide; };
     static std::mutex mu;
     static std::vector<Entry> cache;
+    const auto same = [&](const Entry& e) {
+        return e.p == p && e.own == own && e.w == w && e.h == h && e.f == mf && e.density == ed.density && e.feather == ed.feather;
+    };
     {
         std::lock_guard lock(mu);
         for (const auto& e : cache)
-            if (e.p == p && e.own == own && e.w == w && e.h == h && e.f == mf) return e.hide;
+            if (same(e)) return e.hide;
     }
     const auto cover = path_cover(p, mf, w, h);
     pixel::TileMap hide = select::inverted(cover.get(), mf, w, h);
+    // s036: the path's own edges -- its outline softened, its hold weakened.
+    if (ed.feather > 0)
+        if (auto f = select::feathered(hide, ed.feather)) hide = std::move(*f);
+    if (ed.density < 100) hide = select::scaled(hide, static_cast<float>(ed.density / 100));
     if (own) hide = select::combine(&hide, *own, select::Op::Add);
     auto made = std::make_shared<const pixel::TileMap>(std::move(hide));
     std::lock_guard lock(mu);
     for (const auto& e : cache)   // another tile made it meanwhile: share that one
-        if (e.p == p && e.own == own && e.w == w && e.h == h && e.f == mf) return e.hide;
-    cache.insert(cache.begin(), {p, own, w, h, mf, made});
+        if (same(e)) return e.hide;
+    cache.insert(cache.begin(), {p, own, w, h, mf, ed.density, ed.feather, made});
     if (cache.size() > 8) cache.pop_back();
     return made;
+}
+
+}  // namespace
+
+// s036: a MASK'S EDGES. The mask as it acts -- feathered (three box passes,
+// select::feathered), then weakened by its density -- made once per mask (by
+// pointer) and setting, and cached like a look.
+std::shared_ptr<const pixel::TileMap> edged_mask(const std::shared_ptr<const pixel::TileMap>& m, const MaskEdges& ed) {
+    if (!m || (ed.density >= 100 && ed.feather <= 0)) return m;
+    using Ptr = std::shared_ptr<const pixel::TileMap>;
+    struct Entry { Ptr m; double density, feather; std::shared_future<Ptr> out; };
+    static std::mutex mu;
+    static std::vector<Entry> cache;
+    std::promise<Ptr> mine;
+    std::shared_future<Ptr> fut;
+    bool make = false;
+    {
+        std::lock_guard lock(mu);
+        for (const auto& e : cache)
+            if (e.m == m && e.density == ed.density && e.feather == ed.feather) { fut = e.out; break; }
+        if (!fut.valid()) {
+            fut = mine.get_future().share();
+            cache.insert(cache.begin(), {m, ed.density, ed.feather, fut});
+            if (cache.size() > 8) cache.pop_back();
+            make = true;
+        }
+    }
+    if (make) {   // the first to ask makes it; the others wait for it
+        pixel::TileMap out = *m;
+        if (ed.feather > 0 && m->tile_count())
+            if (auto f = select::feathered(m->without_outside(), ed.feather)) out = std::move(*f);
+        if (ed.density < 100) out = select::scaled(out, static_cast<float>(ed.density / 100));
+        mine.set_value(std::make_shared<const pixel::TileMap>(std::move(out)));
+    }
+    return fut.get();
+}
+
+// s036: DEFRINGE -- a pixel layer's colours with the old background taken
+// out at its mask's edge (core/matte). Made once per (pixels, acting mask,
+// width) -- tiles that ask at once wait for the one computation.
+std::shared_ptr<const pixel::TileMap> defringed_pixels(const Layer& l) {
+    if (l.kind != Kind::Pixel || !l.pixels || !l.mask || !l.mask_on || l.edges.defringe <= 0) return l.pixels;
+    const auto hide = edged_mask(l.mask, l.edges);
+    using Ptr = std::shared_ptr<const pixel::TileMap>;
+    struct Entry { Ptr px, hide; double width; std::shared_future<Ptr> out; };
+    static std::mutex mu;
+    static std::vector<Entry> cache;
+    std::promise<Ptr> mine;
+    std::shared_future<Ptr> fut;
+    bool make = false;
+    {
+        std::lock_guard lock(mu);
+        for (const auto& e : cache)
+            if (e.px == l.pixels && e.hide == hide && e.width == l.edges.defringe) { fut = e.out; break; }
+        if (!fut.valid()) {
+            fut = mine.get_future().share();
+            cache.insert(cache.begin(), {l.pixels, hide, l.edges.defringe, fut});
+            if (cache.size() > 6) cache.pop_back();
+            make = true;
+        }
+    }
+    if (make) {
+        auto out = matte::defringed(*l.pixels, *hide, l.edges.defringe);
+        mine.set_value(out ? std::make_shared<const pixel::TileMap>(std::move(*out)) : l.pixels);
+    }
+    return fut.get();
+}
+
+namespace {
+// Each layer's own mask as it acts (its edges applied), and a defringed
+// layer's colours; path layers' edges are path_masked's.
+Layers edged(const Layers& ls) {
+    bool any = false;
+    for (const auto& [id, l] : ls) any = any || (l.kind != Kind::Path && l.mask && l.mask_on && l.edges.any());
+    if (!any) return ls;
+    Layers out = ls;
+    for (auto& [id, l] : out)
+        if (l.kind != Kind::Path && l.mask && l.mask_on) {
+            l.pixels = defringed_pixels(l);   // before the mask is replaced: it reads the layer's own
+            l.mask = edged_mask(l.mask, l.edges);
+        }
+    return out;
 }
 
 Layers path_masked(const Layers& ls, const Image* im) {
@@ -500,7 +591,7 @@ Layers path_masked(const Layers& ls, const Image* im) {
             Layer& t = out.at(below);
             // hide = max(own hide (when on), 1 - coverage) -- made ONCE per
             // outline and own mask, not per tile (s035, Scott: "sluggishness").
-            t.mask = path_hide(l.path, t.mask && t.mask_on ? t.mask : nullptr, mf, im->width, im->height);
+            t.mask = path_hide(l.path, t.mask && t.mask_on ? t.mask : nullptr, mf, im->width, im->height, l.edges);
             t.mask_on = true;
         }
     }
@@ -509,7 +600,7 @@ Layers path_masked(const Layers& ls, const Image* im) {
 }  // namespace
 
 Layers effective(const Layers& ls_in, const Image* im) {
-    const Layers ls = path_masked(ls_in, im);   // s035: first, so every other look sees the masks
+    const Layers ls = path_masked(edged(ls_in), im);   // s035: first, so every other look sees the masks (s036: their edges first)
     Layers out = ls;
     // s024: styled groups first (the outermost; the inner ones are done
     // inside their look): each becomes one pixel layer, its contents gone.

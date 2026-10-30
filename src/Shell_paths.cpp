@@ -104,7 +104,7 @@ void Shell::on_path_make_work() {
     });
 }
 
-void Shell::on_path_isolate(const std::string& id, double band) {
+void Shell::on_path_isolate(const std::string& id, double band, double soft) {
     const auto p = P::of(m_doc, id);
     if (!p || p->empty()) { toast("Isolate: the path is empty"); return; }
     if (m_path_job) m_jobs.cancel(m_path_job);
@@ -112,11 +112,12 @@ void Shell::on_path_isolate(const std::string& id, double band) {
     const core::Image im = m_doc.image();
     const auto layers = m_doc.snapshot();
     const auto mf = m_doc.mask_format();
-    m_path_job = start_job("Isolate", [this, im, layers, mf, path = *p, band, expect](core::Jobs::Token& t) -> core::Jobs::Landing {
+    m_path_job = start_job("Isolate", [this, im, layers, mf, path = *p, band, soft, expect](core::Jobs::Token& t) -> core::Jobs::Landing {
         const auto pic = P::picture_for_isolate(im, layers);
         if (!pic || t.cancelled()) return {};
         core::isolate::Options o;
         o.band = band;
+        o.soft = soft;   // s036
         auto m = core::isolate::isolated(*pic, path, mf, o, [&t] { return t.cancelled(); }, [&t](double f) { t.progress(f); });
         if (!m) return {};
         return [this, expect, mask = std::move(*m)]() mutable {

@@ -72,6 +72,19 @@ constexpr std::uint8_t Mask     = 15;
 
 struct Image;
 
+// s036 -- a mask's EDGES, live (Photoshop's mask Density / Feather, and a
+// cut-out's Defringe): `density` 0..100 -- how strongly the mask hides (0:
+// not at all); `feather` px -- its edge softened (a Gaussian-like blur);
+// `defringe` px -- the colour bleeding in from the old background at the
+// edge taken out (pixel layers with a mask; docs/masks.md). Defaults: none.
+struct MaskEdges {
+    double density = 100;
+    double feather = 0;
+    double defringe = 0;
+    bool any() const { return density < 100 || feather > 0 || defringe > 0; }
+    bool operator==(const MaskEdges&) const = default;
+};
+
 struct Layer {
     Kind          kind    = Kind::Pixel;
     std::string   name;
@@ -99,6 +112,9 @@ struct Layer {
     // map with no tiles: a mask that hides nothing. Pixel layers only.
     std::shared_ptr<const pixel::TileMap> mask;
     bool          mask_on = true;      // Shift-click the mask: off (it stays, shows nothing)
+    // s036: the mask's EDGES (docs/masks.md) -- live, the mask itself never
+    // changes. On a path layer they shape the path's mask.
+    MaskEdges     edges;
     // s013: an ADJUSTMENT LAYER's settings (core/Adjust.hpp); kind None on
     // every other layer. No pixels; it may have a mask.
     Adjust        adjust;
@@ -363,6 +379,11 @@ bool delete_mask(DocJournal& j, Document& d, const Id& id);
 bool apply_mask(DocJournal& j, Document& d, const Id& id);
 bool set_mask_on(DocJournal& j, Document& d, const Id& id, bool on);
 bool invert_mask(DocJournal& j, Document& d, const Id& id);
+// s036: the mask's edges (density / feather / defringe) -- one step; quick
+// presses (a slider's drag) fold into one. Refused without a mask (a path
+// layer: always allowed), on a locked-all layer, or when nothing changes.
+// Ranges: density 0..100, feather 0..250, defringe 0..64 (clamped).
+bool set_mask_edges(DocJournal& j, Document& d, const Id& id, const MaskEdges& e);
 // A job that computed a mask on a copy lands through this (refused unless
 // the mask is still `expect`).
 bool set_mask_if(DocJournal& j, Document& d, const Id& id, const std::shared_ptr<const pixel::TileMap>& expect,

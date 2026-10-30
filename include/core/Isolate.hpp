@@ -29,6 +29,7 @@ namespace klimt::core::isolate {
 struct Options {
     double band = 12;     // how far the path may cut into the figure, px (2 .. 64)
     int    rounds = 3;    // cut, re-learn, cut ...
+    double soft = 0;      // s036: a soft edge this wide (px, 0: off) -- hair, fur (core/Matte.hpp)
 };
 
 // `picture`: what the eye sees (RGB / RGBA, any depth). The mask: the

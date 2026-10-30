@@ -47,7 +47,7 @@ public:
     // s035: a PATH LAYER's actions the Shell runs -- Load as Selection; Isolate
     // (the figure the path goes round; `band`: how far off its edge the path may be).
     sigc::signal<void(const Id&)>& signal_path_load() { return m_path_load; }
-    sigc::signal<void(const Id&, double)>& signal_path_isolate() { return m_path_isolate; }
+    sigc::signal<void(const Id&, double, double)>& signal_path_isolate() { return m_path_isolate; }   // s036: + the soft edge (px)
     // s035: the path's outline on the canvas (a view setting, not the document's).
     void set_path_outline(bool shown);
     sigc::signal<void(bool)>& signal_path_outline() { return m_path_outline; }
@@ -59,6 +59,9 @@ private:
     void on_fill();
     void on_lock();
     void paint_live(const core::Layer& l);   // s018: the stack's rows
+    void build_edges();                      // s036: the mask's edges
+    void paint_edges(const core::Layer& l);
+    void edges_changed(int row);
     Id primary() const { return m_sel.empty() ? Id{} : m_sel.front(); }
 
     core::Document&   m_doc;
@@ -98,9 +101,20 @@ private:
     Gtk::CheckButton      m_path_show{"Show the outline"};
     sigc::signal<void(bool)> m_path_outline;
     Gtk::SpinButton       m_band;
+    Gtk::SpinButton       m_soft;   // s036: Isolate's soft edge
     Id                    m_path_id;
     sigc::signal<void(const Id&)> m_path_load;
-    sigc::signal<void(const Id&, double)> m_path_isolate;
+    sigc::signal<void(const Id&, double, double)> m_path_isolate;
+    // s036: the MASK'S EDGES -- Density, Feather, Defringe: a value over a
+    // slider each (Feather / Defringe squared onto the slider: fine near 0).
+    struct EdgeRow { Gtk::Scale* s = nullptr; Gtk::SpinButton* n = nullptr; Gtk::Widget* top = nullptr; double hi = 100; bool sq = false; };
+    Gtk::Box              m_edges_box{Gtk::Orientation::VERTICAL, 2};
+    Gtk::Label            m_edges_head;
+    Gtk::Label            m_edges_note;
+    EdgeRow               m_er[3];
+    core::MaskEdges       m_edges_shown;
+    Id                    m_edges_id;
+    bool                  m_edges_sync = false;
     Id                    m_fmask_target;
     sigc::signal<void(bool)> m_fmask_signal;
 };

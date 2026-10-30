@@ -55,6 +55,13 @@ pixel::TileMap inverted(const pixel::TileMap* old, const pixel::Format& mf, int 
 std::optional<pixel::TileMap> feathered(const pixel::TileMap& m, double radius,
                                         const std::function<bool()>& cancelled = {});
 bool empty(const pixel::TileMap& m);       // nothing selected anywhere
+// s036: the distance (pixels, centre to centre) from each of W x H cells to
+// the nearest cell where `feature` is set (none: 1e9). Exact (Felzenszwalb &
+// Huttenlocher). Empty when cancelled.
+std::vector<float> distance_field(const std::vector<std::uint8_t>& feature, std::size_t W, std::size_t H,
+                                  const std::function<bool()>& cancelled = {});
+// s036: every coverage times k (0..1) -- a mask's Density.
+pixel::TileMap scaled(const pixel::TileMap& m, float k);
 
 // s011 m4 -- Select > Modify. The selection's edge (coverage >= 1/2), moved
 // by an exact Euclidean distance, with a one-pixel soft edge. The canvas's

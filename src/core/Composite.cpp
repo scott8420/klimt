@@ -475,8 +475,9 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
                     for (const auto* pp : {a->path.get(), b->path.get()}) {
                         if (!pp || pp->empty()) continue;
                         const auto bx = path::box(*pp);
-                        const int c0 = std::max(0, static_cast<int>(std::floor(bx.x0 - 2)) / kTile), c1 = std::min(t.cols - 1, static_cast<int>(std::ceil(bx.x1 + 2)) / kTile);
-                        const int r0 = std::max(0, static_cast<int>(std::floor(bx.y0 - 2)) / kTile), r1 = std::min(t.rows - 1, static_cast<int>(std::ceil(bx.y1 + 2)) / kTile);
+                        const double pad = 2 + 2 * b->edges.feather;   // s036: a feathered outline reaches further
+                        const int c0 = std::max(0, static_cast<int>(std::floor(bx.x0 - pad)) / kTile), c1 = std::min(t.cols - 1, static_cast<int>(std::ceil(bx.x1 + pad)) / kTile);
+                        const int r0 = std::max(0, static_cast<int>(std::floor(bx.y0 - pad)) / kTile), r1 = std::min(t.rows - 1, static_cast<int>(std::ceil(bx.y1 + pad)) / kTile);
                         for (int r = r0; r <= r1; ++r)
                             for (int c = c0; c <= c1; ++c) t.add(c, r);
                     }
@@ -507,6 +508,10 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
             t.add_all();
             return t;
         }
+        // s036: a feathered mask spreads past its own tiles (and a defringe
+        // reads its neighbours): any change, everything.
+        const auto spreads = [](const Layer* l) { return l && l->mask && (l->edges.feather > 0 || l->edges.defringe > 0); };
+        if (spreads(a) || spreads(b)) { t.add_all(); return t; }
         // s018: a layer with live filters reaches past its own tiles (a blur
         // spreads): any change to it, or to its stack, redraws everything.
         if ((a && live::active(*a)) || (b && live::active(*b))) { t.add_all(); return t; }

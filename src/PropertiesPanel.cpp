@@ -223,15 +223,35 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
         px->add_css_class("dim-label");
         row->append(*px);
         m_path_box.append(*row);
+        // s036: the soft edge -- hair, fur: coverage from colour, this far either side of the cut.
+        auto srow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        auto sl = Gtk::make_managed<Gtk::Label>("Soft edge");
+        sl->set_xalign(0.0f);
+        sl->set_hexpand(true);
+        srow->append(*sl);
+        m_soft.set_name("properties.path.soft");
+        m_soft.set_range(0, 64);
+        m_soft.set_increments(1, 4);
+        m_soft.set_digits(0);
+        m_soft.set_value(0);
+        m_soft.set_width_chars(4);
+        m_soft.set_tooltip_text("For hair, fur, soft focus: within this many pixels of the edge, how much is figure is read "
+                                "from each pixel's colour (between the figure's and the background's) -- 0: a clean, hard edge");
+        srow->append(m_soft);
+        auto spx = Gtk::make_managed<Gtk::Label>("px");
+        spx->add_css_class("dim-label");
+        srow->append(*spx);
+        m_path_box.append(*srow);
         auto iso = Gtk::make_managed<Gtk::Button>("Isolate the Figure");
         iso->set_name("properties.path.isolate");
         iso->add_css_class("suggested-action");
         iso->set_tooltip_text("Select what the path goes round, by its colours and edges -- outside the band is background, "
                               "inside it the figure, the band decided from the picture");
-        iso->signal_clicked().connect([this] { if (!m_path_id.empty()) m_path_isolate.emit(m_path_id, m_band.get_value()); });
+        iso->signal_clicked().connect([this] { if (!m_path_id.empty()) m_path_isolate.emit(m_path_id, m_band.get_value(), m_soft.get_value()); });
         m_path_box.append(*iso);
         m_fields.append(m_path_box);
     }
+    build_edges();   // s036
 
     // s019: the layer's styles -- live; a slider drag is ONE step, presses fold.
     m_styles.set_visible(false);
@@ -350,6 +370,7 @@ void PropertiesPanel::paint() {
     m_opacity.set_sensitive(editable && l->kind != core::Kind::Path);
     m_fill.set_sensitive(editable && l->kind != core::Kind::Path);
     m_later.set_visible(!adj && !flt && !pth);
+    paint_edges(*l);  // s036
     paint_live(*l);   // s018
     // s019: one pixel layer picked: its styles.
     const bool styled = (l->kind == core::Kind::Pixel || l->kind == core::Kind::Group) && m_sel.size() == 1;   // s024: groups too
@@ -373,6 +394,126 @@ void PropertiesPanel::paint() {
         m_hist_id.clear();
     }
     m_painting = false;
+}
+
+// s036: the MASK'S EDGES. A section under the layer's switches whenever the
+// one picked layer has a mask (or is a path layer: its edges shape the path's
+// mask). Each change is one call into core::layers::set_mask_edges; a drag's
+// quick changes fold into one step there.
+void PropertiesPanel::build_edges() {
+    m_edges_box.set_name("properties.edges");
+    m_edges_box.set_visible(false);
+    m_edges_head.set_markup("<b>Mask edges</b>");
+    m_edges_head.set_xalign(0.0f);
+    m_edges_head.set_margin_top(4);
+    m_edges_box.append(m_edges_head);
+    m_edges_note.set_xalign(0.0f);
+    m_edges_note.set_wrap(true);
+    m_edges_note.add_css_class("dim-label");
+    m_edges_note.add_css_class("caption");
+    m_edges_box.append(m_edges_note);
+    struct Spec { const char* name; const char* label; const char* unit; double hi; bool sq; int digits; const char* tip; };
+    const Spec specs[3] = {
+        {"properties.edges.density", "Density", "%", 100, false, 0,
+         "How strongly the mask hides -- 100: fully; 0: not at all (the mask stays, to bring back)"},
+        {"properties.edges.feather", "Feather", "px", 250, true, 1,
+         "Soften the mask's edge -- live; the mask itself doesn't change"},
+        {"properties.edges.defringe", "Defringe", "px", 64, true, 1,
+         "Take the old background's colour out of the edge of a cut-out -- the halo; "
+         "within this distance of the edge, colours come from the figure (the pixels don't change)"},
+    };
+    for (int i = 0; i < 3; ++i) {
+        const Spec& sp = specs[i];
+        auto top = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        top->set_margin_top(4);
+        auto l = Gtk::make_managed<Gtk::Label>(sp.label);
+        l->set_xalign(0.0f);
+        l->set_hexpand(true);
+        top->append(*l);
+        auto n = Gtk::make_managed<Gtk::SpinButton>();
+        n->set_name(std::string(sp.name) + ".value");
+        n->set_range(0, sp.hi);
+        n->set_increments(sp.digits ? 0.5 : 1, sp.digits ? 5 : 10);
+        n->set_digits(static_cast<guint>(sp.digits));
+        n->set_width_chars(5);
+        n->set_numeric(true);
+        n->set_tooltip_text(sp.tip);
+        top->append(*n);
+        auto u = Gtk::make_managed<Gtk::Label>(sp.unit);
+        u->set_size_request(20, -1);
+        u->set_xalign(0.0f);
+        u->add_css_class("dim-label");
+        top->append(*u);
+        m_edges_box.append(*top);
+        auto sc = Gtk::make_managed<Gtk::Scale>(Gtk::Orientation::HORIZONTAL);
+        sc->set_name(std::string(sp.name) + ".slider");
+        sc->set_range(0, 1000);   // a position: linear, or squared onto 0..hi
+        sc->set_increments(1, 50);
+        sc->set_draw_value(false);
+        sc->set_hexpand(true);
+        sc->set_tooltip_text(sp.tip);
+        m_edges_box.append(*sc);
+        m_er[i] = {sc, n, top, sp.hi, sp.sq};
+        sc->signal_value_changed().connect([this, i] {
+            if (m_edges_sync || m_painting) return;
+            const EdgeRow& r = m_er[i];
+            const double t = r.s->get_value() / 1000;
+            const double v = r.hi * (r.sq ? t * t : t);
+            const double q = r.n->get_digits() ? 10 : 1;
+            m_edges_sync = true;
+            r.n->set_value(std::round(v * q) / q);
+            m_edges_sync = false;
+            edges_changed(i);
+        });
+        n->signal_value_changed().connect([this, i] {
+            if (m_edges_sync || m_painting) return;
+            const EdgeRow& r = m_er[i];
+            const double t = r.hi > 0 ? r.n->get_value() / r.hi : 0;
+            m_edges_sync = true;
+            r.s->set_value(1000 * (r.sq ? std::sqrt(t) : t));
+            m_edges_sync = false;
+            edges_changed(i);
+        });
+    }
+    m_fields.append(m_edges_box);
+}
+
+void PropertiesPanel::edges_changed(int) {
+    if (m_edges_id.empty()) return;
+    core::MaskEdges e;
+    e.density = m_er[0].n->get_value();
+    e.feather = m_er[1].n->get_value();
+    e.defringe = m_er[2].n->get_value();
+    m_edges_shown = e;
+    L::set_mask_edges(m_journal, m_doc, m_edges_id, e);
+}
+
+void PropertiesPanel::paint_edges(const core::Layer& l) {
+    const bool path = l.kind == core::Kind::Path && l.path;
+    const bool show = m_sel.size() == 1 && (l.mask || path);
+    m_edges_box.set_visible(show);
+    if (!show) { m_edges_id.clear(); return; }
+    const bool pixel = l.kind == core::Kind::Pixel;
+    m_er[2].top->set_visible(pixel);   // colours: a pixel layer's
+    m_er[2].s->set_visible(pixel);
+    m_edges_box.set_sensitive(!m_doc.locked_all(primary()));
+    m_edges_note.set_text(path ? "The path's mask: its outline softened, its hold weakened."
+                        : !l.mask_on ? "The mask is off (Shift-click its chip) -- these act when it's on."
+                        : "Live -- the mask itself never changes; Apply Layer Mask bakes them.");
+    // The same layer, the same values as shown: leave the widgets be (a
+    // drag in progress must not be set back by its own echo).
+    if (primary() == m_edges_id && l.edges == m_edges_shown) return;
+    m_edges_id = primary();
+    m_edges_shown = l.edges;
+    const double v[3] = {l.edges.density, l.edges.feather, l.edges.defringe};
+    m_edges_sync = true;
+    for (int i = 0; i < 3; ++i) {
+        const EdgeRow& r = m_er[i];
+        r.n->set_value(v[i]);
+        const double t = r.hi > 0 ? v[i] / r.hi : 0;
+        r.s->set_value(1000 * (r.sq ? std::sqrt(t) : t));
+    }
+    m_edges_sync = false;
 }
 
 // s018: the stack, bottom (runs first) at the top of the list, as Photoshop

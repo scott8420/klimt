@@ -1,6 +1,7 @@
 // core::isolate -- the path as a hint; GrabCut decides the band (s035 m7).
 // docs/paths.md.
 #include "core/Isolate.hpp"
+#include "core/Matte.hpp"   // s036: the soft edge
 #include "core/MaxFlow.hpp"
 #include "core/Paths.hpp"
 #include "core/Selection.hpp"
@@ -428,6 +429,12 @@ std::optional<pixel::TileMap> isolated(const pixel::TileMap& picture, const path
                 grid[static_cast<std::size_t>(row) * static_cast<std::size_t>(out.cols()) + static_cast<std::size_t>(c)] = w.freeze();
             }
         out = pixel::TileMap::from_tiles(mf, W, H, std::move(grid));
+    }
+    // s036: the soft edge -- hair, fur: coverage from colour in a band.
+    if (o.soft > 0) {
+        auto sm = matte::soft_edge(picture, out, std::clamp(o.soft, 1.0, 64.0), cancelled);
+        if (!sm) return std::nullopt;
+        out = std::move(*sm);
     }
     tell(1.0);
     return out;

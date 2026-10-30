@@ -47,6 +47,12 @@ std::shared_ptr<const pixel::TileMap> group_look(const Image& im, const Layers& 
 pixel::TileMap masked(const pixel::TileMap& raw, const pixel::TileMap& filtered, const pixel::TileMap& hide);
 // How far an active layer's look can reach past its pixels (the stack's reach).
 int reach(const Layer& l);
+// s036: a layer mask as it acts -- its feather and density applied (cached;
+// `m` itself when they do nothing). Apply Layer Mask bakes this.
+std::shared_ptr<const pixel::TileMap> edged_mask(const std::shared_ptr<const pixel::TileMap>& m, const MaskEdges& e);
+// s036: a pixel layer's colours with its mask's fringe taken out (Defringe;
+// cached). Its pixels themselves when there's nothing to do.
+std::shared_ptr<const pixel::TileMap> defringed_pixels(const Layer& l);
 void clear_cache();                       // tests
 // s021: how many looks were made in part (the change and its reach only) --
 // painting a live / styled layer. For the selftest.

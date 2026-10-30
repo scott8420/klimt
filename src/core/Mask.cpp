@@ -5,6 +5,9 @@
 // Photoshop's language (white reveals, black hides) and converts at the edge.
 #include "core/Document.hpp"
 #include "core/Selection.hpp"
+#include "core/Live.hpp"   // s036: the mask as it acts (its edges)
+
+#include <algorithm>
 
 namespace klimt::core::layers {
 
@@ -21,6 +24,7 @@ bool put_mask(DocJournal& j, Document& d, const Id& id, MapPtr mask, bool on, co
     if (l.mask == mask && l.mask_on == on) return false;
     l.mask = std::move(mask);
     l.mask_on = on;
+    if (!l.mask && l.kind != Kind::Path) l.edges = {};   // s036: the edges go with the mask
     return j.run(label, {id}, [&] { d.put(id, l); });
 }
 }  // namespace
@@ -50,9 +54,12 @@ bool apply_mask(DocJournal& j, Document& d, const Id& id) {
     Layer l = *d.get(id);
     if (!l.mask || !d.image().format.alpha || (l.locks & (lock::Pixels | lock::Alpha))) return false;
     if (l.mask_on && l.pixels) {
-        auto p = select::cleared(*l.pixels, l.mask.get(), pixel::transparent());   // alpha *= 1 - hide
+        const auto acts = live::edged_mask(l.mask, l.edges);   // s036: feather / density baked in too
+        const auto colours = live::defringed_pixels(l);        // s036: and the defringed colours
+        auto p = select::cleared(*colours, acts.get(), pixel::transparent());   // alpha *= 1 - hide
         l.pixels = p.tile_count() ? std::make_shared<const pixel::TileMap>(std::move(p)) : nullptr;
     }
+    l.edges = {};
     l.mask = nullptr;   // a disabled mask applies as nothing: Photoshop's "apply" of an off mask just drops it
     l.mask_on = true;
     return j.run("Apply Layer Mask", {id}, [&] { d.put(id, l); });
@@ -71,6 +78,20 @@ bool invert_mask(DocJournal& j, Document& d, const Id& id) {
     if (!l.mask) return false;
     auto inv = select::inverted(l.mask->tile_count() ? l.mask.get() : nullptr, d.mask_format(), d.image().width, d.image().height);
     return put_mask(j, d, id, std::make_shared<const pixel::TileMap>(std::move(inv)), l.mask_on, "Invert Layer Mask");
+}
+
+bool set_mask_edges(DocJournal& j, Document& d, const Id& id, const MaskEdges& e0) {
+    if (!maskable(d, id)) return false;
+    Layer l = *d.get(id);
+    if (!l.mask && l.kind != Kind::Path) return false;
+    MaskEdges e;
+    e.density = std::clamp(e0.density, 0.0, 100.0);
+    e.feather = std::clamp(e0.feather, 0.0, 250.0);
+    e.defringe = l.kind == Kind::Pixel ? std::clamp(e0.defringe, 0.0, 64.0) : 0.0;   // colours: a pixel layer's only
+    if (l.edges == e) return false;
+    const char* what = l.edges.density != e.density ? "Mask Density" : l.edges.feather != e.feather ? "Mask Feather" : "Defringe";
+    l.edges = e;
+    return j.run(std::string(what) + " on “" + l.name + "”", {id}, [&] { d.put(id, l); }, "mask_edges:" + id);
 }
 
 bool set_mask_if(DocJournal& j, Document& d, const Id& id, const MapPtr& expect, pixel::TileMap after, const std::string& label) {

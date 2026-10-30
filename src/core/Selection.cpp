@@ -315,6 +315,17 @@ TileMap inverted(const TileMap* old, const pixel::Format& mf, int w, int h) {
 
 bool empty(const TileMap& m) { return m.tile_count() == 0; }
 
+TileMap scaled(const TileMap& m, float k) {
+    k = std::clamp(k, 0.f, 1.f);
+    if (k >= 1.f) return m;
+    if (k <= 0.f) return TileMap(m.format(), m.width(), m.height());
+    return build(m.format(), m.width(), m.height(), [&](int col, int row, std::vector<float>& cov) {
+        if (!tile_cov(m, col, row, cov)) return 0;
+        for (auto& v : cov) v *= k;
+        return 2;
+    });
+}
+
 pixel::Rect bounds(const TileMap& m) {   // s033: exact (extent is whole tiles)
     const pixel::Rect e = extent(m);
     if (e.empty()) return {};
@@ -451,6 +462,13 @@ std::vector<float> distance(const std::vector<std::uint8_t>& feature, std::size_
     return out;
 }
 }  // namespace
+
+std::vector<float> distance_field(const std::vector<std::uint8_t>& feature, std::size_t W, std::size_t H,
+                                  const std::function<bool()>& cancelled) {
+    bool stopped = false;
+    auto d = distance(feature, W, H, cancelled, stopped);
+    return stopped ? std::vector<float>{} : d;
+}
 
 const char* modify_name(Modify k) {
     switch (k) {
