@@ -23,6 +23,8 @@ void FilterLayerEditor::set(const core::Filter& f) {
     m_f = f;
     m_threshold = f.threshold;
     m_angle = f.angle;
+    m_quality = f.quality;   // s040
+    m_axis = f.axis;
     if (f.kind != m_built) rebuild();
     sync();
 }
@@ -30,6 +32,8 @@ void FilterLayerEditor::set(const core::Filter& f) {
 void FilterLayerEditor::emit() {
     m_f.threshold = static_cast<int>(std::lround(m_threshold));
     m_f.angle = static_cast<int>(std::lround(m_angle));
+    m_f.quality = static_cast<int>(std::lround(m_quality));   // s040
+    m_f.axis = static_cast<int>(std::lround(m_axis));
     m_changed.emit(m_f);
 }
 
@@ -98,7 +102,7 @@ void FilterLayerEditor::rebuild() {
     m_shape = nullptr;
     m_motion_only.clear();
     m_into = nullptr;
-    m_gauss = m_mono = nullptr;
+    m_gauss = m_mono = m_zoom = nullptr;
     m_depth = nullptr; m_invert = nullptr; m_depth_only.clear();   // s039
     m_built = m_f.kind;
     auto head = Gtk::make_managed<Gtk::Label>();
@@ -147,6 +151,28 @@ void FilterLayerEditor::rebuild() {
         case FilterKind::SurfaceBlur:   // m4
             row("filter_layer.radius", "Radius", 1, 100, 0, true, "px", &m_f.radius);
             row("filter_layer.threshold", "Threshold", 2, 255, 0, false, "levels", &m_threshold);
+            break;
+        case FilterKind::RadialBlur: {   // s040
+            row("filter_layer.amount", "Amount", 1, 100, 0, false, "", &m_f.amount);
+            m_zoom = Gtk::make_managed<Gtk::CheckButton>("Zoom");
+            m_zoom->set_name("filter_layer.zoom");
+            m_zoom->set_tooltip_text("On: streaks along the rays from the centre; off: Spin, arcs round it");
+            m_zoom->signal_toggled().connect([this] { if (!m_syncing) { m_f.zoom = m_zoom->get_active(); emit(); } });
+            m_body.append(*m_zoom);
+            row("filter_layer.quality", "Quality", 0, 2, 0, false, "", &m_quality);
+            row("filter_layer.cx", "Centre X", 0, 100, 1, false, "%", &m_f.cx);
+            row("filter_layer.cy", "Centre Y", 0, 100, 1, false, "%", &m_f.cy);
+            break;
+        }
+        case FilterKind::Twirl:   // s040 m4
+            row("filter_layer.angle", "Angle", -999, 999, 0, false, "°", &m_angle);
+            break;
+        case FilterKind::Pinch:
+            row("filter_layer.amount", "Amount", -100, 100, 0, false, "%", &m_f.amount);
+            break;
+        case FilterKind::Spherize:
+            row("filter_layer.amount", "Amount", -100, 100, 0, false, "%", &m_f.amount);
+            row("filter_layer.axis", "Mode (0 normal, 1 across, 2 down)", 0, 2, 0, false, "", &m_axis);
             break;
         case FilterKind::LensBlur: {   // s037: the iris, then the specular highlights
             // s039: the depth map -- the transparency of what is below (a
@@ -214,6 +240,7 @@ void FilterLayerEditor::sync(int keep) {
         }
     }
     if (m_gauss) m_gauss->set_active(m_f.gaussian);
+    if (m_zoom) m_zoom->set_active(m_f.zoom);   // s040
     if (m_mono) m_mono->set_active(m_f.mono);
     if (m_shape) m_shape->set_selected(m_f.round ? 1u : 0u);   // m3
     if (m_depth) {   // s039

@@ -44,6 +44,9 @@ private:
     std::vector<Row> m_rows;
     Gtk::CheckButton* m_gauss = nullptr;
     Gtk::CheckButton* m_mono = nullptr;
+    Gtk::CheckButton* m_zoom = nullptr;     // s040: Radial Blur's Zoom (off: Spin)
+    double m_quality = 1;                   // s040: Radial Blur's Quality, through a double row
+    double m_axis = 0;                      // s040 m4: Spherize's mode
     Gtk::DropDown*    m_depth = nullptr;    // s039: Lens Blur's depth map -- None / Transparency
     Gtk::CheckButton* m_invert = nullptr;
     std::vector<Gtk::Widget*> m_depth_only;

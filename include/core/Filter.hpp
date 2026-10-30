@@ -26,7 +26,9 @@ namespace klimt::core {
 enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass, AddNoise, BoxBlur, MotionBlur, Median,
                                        SmartSharpen, DustScratches, ReduceNoise,   // s034
                                        Maximum, Minimum, SurfaceBlur,     // m4
-                                       LensBlur };                        // s037
+                                       LensBlur,                          // s037
+                                       RadialBlur,                        // s040
+                                       Twirl, Pinch, Spherize };          // s040 m4: Distort
 
 // s034: what Smart Sharpen takes away -- the blur it undoes.
 enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
@@ -89,6 +91,20 @@ struct Filter {
     DepthSource depth = DepthSource::None;
     double focal = 0;
     bool invert = false;
+    // s040 -- Radial Blur: `amount` 1 .. 100; `zoom` (Zoom: streaks along the
+    // rays from the centre; else Spin: arcs round it); `quality` 0 Draft, 1
+    // Good, 2 Best (taps a pixel of streak: a third, 1, 2); the BLUR CENTRE
+    // `cx`, `cy` in % of the image's width / height (50, 50: the middle).
+    bool zoom = false;
+    int quality = 1;
+    double cx = 50, cy = 50;
+    // s040 m4 -- DISTORT, in the ellipse fitted to the selection's bounds (or
+    // the picture): Twirl -- `angle` -999 .. 999 degrees (the middle turned
+    // most, the rim not at all; + clockwise); Pinch -- `amount` -100 .. 100
+    // (+ squeezes the middle in, - pushes it out); Spherize -- `amount` -100
+    // .. 100 (+ a bulge, - a dent) and `axis` 0 Normal, 1 Horizontal only, 2
+    // Vertical only.
+    int axis = 0;
     bool operator==(const Filter&) const = default;
 };
 
@@ -134,6 +150,18 @@ std::string_view depth_key(DepthSource s);        // "none", "transparency", "la
 std::optional<DepthSource> depth_from(std::string_view key);
 // The Layer Mask source wants the layer's mask passed in (`depth` below).
 bool wants_mask(const Filter& f);
+
+// s040: Radial Blur's streak at a pixel `rho` px from the centre -- its
+// length in pixels (Spin: the arc, amount x 0.5 degrees; Zoom: the ray's
+// span, amount / 100 x 0.5 of rho); and the doubling passes the longest
+// streak `rho` out needs (2^passes taps along it; 0 -- nothing to blur).
+double radial_length(const Filter& f, double rho);
+int radial_passes(const Filter& f, double rho);
+
+// s040 m4: Distort's map -- where the output pixel at (x, y) (pixel centre,
+// image coordinates) takes its colour from, for an ellipse of centre (ex, ey)
+// and half-axes (rx, ry). False: outside it (unchanged).
+bool warp_source(const Filter& f, double ex, double ey, double rx, double ry, double x, double y, double& sx, double& sy);
 
 // The 1-D blur Gaussian Blur, Unsharp Mask and High Pass share, along a line of n samples with
 // stride `stride` floats (edges clamp): sigma < 3 an exact Gaussian kernel,

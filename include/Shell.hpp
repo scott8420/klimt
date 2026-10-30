@@ -487,6 +487,7 @@ private:
         std::string      mask_view;
         bool             quick_mask = false;
         core::paint::CloneSource clone;
+        core::refine::Session refine;           // s040: the Refine brush's session (53)
         bool             known = false;
     };
     std::map<std::uint64_t, TabView> m_tab_views;

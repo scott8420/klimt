@@ -196,6 +196,7 @@ void Shell::remember_tab() {
     tv.mask_view = m_mask_view;
     tv.quick_mask = m_quick_mask;
     tv.clone = m_clone;
+    tv.refine = m_refine;   // s040: the Refine session stays with its tab (53)
     tv.known = true;
 }
 
@@ -239,8 +240,9 @@ void Shell::after_switch() {
     m_nudge = {};
     m_stroke_last_valid = false;
     m_channel_view = -1;   // s026: the picture, in the tab that comes in
-    if (m_refine_job) { m_jobs.cancel(m_refine_job); m_refine_job = 0; }   // s038: Refine's memory is the old document's
-    m_refine.reset();
+    // s038: a run in flight is the old document's -- dropped (its stroke stays
+    // in that tab's session and joins the next run there).
+    if (m_refine_job) { m_jobs.cancel(m_refine_job); m_refine_job = 0; }
     m_preview.clear();
     m_shown = {};
     m_shown_image = {};
@@ -253,6 +255,7 @@ void Shell::after_switch() {
     m_layers.set_mask_viewing(m_mask_view);
     m_quick_mask = tv.quick_mask && has_image();
     m_clone = tv.clone;
+    m_refine = tv.refine;   // s040: the tab's own Refine session (none: a fresh one)
     show_clone_marker();
 
     m_canvas.set_document(m_doc.image().width, m_doc.image().height);

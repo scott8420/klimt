@@ -85,6 +85,10 @@ const std::vector<Command>& commands() {
             {"Motion Blur", "Filter", "win.filter-motion-blur", "", "filter blur streak speed movement angle", ""},
             {"Surface Blur", "Filter", "win.filter-surface-blur", "", "filter blur smooth skin edge-preserving bilateral retouch", ""},
             {"Lens Blur", "Filter", "win.filter-lens-blur", "", "filter blur bokeh depth of field aperture iris blades highlights camera", ""},   // s037
+            {"Radial Blur", "Filter", "win.filter-radial-blur", "", "filter blur spin zoom rotate wheel speed burst centre center motion", ""},   // s040
+            {"Twirl", "Filter", "win.filter-twirl", "", "filter distort swirl whirl spiral rotate", ""},   // s040 m4
+            {"Pinch", "Filter", "win.filter-pinch", "", "filter distort squeeze bulge shrink", ""},
+            {"Spherize", "Filter", "win.filter-spherize", "", "filter distort sphere bulge fisheye lens dent", ""},
             {"Median", "Filter", "win.filter-median", "", "filter noise despeckle dust remove smooth", ""},
             // s034
             {"Smart Sharpen", "Filter", "win.filter-smart-sharpen", "", "filter sharpen crisp detail lens deblur focus halo", ""},
@@ -101,6 +105,10 @@ const std::vector<Command>& commands() {
             {"New Filter Layer: Motion Blur", "Layer", "win.filter-layer-motion-blur", "", "filter layer live non-destructive blur streak speed", ""},
             {"New Filter Layer: Surface Blur", "Layer", "win.filter-layer-surface-blur", "", "filter layer live non-destructive blur smooth skin edge-preserving", ""},
             {"New Filter Layer: Lens Blur", "Layer", "win.filter-layer-lens-blur", "", "filter layer live non-destructive blur bokeh depth of field aperture", ""},   // s037
+            {"New Filter Layer: Radial Blur", "Layer", "win.filter-layer-radial-blur", "", "filter layer live non-destructive blur spin zoom centre center", ""},   // s040
+            {"New Filter Layer: Twirl", "Layer", "win.filter-layer-twirl", "", "filter layer live non-destructive distort swirl whirl", ""},   // s040 m4
+            {"New Filter Layer: Pinch", "Layer", "win.filter-layer-pinch", "", "filter layer live non-destructive distort squeeze", ""},
+            {"New Filter Layer: Spherize", "Layer", "win.filter-layer-spherize", "", "filter layer live non-destructive distort sphere bulge", ""},
             {"New Filter Layer: Median", "Layer", "win.filter-layer-median", "", "filter layer live non-destructive despeckle dust", ""},
             {"New Filter Layer: Smart Sharpen", "Layer", "win.filter-layer-smart-sharpen", "", "filter layer live non-destructive sharpen crisp lens deblur", ""},
             {"New Filter Layer: Dust & Scratches", "Layer", "win.filter-layer-dust-scratches", "", "filter layer live non-destructive despeckle dust scratch", ""},

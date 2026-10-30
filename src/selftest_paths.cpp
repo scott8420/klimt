@@ -603,6 +603,16 @@ void selftest_refine(const Check& check) {
             R::add_stroke(h, stroke(false, 4, {{300, 300}}));
             check("add_stroke: the same kind, or not crossing -- kept", h.strokes.size() == 3, std::to_string(h.strokes.size()));
         }
+        {   // s040 (53): a tab parked and back -- its session kept by value, carrying on
+            R::Session t;
+            t.start(rough, rough);
+            t.landed(r1, t.hints());
+            const R::Session parked = t;   // the tab goes behind another
+            t.reset();                     // the other tab's (here: none)
+            R::Session back = parked;      // and comes back
+            const bool cb = back.stroke(stroke(true, 5, {{70, 70}}), r1);
+            check("session: kept with its tab -- back to it, a stroke on its result carries on", cb && back.rough() == rough && back.runs() == 2, "");
+        }
         R::Session n;
         const bool c5 = n.stroke(stroke(true, 5, {{120, 120}}), nullptr);
         check("session: a first stroke with nothing selected -- a session with no rough area", !c5 && n.active() && !n.rough() && n.hints().strokes.size() == 1, "");

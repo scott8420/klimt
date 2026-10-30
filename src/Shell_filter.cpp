@@ -146,6 +146,11 @@ void Shell::on_focal_point(int x, int y) {
     if (!m_filter_dialog || !m_filter_dialog->get_visible()) return;
     const auto l = m_doc.get(m_filter_target);
     const auto& f = m_filter_dialog->value();
+    if (l && f.kind == core::FilterKind::RadialBlur) {   // s040 m2: the blur's centre
+        const auto im = m_doc.image();
+        m_filter_dialog->set_centre_at((x + 0.5) * 100.0 / std::max(1, im.width), (y + 0.5) * 100.0 / std::max(1, im.height));
+        return;
+    }
     if (!l || f.kind != core::FilterKind::LensBlur) { m_filter_dialog->focal_pick_off(); return; }
     double d = 1;
     if (f.depth == core::DepthSource::LayerMask) {
@@ -171,11 +176,14 @@ void Shell::on_filter(core::FilterKind k) {
         // s039 m2: Set Focal Point -- the next click on the picture, the depth there.
         m_filter_dialog->signal_focal_pick().connect([this](bool on) {
             m_canvas.set_point_pick(on);
-            if (on) toast("Click the picture where it should stay sharp (Esc: never mind)");
+            if (on) toast(m_filter_dialog->value().kind == core::FilterKind::RadialBlur
+                              ? "Click the picture where the blur's centre goes (Esc: never mind)"
+                              : "Click the picture where it should stay sharp (Esc: never mind)");
         });
     }
     m_filter_dialog->set_live(m_filter_live, false);
     m_filter_dialog->set_has_mask(m_doc.get(m_filter_target)->mask != nullptr);   // s039
+    m_filter_dialog->set_image_size(m_doc.image().width, m_doc.image().height);    // s040 m2
     m_filter_dialog->ask(start, m_doc.get(m_filter_target)->name);
     filter_preview_soon();
 }
@@ -189,6 +197,7 @@ void Shell::on_live_edit(const core::Document::Id& id, std::size_t i) {
     m_filter_edit = i;
     m_filter_dialog->set_live(true, true);
     m_filter_dialog->set_has_mask(l->mask != nullptr);   // s039
+    m_filter_dialog->set_image_size(m_doc.image().width, m_doc.image().height);   // s040 m2
     m_filter_dialog->ask(l->filters[i].f, l->name);
     filter_preview_soon();
 }

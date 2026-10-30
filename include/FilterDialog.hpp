@@ -11,6 +11,8 @@
 #include <gtkmm/dropdown.h>
 #include <gtkmm/label.h>
 #include <gtkmm/togglebutton.h>
+#include <gtkmm/drawingarea.h>
+#include <algorithm>
 #include <gtkmm/window.h>
 #include <sigc++/signal.h>
 
@@ -40,6 +42,10 @@ public:
     // have a click) or not; the Shell answers with the depth there (0 .. 1).
     sigc::signal<void(bool)>& signal_focal_pick() { return m_focal_signal; }
     void set_focal_at(double depth);   // the focal distance that keeps that depth sharp; disarms
+    // s040 m2: Radial Blur's centre picked on the picture (in % of it); disarms.
+    void set_centre_at(double cx, double cy);
+    // s040 m2: the picture's size -- the Blur Centre box takes its shape.
+    void set_image_size(int w, int h) { m_iw = std::max(1, w); m_ih = std::max(1, h); }
     void focal_pick_off();             // disarms (Escape, the source changed, closed)
     bool focal_picking() const;
 
@@ -66,6 +72,12 @@ private:
     void reduce_rows();
     void extreme_rows();
     void lens_rows();                                  // s039
+    void radial_rows();                                // s040
+    Gtk::DropDown*            m_method = nullptr;      // s040: Spin / Zoom
+    Gtk::DropDown*            m_quality = nullptr;     // Draft / Good / Best
+    Gtk::DrawingArea*         m_centre_box = nullptr;  // s040 m2: the Blur Centre, dragged
+    int                       m_iw = 4, m_ih = 3;
+    void centre_from(double x, double y);
     void noise_rows(double lo, double hi, int digits, bool log);   // Add Noise's, Lens Blur's
     Gtk::ToggleButton*        m_focal_pick = nullptr;  // s039 m2
     sigc::signal<void(bool)>  m_focal_signal;

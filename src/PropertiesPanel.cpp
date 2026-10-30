@@ -659,6 +659,9 @@ void PropertiesPanel::paint_live(const core::Layer& l) {
         else if (lf.f.kind == core::FilterKind::SmartSharpen) std::snprintf(num, sizeof num, "  %.0f %%, %.1f px", lf.f.amount, lf.f.radius);   // s034
         else if (lf.f.kind == core::FilterKind::ReduceNoise) std::snprintf(num, sizeof num, "  %.0f", lf.f.amount);
         else if (lf.f.kind == core::FilterKind::DustScratches || lf.f.kind == core::FilterKind::SurfaceBlur) std::snprintf(num, sizeof num, "  %.0f px, %d", lf.f.radius, lf.f.threshold);
+        else if (lf.f.kind == core::FilterKind::Twirl) std::snprintf(num, sizeof num, "  %d°", lf.f.angle);   // s040 m4
+        else if (lf.f.kind == core::FilterKind::Pinch || lf.f.kind == core::FilterKind::Spherize) std::snprintf(num, sizeof num, "  %.0f%%", lf.f.amount);
+        else if (lf.f.kind == core::FilterKind::RadialBlur) std::snprintf(num, sizeof num, "  %.0f, %s", lf.f.amount, lf.f.zoom ? "zoom" : "spin");   // s040
         else if (lf.f.kind == core::FilterKind::LensBlur) std::snprintf(num, sizeof num, "  %.0f px, %.0f blades", lf.f.radius, lf.f.blades);   // s037
         else if (lf.f.kind == core::FilterKind::Maximum || lf.f.kind == core::FilterKind::Minimum)
             std::snprintf(num, sizeof num, "  %.0f px%s", lf.f.radius, lf.f.round ? ", round" : "");

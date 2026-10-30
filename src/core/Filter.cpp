@@ -32,7 +32,13 @@ constexpr Info kInfo[] = {
     {FilterKind::Minimum,      "minimum",       "Minimum",       "Other"},
     {FilterKind::SurfaceBlur,  "surface-blur",  "Surface Blur",  "Blur"},    // s034 m4
     {FilterKind::LensBlur,     "lens-blur",     "Lens Blur",     "Blur"},    // s037
+    {FilterKind::RadialBlur,   "radial-blur",   "Radial Blur",   "Blur"},    // s040
+    {FilterKind::Twirl,        "twirl",         "Twirl",         "Distort"}, // s040 m4
+    {FilterKind::Pinch,        "pinch",         "Pinch",         "Distort"},
+    {FilterKind::Spherize,     "spherize",      "Spherize",      "Distort"},
 };
+// s040 m4: Distort -- a map from where each pixel takes its colour.
+bool warps(FilterKind k) { return k == FilterKind::Twirl || k == FilterKind::Pinch || k == FilterKind::Spherize; }
 const Info* info(FilterKind k) {
     for (const auto& i : kInfo)
         if (i.k == k) return &i;
@@ -45,7 +51,8 @@ bool reads(FilterKind k) { return k != FilterKind::None && k != FilterKind::AddN
 // from it (Unsharp Mask, High Pass).
 bool replaces(FilterKind k) {
     return k == FilterKind::GaussianBlur || k == FilterKind::BoxBlur || k == FilterKind::MotionBlur || k == FilterKind::Median ||
-           k == FilterKind::Maximum || k == FilterKind::Minimum || k == FilterKind::SurfaceBlur || k == FilterKind::LensBlur;
+           k == FilterKind::Maximum || k == FilterKind::Minimum || k == FilterKind::SurfaceBlur || k == FilterKind::LensBlur ||
+           k == FilterKind::RadialBlur || warps(k);   // s040
 }
 // Their worked buffer is a mean / rank of the neighbours -- colour may land above alpha (clamped).
 bool ranked(FilterKind k) {
@@ -793,6 +800,109 @@ void lens(const std::vector<float>& buf, std::vector<float>& out, int W, int H, 
     }
 }
 
+// s040: the box a band's streaks read -- the band swept round the centre by
+// the arc (its outline's points at 9 angles, plus the arcs' bulge between
+// them), or scaled about it from the least to the most (the corners).
+Rect radial_box(const Rect& b, const Filter& f, double ccx, double ccy) {
+    constexpr double kPi = 3.14159265358979323846;
+    double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+    const auto add = [&](double x, double y) { x0 = std::min(x0, x); y0 = std::min(y0, y); x1 = std::max(x1, x); y1 = std::max(y1, y); };
+    std::vector<std::array<double, 2>> pts;
+    const auto edge = [&](double ax, double ay, double bx, double by) {
+        const int n = std::max(1, static_cast<int>(std::hypot(bx - ax, by - ay) / 16));
+        for (int i = 0; i <= n; ++i) pts.push_back({ax + (bx - ax) * i / n, ay + (by - ay) * i / n});
+    };
+    const double L = b.x, T = b.y, Rr = b.x + b.w, B = b.y + b.h;
+    edge(L, T, Rr, T); edge(Rr, T, Rr, B); edge(Rr, B, L, B); edge(L, B, L, T);
+    double far = 0;
+    for (const auto& p : pts) far = std::max(far, std::hypot(p[0] - ccx, p[1] - ccy));
+    double pad = 3;
+    if (f.zoom) {
+        const double span = f.amount / 100 * 0.5;
+        for (const double s : {1 - span / 2, 1.0, 1 + span / 2})
+            for (const auto& p : pts) add(ccx + (p[0] - ccx) * s, ccy + (p[1] - ccy) * s);
+    } else {
+        const double arc = f.amount * 0.5 * kPi / 180;
+        for (int k = 0; k <= 8; ++k) {
+            const double a = arc * (k / 8.0 - 0.5), c = std::cos(a), s = std::sin(a);
+            for (const auto& p : pts) {
+                const double vx = p[0] - ccx, vy = p[1] - ccy;
+                add(ccx + vx * c - vy * s, ccy + vx * s + vy * c);
+            }
+        }
+        pad += far * (1 - std::cos(arc / 16));   // an arc bulges past its chord by this, at most
+        // the edge sampling (16 px) can miss a corner's sweep by the step
+    }
+    pad += 16;
+    return Rect{static_cast<int>(std::floor(x0 - pad)), static_cast<int>(std::floor(y0 - pad)),
+                static_cast<int>(std::ceil(x1 - x0 + 2 * pad)) + 1, static_cast<int>(std::ceil(y1 - y0 + 2 * pad)) + 1};
+}
+
+// s040: RADIAL BLUR, by DOUBLING. A box of 2^m taps along the streak is m
+// passes of a two-tap mean -- each pixel the mean of the picture turned (or
+// scaled) by +a and by -a about the centre, a halving each pass: rotations
+// (and scalings) about one centre compose, so the taps add up to an even
+// comb over the arc. A pass costs two bilinear taps a pixel, whatever the
+// streak's length. `cur` is the region (ox, oy, W x H) of premultiplied
+// colour; it is replaced by the result. False: cancelled.
+bool radial_run(std::vector<float>& cur, int W, int H, int C, int ox, int oy, const Filter& f, double ccx, double ccy, int m,
+                const std::function<bool()>& stop) {
+    constexpr double kPi = 3.14159265358979323846;
+    if (m <= 0) return true;
+    std::vector<float> nxt(cur.size());
+    const double A = f.zoom ? f.amount / 100 * 0.5 / 2 : f.amount * 0.5 * kPi / 180 / 2;   // half the streak (Zoom: in log scale)
+    const unsigned nt = std::max(1u, std::thread::hardware_concurrency());
+    for (int k = 1; k <= m; ++k) {
+        const double a = A / static_cast<double>(1 << k);
+        // q = c + M (P - c) for the two taps; M a rotation by +-a, or a scaling by e^(+-a).
+        double m11[2], m12[2], m21[2], m22[2];
+        for (int t = 0; t < 2; ++t) {
+            const double sa = t == 0 ? a : -a;
+            if (f.zoom) { const double e = std::exp(sa); m11[t] = e; m12[t] = 0; m21[t] = 0; m22[t] = e; }
+            else { m11[t] = std::cos(sa); m12[t] = -std::sin(sa); m21[t] = std::sin(sa); m22[t] = std::cos(sa); }
+        }
+        std::atomic<int> nextrow{0};
+        std::atomic<bool> quit{false};
+        const auto work = [&] {
+            for (int y; (y = nextrow.fetch_add(1)) < H;) {
+                if ((y & 15) == 0 && stop && stop()) { quit = true; return; }
+                float* o = nxt.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(W) * static_cast<std::size_t>(C);
+                const double py = y + oy + 0.5 - ccy;
+                for (int t = 0; t < 2; ++t) {
+                    const double px0 = ox + 0.5 - ccx;
+                    // buffer coordinates of the tap for x = 0, and its step along the row
+                    double qx = ccx + m11[t] * px0 + m12[t] * py - 0.5 - ox, qy = ccy + m21[t] * px0 + m22[t] * py - 0.5 - oy;
+                    const double dx = m11[t], dy = m21[t];
+                    for (int x = 0; x < W; ++x, qx += dx, qy += dy) {
+                        const double cxq = std::clamp(qx, 0.0, W - 1.0), cyq = std::clamp(qy, 0.0, H - 1.0);
+                        const int x0 = static_cast<int>(cxq), y0 = static_cast<int>(cyq);
+                        const int x1 = std::min(x0 + 1, W - 1), y1 = std::min(y0 + 1, H - 1);
+                        const float fx = static_cast<float>(cxq - x0), fy = static_cast<float>(cyq - y0);
+                        const float w00 = (1 - fx) * (1 - fy) * 0.5f, w10 = fx * (1 - fy) * 0.5f, w01 = (1 - fx) * fy * 0.5f, w11 = fx * fy * 0.5f;
+                        const float* r0 = cur.data() + static_cast<std::size_t>(y0) * static_cast<std::size_t>(W) * static_cast<std::size_t>(C);
+                        const float* r1 = cur.data() + static_cast<std::size_t>(y1) * static_cast<std::size_t>(W) * static_cast<std::size_t>(C);
+                        const float *p00 = r0 + x0 * C, *p10 = r0 + x1 * C, *p01 = r1 + x0 * C, *p11 = r1 + x1 * C;
+                        float* op = o + static_cast<std::size_t>(x) * static_cast<std::size_t>(C);
+                        for (int c = 0; c < C; ++c) {
+                            const float v = w00 * p00[c] + w10 * p10[c] + w01 * p01[c] + w11 * p11[c];
+                            op[c] = t == 0 ? v : op[c] + v;
+                        }
+                    }
+                }
+            }
+        };
+        if (nt <= 1) work();
+        else {
+            std::vector<std::thread> pool;
+            for (unsigned i = 0; i < nt; ++i) pool.emplace_back(work);
+            for (auto& th : pool) th.join();
+        }
+        if (quit || (stop && stop())) return false;
+        cur.swap(nxt);
+    }
+    return true;
+}
+
 // The noise: a hash of where, which channel and the seed -- so a tile's noise
 // doesn't depend on the order tiles are made in (the preview == the result).
 std::uint32_t mix(std::uint32_t x) {
@@ -851,6 +961,71 @@ std::vector<IrisRow> iris(double radius, int blades, double curvature, double an
     return rows;
 }
 
+double radial_length(const Filter& f, double rho) {
+    constexpr double kPi = 3.14159265358979323846;
+    return f.zoom ? rho * f.amount / 100 * 0.5 : rho * f.amount * 0.5 * kPi / 180;
+}
+int radial_passes(const Filter& f, double rho) {
+    // Taps a pixel of streak: Draft a third (its long streaks show steps),
+    // Good one, Best two -- 2^passes of them, at most 1024.
+    static constexpr double per_px[3] = {1.0 / 3, 1.0, 2.0};
+    const double taps = radial_length(f, rho) * per_px[std::clamp(f.quality, 0, 2)];
+    if (taps <= 1) return 0;
+    return std::clamp(static_cast<int>(std::ceil(std::log2(taps))), 1, 10);
+}
+
+bool warp_source(const Filter& f, double ex, double ey, double rx, double ry, double x, double y, double& sx, double& sy) {
+    constexpr double kPi = 3.14159265358979323846;
+    if (rx <= 0 || ry <= 0) return false;
+    const double nx = (x - ex) / rx, ny = (y - ey) / ry;
+    const double d = std::hypot(nx, ny);
+    if (d >= 1) return false;
+    double mx = nx, my = ny;
+    // Spherize's radial map: d -> where it reads (k > 0: the middle read from
+    // nearer the middle -- magnified; k < 0: from further out -- shrunk).
+    const auto sphere = [](double t, double k) {
+        return k >= 0 ? t * (1 - k) + k * (1 - std::sqrt(std::max(0.0, 1 - t * t)))
+                      : t * (1 + k) - k * std::sin(t * kPi / 2);
+    };
+    if (f.kind == FilterKind::Twirl) {
+        const double a = -f.angle * kPi / 180 * (1 - d);   // read from turned back
+        const double c = std::cos(a), s = std::sin(a);
+        mx = nx * c - ny * s;
+        my = nx * s + ny * c;
+    } else if (f.kind == FilterKind::Pinch) {
+        if (d < 1e-9) return false;
+        const double k = f.amount / 100;
+        // + : read from further out (the middle squeezed in); the rim stays
+        // (GIMP's whirl-and-pinch map; never past the rim for |k| <= 1).
+        const double factor = std::pow(std::sin(kPi / 2 * d), -k);
+        mx = nx * factor;
+        my = ny * factor;
+    } else if (f.kind == FilterKind::Spherize) {
+        const double k = f.amount / 100;
+        if (f.axis == 1) {   // Horizontal only: along the row, within the ellipse's width there
+            const double w = std::sqrt(std::max(0.0, 1 - ny * ny));
+            if (w < 1e-9) return false;
+            const double t = std::abs(nx) / w;
+            mx = (nx < 0 ? -1 : 1) * sphere(t, k) * w;
+        } else if (f.axis == 2) {
+            const double h = std::sqrt(std::max(0.0, 1 - nx * nx));
+            if (h < 1e-9) return false;
+            const double t = std::abs(ny) / h;
+            my = (ny < 0 ? -1 : 1) * sphere(t, k) * h;
+        } else {
+            if (d < 1e-9) return false;
+            const double ds = sphere(d, k);
+            mx = nx / d * ds;
+            my = ny / d * ds;
+        }
+    } else {
+        return false;
+    }
+    sx = ex + mx * rx;
+    sy = ey + my * ry;
+    return true;
+}
+
 double depth_amount(const Filter& f, double d) {
     d = std::clamp(d, 0.0, 1.0);
     if (f.invert) d = 1 - d;
@@ -872,7 +1047,9 @@ bool wants_mask(const Filter& f) { return f.kind == FilterKind::LensBlur && f.de
 
 const std::vector<FilterKind>& kinds() {
     // Alphabetical within each submenu, as Photoshop's.
-    static const std::vector<FilterKind> v{FilterKind::BoxBlur, FilterKind::GaussianBlur, FilterKind::LensBlur, FilterKind::MotionBlur, FilterKind::SurfaceBlur,
+    static const std::vector<FilterKind> v{FilterKind::BoxBlur, FilterKind::GaussianBlur, FilterKind::LensBlur, FilterKind::MotionBlur,
+                                           FilterKind::RadialBlur, FilterKind::SurfaceBlur,   // s040
+                                           FilterKind::Pinch, FilterKind::Spherize, FilterKind::Twirl,   // s040 m4: Distort
                                            FilterKind::AddNoise, FilterKind::DustScratches, FilterKind::Median, FilterKind::ReduceNoise,
                                            FilterKind::SmartSharpen, FilterKind::UnsharpMask, FilterKind::HighPass,
                                            FilterKind::Maximum, FilterKind::Minimum};
@@ -909,6 +1086,10 @@ Filter fresh(FilterKind k) {
         case FilterKind::Minimum:      f.radius = 1; break;   // m3: Preserve Squareness
         case FilterKind::SurfaceBlur:  f.radius = 5; f.threshold = 15; break;   // m4
         case FilterKind::LensBlur:     f.radius = 15; f.blades = 6; f.threshold = 255; break;   // s037: Photoshop's
+        case FilterKind::RadialBlur:   f.amount = 10; break;   // s040: Photoshop's (Spin, Good, the middle)
+        case FilterKind::Twirl:        f.angle = 50; break;    // s040 m4: Photoshop's
+        case FilterKind::Pinch:        f.amount = 50; break;
+        case FilterKind::Spherize:     f.amount = 100; break;
         case FilterKind::None: break;
     }
     return f;
@@ -927,15 +1108,20 @@ Filter normalised(const Filter& in) {
         case FilterKind::Minimum:       f.radius = std::round(std::clamp(f.radius, 1.0, 500.0)); break;   // m3
         case FilterKind::SurfaceBlur:   f.radius = std::round(std::clamp(f.radius, 1.0, 100.0)); break;   // m4
         case FilterKind::LensBlur:      f.radius = std::round(std::clamp(f.radius, 1.0, 100.0)); break;   // s037
+        case FilterKind::RadialBlur:    f.radius = 1; break;   // s040: no radius
+        case FilterKind::Twirl: case FilterKind::Pinch: case FilterKind::Spherize: f.radius = 1; break;   // s040 m4
         default:                     f.radius = std::round(std::clamp(f.radius, 0.1, 250.0) * 10) / 10; break;
     }
     const bool streak = f.kind == FilterKind::MotionBlur || (f.kind == FilterKind::SmartSharpen && f.remove == Remove::Motion);
-    f.angle = streak ? std::clamp(f.angle, -90, 90) : f.kind == FilterKind::LensBlur ? std::clamp(f.angle, 0, 360) : 0;
+    f.angle = streak ? std::clamp(f.angle, -90, 90) : f.kind == FilterKind::LensBlur ? std::clamp(f.angle, 0, 360)
+            : f.kind == FilterKind::Twirl ? std::clamp(f.angle, -999, 999) : 0;   // s040 m4
     f.threshold = std::clamp(f.threshold, 0, 255);
     if (f.kind == FilterKind::UnsharpMask || f.kind == FilterKind::SmartSharpen) f.amount = std::round(std::clamp(f.amount, 1.0, 500.0));
     else if (f.kind == FilterKind::AddNoise) f.amount = std::round(std::clamp(f.amount, 0.1, 400.0) * 10) / 10;
     else if (f.kind == FilterKind::ReduceNoise) f.amount = std::round(std::clamp(f.amount, 0.0, 10.0));
     else if (f.kind == FilterKind::LensBlur) f.amount = std::round(std::clamp(f.amount, 0.0, 100.0));   // s039: its Noise
+    else if (f.kind == FilterKind::RadialBlur) f.amount = std::round(std::clamp(f.amount, 1.0, 100.0));   // s040
+    else if (f.kind == FilterKind::Pinch || f.kind == FilterKind::Spherize) f.amount = std::round(std::clamp(f.amount, -100.0, 100.0));   // s040 m4
     else f.amount = 0;
     if (f.kind == FilterKind::SurfaceBlur) f.threshold = std::max(f.threshold, 2);   // m4
     else if (f.kind != FilterKind::UnsharpMask && f.kind != FilterKind::DustScratches && f.kind != FilterKind::LensBlur) f.threshold = 0;
@@ -967,6 +1153,12 @@ Filter normalised(const Filter& in) {
         f.blades = blank.blades; f.curvature = blank.curvature; f.bright = blank.bright;
         f.depth = blank.depth; f.focal = blank.focal; f.invert = blank.invert;
     }
+    if (f.kind == FilterKind::RadialBlur) {   // s040
+        f.quality = std::clamp(f.quality, 0, 2);
+        f.cx = std::round(std::clamp(f.cx, 0.0, 100.0) * 10) / 10;
+        f.cy = std::round(std::clamp(f.cy, 0.0, 100.0) * 10) / 10;
+    } else { f.zoom = blank.zoom; f.quality = blank.quality; f.cx = blank.cx; f.cy = blank.cy; }
+    f.axis = f.kind == FilterKind::Spherize ? std::clamp(f.axis, 0, 2) : 0;   // s040 m4
     if (f.kind != FilterKind::AddNoise && f.kind != FilterKind::LensBlur) { f.gaussian = f.mono = false; f.seed = 1; }   // s039: Lens Blur's Noise has them
     if (f.kind == FilterKind::AddNoise) f.radius = 0.1;
     return f;
@@ -985,6 +1177,8 @@ int reach(const Filter& in) {
         case FilterKind::Minimum:
         case FilterKind::SurfaceBlur:   return static_cast<int>(f.radius);
         case FilterKind::LensBlur:      return static_cast<int>(std::ceil(f.radius)) + 1;   // s037: the iris and its part pixels
+        case FilterKind::RadialBlur:    return 1 << 16;   // s040: a streak may cross the picture -- it reads all of it
+        case FilterKind::Twirl: case FilterKind::Pinch: case FilterKind::Spherize: return 1 << 16;   // s040 m4: the whole ellipse
         case FilterKind::SmartSharpen: {   // s034: the kernel's reach, and the tones'
             int r = f.remove == Remove::Gaussian ? plan_of(f.radius).reach
                   : f.remove == Remove::Lens     ? static_cast<int>(std::floor(f.radius + 0.5))
@@ -1019,6 +1213,7 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
     const int IW = src.width(), IH = src.height();
     Rect r{0, 0, IW, IH};
     if (sel) r = r.intersect(select::extent(*sel));
+    const Rect whole_r = r;   // s040 m4: Distort's ellipse fits this (the preview's rectangle doesn't move it)
     if (only) r = r.intersect(*only);
     if (r.empty()) return src;
 
@@ -1050,12 +1245,73 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
         return false;
     };
 
+    // s040: RADIAL BLUR is worked before the bands, over the region its
+    // streaks reach for `r` (G), by doubling passes; the bands write it out.
+    Rect G{};
+    std::vector<float> gbuf;
+    const auto load_g = [&] {
+        gbuf.assign(static_cast<std::size_t>(G.w) * static_cast<std::size_t>(G.h) * static_cast<std::size_t>(C), 0.f);
+        std::vector<float> t;
+        for (int tr = G.y / kTile; tr <= (G.y + G.h - 1) / kTile; ++tr)
+            for (int tc = G.x / kTile; tc <= (G.x + G.w - 1) / kTile; ++tc) {
+                const auto tile = src.tile(tc, tr);
+                if (!tile) continue;
+                tile->premultiplied(t);
+                const Rect cell = Rect{tc * kTile, tr * kTile, kTile, kTile}.intersect(G);
+                for (int y = cell.y; y < cell.y + cell.h; ++y) {
+                    const float* from = t.data() + (static_cast<std::size_t>(y - tr * kTile) * kTile + static_cast<std::size_t>(cell.x - tc * kTile)) * static_cast<std::size_t>(C);
+                    float* to = gbuf.data() + (static_cast<std::size_t>(y - G.y) * static_cast<std::size_t>(G.w) + static_cast<std::size_t>(cell.x - G.x)) * static_cast<std::size_t>(C);
+                    std::copy(from, from + static_cast<std::size_t>(cell.w) * static_cast<std::size_t>(C), to);
+                }
+            }
+    };
+    if (warps(f.kind)) {   // s040 m4: DISTORT -- each pixel of r read through the map, bilinear
+        G = Rect{whole_r.x - 2, whole_r.y - 2, whole_r.w + 4, whole_r.h + 4}.intersect({0, 0, IW, IH});
+        load_g();
+        std::vector<float> res = gbuf;
+        const double ex = whole_r.x + whole_r.w / 2.0, ey = whole_r.y + whole_r.h / 2.0, rx = whole_r.w / 2.0, ry = whole_r.h / 2.0;
+        std::atomic<int> nextrow{r.y};
+        std::atomic<bool> quit{false};
+        const auto work = [&] {
+            for (int y; (y = nextrow.fetch_add(1)) < r.y + r.h;) {
+                if ((y & 15) == 0 && stop()) { quit = true; return; }
+                for (int x = r.x; x < r.x + r.w; ++x) {
+                    double sx = 0, sy = 0;
+                    if (!warp_source(f, ex, ey, rx, ry, x + 0.5, y + 0.5, sx, sy)) continue;
+                    const double bx = std::clamp(sx - 0.5 - G.x, 0.0, G.w - 1.0), by = std::clamp(sy - 0.5 - G.y, 0.0, G.h - 1.0);
+                    const int x0 = static_cast<int>(bx), y0 = static_cast<int>(by);
+                    const int x1 = std::min(x0 + 1, G.w - 1), y1 = std::min(y0 + 1, G.h - 1);
+                    const float fx = static_cast<float>(bx - x0), fy = static_cast<float>(by - y0);
+                    const auto P = [&](int px, int py) { return gbuf.data() + (static_cast<std::size_t>(py) * static_cast<std::size_t>(G.w) + static_cast<std::size_t>(px)) * static_cast<std::size_t>(C); };
+                    const float *p00 = P(x0, y0), *p10 = P(x1, y0), *p01 = P(x0, y1), *p11 = P(x1, y1);
+                    float* o = res.data() + (static_cast<std::size_t>(y - G.y) * static_cast<std::size_t>(G.w) + static_cast<std::size_t>(x - G.x)) * static_cast<std::size_t>(C);
+                    for (int c = 0; c < C; ++c)
+                        o[c] = (p00[c] * (1 - fx) + p10[c] * fx) * (1 - fy) + (p01[c] * (1 - fx) + p11[c] * fx) * fy;
+                }
+            }
+        };
+        const unsigned nt = std::max(1u, std::thread::hardware_concurrency());
+        if (nt <= 1) work();
+        else { std::vector<std::thread> pool; for (unsigned i = 0; i < nt; ++i) pool.emplace_back(work); for (auto& th : pool) th.join(); }
+        if (quit || stop()) return std::nullopt;
+        gbuf.swap(res);
+    } else if (f.kind == FilterKind::RadialBlur) {
+        const double ccx = f.cx / 100 * IW, ccy = f.cy / 100 * IH;
+        G = radial_box(r, f, ccx, ccy).intersect({0, 0, IW, IH});
+        load_g();
+        double far = 0;   // the longest streak: the PICTURE's farthest corner's (not r's -- the preview's passes are the result's)
+        for (const double x : {0.0, static_cast<double>(IW)})
+            for (const double y : {0.0, static_cast<double>(IH)}) far = std::max(far, std::hypot(x - ccx, y - ccy));
+        if (!radial_run(gbuf, G.w, G.h, C, G.x, G.y, f, ccx, ccy, radial_passes(f, far), stop)) return std::nullopt;
+    }
+
     const auto band = [&](int row) {
         const Rect b = Rect{r.x, row * kTile, r.w, kTile}.intersect(r);
         // The pixels it reads, premultiplied (the filters that read neighbours).
         Rect R{};
         std::vector<float> buf;
-        if (reads(f.kind)) {
+        if (f.kind == FilterKind::RadialBlur || warps(f.kind)) R = G;   // s040: worked whole, before the bands
+        else if (reads(f.kind)) {
             R = Rect{b.x - pad, b.y - pad, b.w + 2 * pad, b.h + 2 * pad}.intersect({0, 0, IW, IH});
             buf.assign(static_cast<std::size_t>(R.w) * static_cast<std::size_t>(R.h) * static_cast<std::size_t>(C), 0.f);
             std::vector<float> t;
@@ -1122,6 +1378,7 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
             }
             if (stop()) return;
         }
+        const std::vector<float>& B = (f.kind == FilterKind::RadialBlur || warps(f.kind)) ? gbuf : buf;   // s040
         for (int col = b.x / kTile; col <= (b.x + b.w - 1) / kTile; ++col) {
             const Rect cell = Rect{col * kTile, row * kTile, kTile, kTile}.intersect(b);
             const auto old = src.tile(col, row);
@@ -1136,11 +1393,11 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                     const float oa = has_a ? o.c[static_cast<std::size_t>(ai)] : 1.f;
                     if (custom(f.kind)) {   // s034: straight colour, alpha kept
                         if (oa <= 0.f) continue;
-                        const float* bp = buf.data() + (static_cast<std::size_t>(y - R.y) * static_cast<std::size_t>(R.w) + static_cast<std::size_t>(x - R.x)) * static_cast<std::size_t>(C);
+                        const float* bp = B.data() + (static_cast<std::size_t>(y - R.y) * static_cast<std::size_t>(R.w) + static_cast<std::size_t>(x - R.x)) * static_cast<std::size_t>(C);
                         for (int c = 0; c < cc; ++c)
                             n.c[static_cast<std::size_t>(c)] = clamp01 ? std::clamp(bp[c], 0.f, 1.f) : std::max(bp[c], 0.f);
                     } else if (reads(f.kind)) {
-                        const float* bp = buf.data() + (static_cast<std::size_t>(y - R.y) * static_cast<std::size_t>(R.w) + static_cast<std::size_t>(x - R.x)) * static_cast<std::size_t>(C);
+                        const float* bp = B.data() + (static_cast<std::size_t>(y - R.y) * static_cast<std::size_t>(R.w) + static_cast<std::size_t>(x - R.x)) * static_cast<std::size_t>(C);
                         const float ba = has_a ? bp[ai] : 1.f;
                         if (replaces(f.kind)) {
                             if (has_a && !keep_alpha) {
@@ -1187,7 +1444,7 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
 
     // The bands over the cores -- fewer when one band's buffer is big.
     std::size_t per_band = 0;
-    if (reads(f.kind))
+    if (reads(f.kind) && f.kind != FilterKind::RadialBlur && !warps(f.kind))   // s040: their work is done before the bands
         per_band = static_cast<std::size_t>(std::min(IW, r.w + 2 * pad)) * static_cast<std::size_t>(std::min(IH, kTile + 2 * pad)) *
                    static_cast<std::size_t>(C) * sizeof(float) * (custom(f.kind) ? 6 : 2);   // s034: their planes
     constexpr std::size_t kBudget = std::size_t{768} << 20;

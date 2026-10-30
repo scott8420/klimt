@@ -2,6 +2,7 @@
 #include "Registry.hpp"
 
 #include <gtkmm/eventcontrollerkey.h>
+#include <gtkmm/gesturedrag.h>
 #include <gtkmm/headerbar.h>
 #include <gtkmm/expander.h>
 #include <gtkmm/stringlist.h>
@@ -158,6 +159,8 @@ void FilterDialog::rebuild() {
     if (focal_picking()) { m_focal_pick->set_active(false); }
     m_depth = nullptr; m_invert = nullptr; m_depth_note = nullptr; m_focal_pick = nullptr;   // s039
     m_depth_only.clear();
+    m_method = m_quality = nullptr;   // s040
+    m_centre_box = nullptr;
     auto head = Gtk::make_managed<Gtk::Label>();
     head->set_markup("<b>" + Glib::Markup::escape_text(std::string(F::label(m_f.kind))) + "</b>");
     head->set_xalign(0.0f);
@@ -198,6 +201,31 @@ void FilterDialog::rebuild() {
             row("filter.threshold", "Threshold", 2, 255, 0, false, "levels", &m_threshold);
             break;
         case FilterKind::LensBlur: lens_rows(); break;   // s037, s039
+        case FilterKind::RadialBlur: radial_rows(); break;   // s040
+        case FilterKind::Twirl:      // s040 m4: Distort -- in the ellipse fitted to the selection (or the picture)
+            row("filter.angle", "Angle", -999, 999, 0, false, "°", &m_angle);
+            break;
+        case FilterKind::Pinch:
+            row("filter.amount", "Amount", -100, 100, 0, false, "%", &m_f.amount);
+            break;
+        case FilterKind::Spherize: {
+            row("filter.amount", "Amount", -100, 100, 0, false, "%", &m_f.amount);
+            auto line = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            auto l = Gtk::make_managed<Gtk::Label>("Mode");
+            l->set_xalign(0.0f);
+            l->set_hexpand(true);
+            line->append(*l);
+            m_method = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Normal", "Horizontal only", "Vertical only"}));
+            m_method->set_name("filter.axis");
+            line->append(*m_method);
+            m_body.append(*line);
+            m_method->property_selected().signal_changed().connect([this] {
+                if (m_syncing) return;
+                m_f.axis = static_cast<int>(m_method->get_selected());
+                m_changed.emit();
+            });
+            break;
+        }
         case FilterKind::None: break;
     }
 }
@@ -221,6 +249,14 @@ void FilterDialog::sync(int keep_slider) {
     if (m_gauss) { m_gauss->set_active(m_f.gaussian); m_uniform->set_active(!m_f.gaussian); }
     if (m_mono) m_mono->set_active(m_f.mono);
     if (m_shape) m_shape->set_selected(m_f.round ? 1u : 0u);   // m3
+    if (m_method) m_method->set_selected(m_f.kind == FilterKind::Spherize ? static_cast<guint>(m_f.axis) : m_f.zoom ? 1u : 0u);   // s040
+    if (m_centre_box) {   // s040 m2: the picture's shape, 240 px on its long side
+        const double k = 240.0 / std::max(m_iw, m_ih);
+        m_centre_box->set_content_width(std::max(40, static_cast<int>(m_iw * k)));
+        m_centre_box->set_content_height(std::max(40, static_cast<int>(m_ih * k)));
+        m_centre_box->queue_draw();
+    }
+    if (m_quality) m_quality->set_selected(static_cast<guint>(m_f.quality));
     if (m_depth) {   // s039
         m_depth->set_selected(m_f.depth == core::DepthSource::Transparency ? 1u : m_f.depth == core::DepthSource::LayerMask ? 2u : 0u);
         for (auto* w : m_depth_only) w->set_sensitive(m_f.depth != core::DepthSource::None);
@@ -276,6 +312,118 @@ void FilterDialog::focal_pick_off() {
 void FilterDialog::set_focal_at(double depth) {
     depth = std::clamp(depth, 0.0, 1.0);
     m_f.focal = std::round((m_f.invert ? 1 - depth : depth) * 255);
+    focal_pick_off();
+    sync();
+    m_changed.emit();
+}
+
+// s040: Radial Blur -- Amount, Method, Quality, the Blur Centre.
+void FilterDialog::radial_rows() {
+    row("filter.amount", "Amount", 1, 100, 0, false, "", &m_f.amount);
+    const auto pick = [this](const char* label, const char* name, std::vector<Glib::ustring> items, const char* tip) {
+        auto line = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        auto l = Gtk::make_managed<Gtk::Label>(label);
+        l->set_xalign(0.0f);
+        l->set_hexpand(true);
+        line->append(*l);
+        auto dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(items));
+        dd->set_name(name);
+        dd->set_tooltip_text(tip);
+        line->append(*dd);
+        line->set_margin_bottom(4);
+        m_body.append(*line);
+        return dd;
+    };
+    m_method = pick("Method", "filter.method", {"Spin", "Zoom"},
+                    "Spin: arcs round the centre (a wheel turning); Zoom: streaks along the rays from it (a zoom burst)");
+    m_quality = pick("Quality", "filter.quality", {"Draft", "Good", "Best"},
+                     "Draft: fast and grainy; Good: smooth; Best: smoothest on long streaks");
+    m_method->property_selected().signal_changed().connect([this] {
+        if (m_syncing) return;
+        m_f.zoom = m_method->get_selected() == 1;
+        if (m_centre_box) m_centre_box->queue_draw();
+        m_changed.emit();
+    });
+    m_quality->property_selected().signal_changed().connect([this] {
+        if (m_syncing) return;
+        m_f.quality = static_cast<int>(m_quality->get_selected());
+        m_changed.emit();
+    });
+    // s040 m2: THE BLUR CENTRE -- the picture's shape; rings (Spin) or rays
+    // (Zoom) round the centre; click or drag to move it.
+    auto lab = Gtk::make_managed<Gtk::Label>();
+    lab->set_markup("<small><b>Blur Centre</b></small>");
+    lab->set_xalign(0.0f);
+    lab->add_css_class("dim-label");
+    lab->set_margin_top(6);
+    m_body.append(*lab);
+    m_centre_box = Gtk::make_managed<Gtk::DrawingArea>();
+    m_centre_box->set_name("filter.centre_box");
+    m_centre_box->set_tooltip_text("Click or drag: the blur's centre on the picture");
+    m_centre_box->set_halign(Gtk::Align::CENTER);
+    m_centre_box->set_cursor("crosshair");
+    m_centre_box->set_draw_func([this](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+        cr->set_source_rgb(0.12, 0.12, 0.13);
+        cr->rectangle(0, 0, w, h);
+        cr->fill();
+        const double x = m_f.cx / 100 * w, y = m_f.cy / 100 * h;
+        cr->set_source_rgba(0.85, 0.85, 0.88, 0.55);
+        cr->set_line_width(1);
+        const double far = std::hypot(std::max(x, w - x), std::max(y, h - y));
+        if (m_f.zoom) {
+            for (int k = 0; k < 24; ++k) {
+                const double a = k * 3.14159265358979 / 12;
+                cr->move_to(x + 8 * std::cos(a), y + 8 * std::sin(a));
+                cr->line_to(x + far * std::cos(a), y + far * std::sin(a));
+            }
+        } else {
+            for (double r = 10; r < far; r += 10) { cr->begin_new_sub_path(); cr->arc(x, y, r, 0, 2 * 3.14159265358979); }
+        }
+        cr->stroke();
+        cr->set_source_rgb(1, 1, 1);
+        cr->set_line_width(1.5);
+        cr->begin_new_sub_path();
+        cr->arc(x, y, 5, 0, 2 * 3.14159265358979);
+        cr->stroke();
+        cr->set_source_rgba(1, 1, 1, 0.35);
+        cr->rectangle(0.5, 0.5, w - 1, h - 1);
+        cr->stroke();
+    });
+    auto drag = Gtk::GestureDrag::create();
+    drag->signal_drag_begin().connect([this](double x, double y) { centre_from(x, y); });
+    drag->signal_drag_update().connect([this, drag](double dx, double dy) {
+        double sx = 0, sy = 0;
+        drag->get_start_point(sx, sy);
+        centre_from(sx + dx, sy + dy);
+    });
+    m_centre_box->add_controller(drag);
+    m_body.append(*m_centre_box);
+    m_focal_pick = Gtk::make_managed<Gtk::ToggleButton>("Pick on Picture");
+    m_focal_pick->set_name("filter.centre_pick");
+    m_focal_pick->set_tooltip_text("Then click the picture: the blur's centre goes there (Esc: never mind)");
+    m_focal_pick->set_halign(Gtk::Align::START);
+    m_body.append(*m_focal_pick);
+    m_focal_pick->signal_toggled().connect([this] {
+        const bool on = m_focal_pick->get_active();
+        set_modal(!on);
+        m_focal_signal.emit(on);
+    });
+    row("filter.cx", "Centre X", 0, 100, 1, false, "%", &m_f.cx);
+    row("filter.cy", "Centre Y", 0, 100, 1, false, "%", &m_f.cy);
+}
+
+void FilterDialog::centre_from(double x, double y) {
+    if (!m_centre_box) return;
+    const double w = std::max(1, m_centre_box->get_width()), h = std::max(1, m_centre_box->get_height());
+    m_f.cx = std::clamp(x / w * 100, 0.0, 100.0);
+    m_f.cy = std::clamp(y / h * 100, 0.0, 100.0);
+    sync();
+    m_changed.emit();
+}
+
+void FilterDialog::set_centre_at(double cx, double cy) {
+    m_f.cx = std::clamp(cx, 0.0, 100.0);
+    m_f.cy = std::clamp(cy, 0.0, 100.0);
     focal_pick_off();
     sync();
     m_changed.emit();

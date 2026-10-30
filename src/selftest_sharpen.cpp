@@ -607,6 +607,172 @@ void selftest_sharpen(const Check& check) {
         fs::remove(path);
     }
 
+    std::cout << "\n-- filters: Radial Blur (s040) --\n";
+    {
+        const auto rb = F::fresh(FilterKind::RadialBlur);
+        check("radial: Photoshop's defaults (amount 10, Spin, Good, the middle), under Blur",
+              rb.amount == 10 && !rb.zoom && rb.quality == 1 && rb.cx == 50 && rb.cy == 50 && F::group(FilterKind::RadialBlur) == "Blur", "");
+        {
+            auto t = rb; t.amount = 300; t.quality = 7; t.cx = -4; t.cy = 120.06;
+            const auto n = F::normalised(t);
+            check("radial: normalised -- amount 1..100, quality 0..2, the centre 0..100 %",
+                  n.amount == 100 && n.quality == 2 && n.cx == 0 && n.cy == 100, "");
+            auto g = F::fresh(FilterKind::GaussianBlur);
+            g.zoom = true; g.quality = 2; g.cx = 10;
+            const auto gn = F::normalised(g);
+            check("radial: its settings go back to their defaults on another kind", !gn.zoom && gn.quality == 1 && gn.cx == 50, "");
+        }
+        auto q = rb; q.amount = 50;
+        check("radial: no passes at the centre (nothing to blur)", F::radial_passes(q, 0) == 0, "");
+        check("radial: more passes for a longer streak", F::radial_passes(q, 2000) > F::radial_passes(q, 20), "");
+        auto dr = q; dr.quality = 0; auto be = q; be.quality = 2;
+        check("radial: Draft < Good < Best", F::radial_passes(dr, 300) < F::radial_passes(q, 300) && F::radial_passes(q, 300) < F::radial_passes(be, 300),
+              num(F::radial_passes(dr, 300)) + " " + num(F::radial_passes(q, 300)) + " " + num(F::radial_passes(be, 300)));
+        check("radial: 2^passes taps cover the streak (Good: a tap a pixel at least)",
+              (1 << F::radial_passes(q, 300)) >= F::radial_length(q, 300), "");
+        // Rings (a value by the distance from the middle) and spokes (by the angle).
+        const int N = 240;
+        auto rings = P::TileMap(f32(), N, N), spokes = P::TileMap(f32(), N, N);
+        for (int y = 0; y < N; ++y)
+            for (int x = 0; x < N; ++x) {
+                const double vx = x + 0.5 - N / 2.0, vy = y + 0.5 - N / 2.0;
+                const float r = static_cast<float>(0.5 + 0.4 * std::cos(std::sqrt(vx * vx + vy * vy) / 6));
+                const float a = static_cast<float>(0.5 + 0.4 * std::cos(6 * std::atan2(vy, vx)));
+                rings = rings.fill({x, y, 1, 1}, P::rgba(r, r, r, 1));
+                spokes = spokes.fill({x, y, 1, 1}, P::rgba(a, a, a, 1));
+            }
+        const auto diff = [&](const P::TileMap& a, const P::TileMap& b) {   // the mean difference, 20..100 px out
+            double d = 0; int n = 0;
+            for (int y = 0; y < N; y += 3)
+                for (int x = 0; x < N; x += 3) {
+                    const double rr = std::hypot(x + 0.5 - N / 2.0, y + 0.5 - N / 2.0);
+                    if (rr < 20 || rr > 100) continue;
+                    d += std::abs(a.get(x, y).c[0] - b.get(x, y).c[0]); ++n;
+                }
+            return d / n;
+        };
+        auto spin = rb; spin.amount = 40;
+        auto zoom = spin; zoom.zoom = true;
+        const auto sr = F::filtered(rings, spin, nullptr), ss = F::filtered(spokes, spin, nullptr);
+        const auto zr = F::filtered(rings, zoom, nullptr), zs = F::filtered(spokes, zoom, nullptr);
+        check("radial: Spin leaves rings as they are", sr && diff(*sr, rings) < 0.01, sr ? num(diff(*sr, rings)) : "");
+        check("radial: Spin smears spokes (10x what it does to rings)", ss && sr && diff(*ss, spokes) > 10 * diff(*sr, rings), ss ? num(diff(*ss, spokes)) : "");
+        check("radial: Zoom leaves spokes as they are", zs && diff(*zs, spokes) < 0.02, zs ? num(diff(*zs, spokes)) : "");
+        check("radial: Zoom smears rings (10x what it does to spokes)", zr && zs && diff(*zr, rings) > 10 * diff(*zs, spokes), zr ? num(diff(*zr, rings)) : "");
+        // The centre moved: the spokes' middle no longer still under Zoom.
+        auto off = zoom; off.cx = 25; off.cy = 25;
+        const auto zo = F::filtered(spokes, off, nullptr);
+        check("radial: the centre moved -- Zoom no longer leaves the spokes", zo && zs && diff(*zo, spokes) > 10 * diff(*zs, spokes), zo ? num(diff(*zo, spokes)) : "");
+        const P::Rect view{100, 40, 90, 70};
+        check("radial: the preview's rectangle == the result there",
+              same_in(*F::filtered(spokes, off, nullptr), *F::filtered(spokes, off, nullptr, false, &view), view), "");
+        // Live, and the file.
+        core::live::clear_cache();
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        auto lv = rb; lv.amount = 30; lv.zoom = true; lv.quality = 2; lv.cx = 30; lv.cy = 70;
+        check("radial: live", L::add_live(j, d, "L4", lv), "");
+        check("radial: a filter layer", !L::add_filter_layer(j, d, lv, "L4").empty(), "");
+        check("radial: the look is made", core::live::look(*d.get("L4")) != nullptr, "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_s040_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image();
+        c.layers = d.snapshot();
+        c.next_id = d.next_id();
+        std::string err;
+        check("radial: saved", core::file::save_klimt(path, c, err), err);
+        const auto back = core::file::open(path, err);
+        check("radial: Method, Quality and the centre back from the file",
+              back && back->layers.at("L4").filters == d.get("L4")->filters && back->layers.at("L4").filters.back().f.cx == 30, err);
+        fs::remove(path);
+    }
+
+    std::cout << "\n-- filters: Distort -- Twirl, Pinch, Spherize (s040 m4) --\n";
+    {
+        const auto tw = F::fresh(FilterKind::Twirl), pi = F::fresh(FilterKind::Pinch), sp = F::fresh(FilterKind::Spherize);
+        check("distort: Photoshop's defaults (Twirl 50 deg, Pinch 50 %, Spherize 100 % Normal), under Distort",
+              tw.angle == 50 && pi.amount == 50 && sp.amount == 100 && sp.axis == 0 && F::group(FilterKind::Twirl) == "Distort" &&
+              F::group(FilterKind::Pinch) == "Distort" && F::group(FilterKind::Spherize) == "Distort", "");
+        {
+            auto t = tw; t.angle = 5000; auto q = pi; q.amount = -300; auto r = sp; r.axis = 9; r.amount = 140;
+            check("distort: normalised -- angle -999..999, amounts -100..100, mode 0..2",
+                  F::normalised(t).angle == 999 && F::normalised(q).amount == -100 && F::normalised(r).axis == 2 && F::normalised(r).amount == 100, "");
+            auto g = F::fresh(FilterKind::GaussianBlur); g.axis = 2;
+            check("distort: Spherize's mode goes back to Normal on another kind", F::normalised(g).axis == 0, "");
+        }
+        // The maps, on an ellipse at (100, 80), half-axes 100 x 80.
+        const double ex = 100, ey = 80, rx = 100, ry = 80;
+        double sx = 0, sy = 0;
+        check("distort: outside the ellipse -- unchanged", !F::warp_source(tw, ex, ey, rx, ry, 1, 1, sx, sy), "");
+        const auto dist = [&](double x, double y) { return std::hypot((x - ex) / rx, (y - ey) / ry); };
+        bool keeps = true, rim = true;
+        for (double a = 0; a < 6.28; a += 0.4)
+            for (const double d : {0.2, 0.5, 0.8}) {
+                const double x = ex + d * rx * std::cos(a), y = ey + d * ry * std::sin(a);
+                if (F::warp_source(tw, ex, ey, rx, ry, x, y, sx, sy)) keeps = keeps && std::abs(dist(sx, sy) - d) < 1e-9;
+                const double x9 = ex + 0.99999 * rx * std::cos(a), y9 = ey + 0.99999 * ry * std::sin(a);   // Spherize 100 % is steep at the rim (1 - sqrt(1 - d^2))
+                for (const auto* f : {&tw, &pi, &sp})
+                    if (F::warp_source(*f, ex, ey, rx, ry, x9, y9, sx, sy)) rim = rim && std::hypot(sx - x9, sy - y9) < 1.0;
+            }
+        check("distort: Twirl turns, keeping each pixel's distance from the middle", keeps, "");
+        check("distort: at the rim, all three read (nearly) where they are -- no seam", rim, "");
+        const auto reads_from = [&](const core::Filter& f, double d) {
+            F::warp_source(f, ex, ey, rx, ry, ex + d * rx, ey, sx, sy);
+            return dist(sx, sy);
+        };
+        auto pm = pi; pm.amount = -50; auto sm = sp; sm.amount = -100;
+        check("distort: Pinch + reads from further out (the middle squeezed in), - from nearer",
+              reads_from(pi, 0.4) > 0.4 && reads_from(pm, 0.4) < 0.4, num(reads_from(pi, 0.4)) + " " + num(reads_from(pm, 0.4)));
+        check("distort: Spherize + reads from nearer (a bulge), - from further out (a dent)",
+              reads_from(sp, 0.4) < 0.4 && reads_from(sm, 0.4) > 0.4, num(reads_from(sp, 0.4)) + " " + num(reads_from(sm, 0.4)));
+        auto hz = sp; hz.axis = 1; auto vt = sp; vt.axis = 2;
+        F::warp_source(hz, ex, ey, rx, ry, 150, 100, sx, sy);
+        const bool h_ok = sy == 100 && sx != 150;
+        F::warp_source(vt, ex, ey, rx, ry, 150, 100, sx, sy);
+        check("distort: Spherize Horizontal only moves along the row; Vertical only along the column", h_ok && sx == 150 && sy != 100, "");
+        // On a picture: the corners (outside the ellipse) unchanged; Pinch 0 changes nothing.
+        auto rnd = P::TileMap(P::Format{}, 200, 160);
+        std::uint32_t seed = 9;
+        for (int y = 0; y < 160; ++y)
+            for (int x = 0; x < 200; ++x) {
+                seed = seed * 1664525u + 1013904223u;
+                const float v = static_cast<float>((seed >> 24) % 256) / 255.f;
+                rnd = rnd.fill({x, y, 1, 1}, P::rgba(v, 1 - v, 0.3f, 1));
+            }
+        const auto twd = F::filtered(rnd, tw, nullptr);
+        check("distort: Twirl -- the corners, outside the ellipse, as they were", twd && same_in(rnd, *twd, {0, 0, 12, 12}) && same_in(rnd, *twd, {188, 148, 12, 12}), "");
+        check("distort: Twirl -- the middle moved", twd && !same_in(rnd, *twd, {80, 60, 40, 40}), "");
+        auto p0 = pi; p0.amount = 0;
+        const auto pz = F::filtered(rnd, p0, nullptr);
+        check("distort: Pinch 0 -- nothing changes (within a level)", pz && same_in(rnd, *pz, {0, 0, 200, 160}, 0.6f / 255), "");
+        const P::Rect view{60, 50, 70, 50};
+        check("distort: the preview's rectangle == the result there (the ellipse doesn't follow the view)",
+              same_in(*F::filtered(rnd, sp, nullptr), *F::filtered(rnd, sp, nullptr, false, &view), view), "");
+        // Live, and the file.
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        auto lv = sp; lv.axis = 2; lv.amount = -40;
+        check("distort: live Spherize", L::add_live(j, d, "L4", lv), "");
+        check("distort: a Twirl filter layer", !L::add_filter_layer(j, d, tw, "L4").empty(), "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_s040d_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image();
+        c.layers = d.snapshot();
+        c.next_id = d.next_id();
+        std::string err;
+        check("distort: saved", core::file::save_klimt(path, c, err), err);
+        const auto back = core::file::open(path, err);
+        check("distort: Spherize's mode and amount back from the file",
+              back && back->layers.at("L4").filters == d.get("L4")->filters && back->layers.at("L4").filters.back().f.axis == 2, err);
+        fs::remove(path);
+    }
+
     std::cout << "\n-- s034: live, filter layers, the file --\n";
     {
         core::live::clear_cache();

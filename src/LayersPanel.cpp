@@ -162,7 +162,7 @@ LayersPanel::LayersPanel(core::Document& doc, core::DocJournal& journal)
     // s030: a new FILTER LAYER -- non-destructive filters, by submenu.
     {
         auto model = Gio::Menu::create();
-        for (const char* g : {"Blur", "Sharpen", "Noise", "Other"}) {
+        for (const char* g : {"Blur", "Distort", "Sharpen", "Noise", "Other"}) {
             auto sec = Gio::Menu::create();
             for (const auto k : core::filter::kinds())
                 if (core::filter::group(k) == g)

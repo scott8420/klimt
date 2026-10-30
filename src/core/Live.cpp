@@ -76,7 +76,9 @@ std::shared_ptr<const pixel::TileMap> partly(const pixel::TileMap& src, const pi
     if (src.has_outside() || was_src.has_outside() || was.has_outside()) return nullptr;
     for (const auto& f : stack)   // they depend on where they are: Add Noise, s023 a Dissolve blend
         if (f.f.kind == FilterKind::AddNoise || f.mode == pixel::Blend::Dissolve ||
-            (f.f.kind == FilterKind::LensBlur && f.f.amount > 0)) return nullptr;   // s039: Lens Blur's Noise
+            (f.f.kind == FilterKind::LensBlur && f.f.amount > 0) ||   // s039: Lens Blur's Noise
+            f.f.kind == FilterKind::RadialBlur || f.f.kind == FilterKind::Twirl ||   // s040: they depend on where the centre is
+            f.f.kind == FilterKind::Pinch || f.f.kind == FilterKind::Spherize) return nullptr;
     int reach_px = 0;
     for (const auto& f : stack) reach_px += filter::reach(f.f);
     if (st.any()) reach_px += styles::reach(st);
