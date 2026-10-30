@@ -56,7 +56,8 @@ bool apply_filter(DocJournal& j, Document& d, const Id& id, const Filter& f) {
     if (!l || l->kind != Kind::Pixel || d.locked_all(id) || (l->locks & lock::Pixels) || !l->pixels) return false;
     const auto n = filter::normalised(f);
     if (filter::identity(n)) return false;
-    auto out = filter::filtered(*l->pixels, n, d.selection(), (l->locks & lock::Alpha) != 0);
+    auto out = filter::filtered(*l->pixels, n, d.selection(), (l->locks & lock::Alpha) != 0, nullptr, {}, {},
+                                filter::wants_mask(n) ? l->mask.get() : nullptr);   // s039: the depth map
     if (!out) return false;
     return set_pixels_if(j, d, id, l->pixels, std::move(*out), std::string(filter::label(n.kind)));
 }

@@ -63,11 +63,11 @@ FilterDialog::FilterDialog(Gtk::Window& parent)
         m_ok.emit(f);   // first: the Shell keeps the preview up until the result lands
         close();
     });
-    signal_hide().connect([this] { m_closed.emit(); });
+    signal_hide().connect([this] { focal_pick_off(); m_closed.emit(); });
     auto keys = Gtk::EventControllerKey::create();
     keys->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
     keys->signal_key_pressed().connect([this](guint k, guint, Gdk::ModifierType) {
-        if (k == GDK_KEY_Escape) { close(); return true; }
+        if (k == GDK_KEY_Escape) { if (focal_picking()) focal_pick_off(); else close(); return true; }   // s039 m2
         if (k == GDK_KEY_Return || k == GDK_KEY_KP_Enter) { m_ok_button.activate(); return true; }
         return false;
     }, false);
@@ -155,6 +155,9 @@ void FilterDialog::rebuild() {
     m_motion_only.clear();
     m_into = nullptr;
     m_gauss = m_uniform = m_mono = nullptr;
+    if (focal_picking()) { m_focal_pick->set_active(false); }
+    m_depth = nullptr; m_invert = nullptr; m_depth_note = nullptr; m_focal_pick = nullptr;   // s039
+    m_depth_only.clear();
     auto head = Gtk::make_managed<Gtk::Label>();
     head->set_markup("<b>" + Glib::Markup::escape_text(std::string(F::label(m_f.kind))) + "</b>");
     head->set_xalign(0.0f);
@@ -179,38 +182,9 @@ void FilterDialog::rebuild() {
             row("filter.angle", "Angle", -90, 90, 0, false, "°", &m_angle);
             row("filter.distance", "Distance", 1, 500, 0, true, "pixels", &m_f.radius);
             break;
-        case FilterKind::AddNoise: {
-            row("filter.amount", "Amount", 0.1, 400, 1, true, "%", &m_f.amount);
-            auto dist = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 12);
-            auto l = Gtk::make_managed<Gtk::Label>("Distribution");
-            l->set_xalign(0.0f);
-            l->set_size_request(76, -1);
-            l->add_css_class("dim-label");
-            dist->append(*l);
-            m_uniform = Gtk::make_managed<Gtk::CheckButton>("Uniform");
-            m_uniform->set_name("filter.uniform");
-            m_gauss = Gtk::make_managed<Gtk::CheckButton>("Gaussian");
-            m_gauss->set_name("filter.gaussian");
-            m_gauss->set_group(*m_uniform);
-            dist->append(*m_uniform);
-            dist->append(*m_gauss);
-            m_body.append(*dist);
-            m_mono = Gtk::make_managed<Gtk::CheckButton>("Monochromatic");
-            m_mono->set_name("filter.mono");
-            m_mono->set_tooltip_text("The same noise in every channel -- grey grain, no colour speckles");
-            m_body.append(*m_mono);
-            m_gauss->signal_toggled().connect([this] {
-                if (m_syncing) return;
-                m_f.gaussian = m_gauss->get_active();
-                m_changed.emit();
-            });
-            m_mono->signal_toggled().connect([this] {
-                if (m_syncing) return;
-                m_f.mono = m_mono->get_active();
-                m_changed.emit();
-            });
+        case FilterKind::AddNoise:
+            noise_rows(0.1, 400, 1, true);
             break;
-        }
         case FilterKind::SmartSharpen: smart_rows(); break;   // s034
         case FilterKind::DustScratches:
             row("filter.radius", "Radius", 1, 100, 0, true, "pixels", &m_f.radius);
@@ -223,14 +197,7 @@ void FilterDialog::rebuild() {
             row("filter.radius", "Radius", 1, 100, 0, true, "pixels", &m_f.radius);
             row("filter.threshold", "Threshold", 2, 255, 0, false, "levels", &m_threshold);
             break;
-        case FilterKind::LensBlur:   // s037: the iris, then the specular highlights
-            row("filter.radius", "Radius", 1, 100, 0, true, "pixels", &m_f.radius);
-            row("filter.blades", "Blades", 3, 8, 0, false, "", &m_f.blades);
-            row("filter.curvature", "Blade Curvature", 0, 100, 0, false, "%", &m_f.curvature);
-            row("filter.rotation", "Rotation", 0, 360, 0, false, "°", &m_angle);
-            row("filter.bright", "Highlight Brightness", 0, 100, 0, false, "%", &m_f.bright);
-            row("filter.threshold", "Highlight Threshold", 0, 255, 0, false, "levels", &m_threshold);
-            break;
+        case FilterKind::LensBlur: lens_rows(); break;   // s037, s039
         case FilterKind::None: break;
     }
 }
@@ -254,11 +221,158 @@ void FilterDialog::sync(int keep_slider) {
     if (m_gauss) { m_gauss->set_active(m_f.gaussian); m_uniform->set_active(!m_f.gaussian); }
     if (m_mono) m_mono->set_active(m_f.mono);
     if (m_shape) m_shape->set_selected(m_f.round ? 1u : 0u);   // m3
+    if (m_depth) {   // s039
+        m_depth->set_selected(m_f.depth == core::DepthSource::Transparency ? 1u : m_f.depth == core::DepthSource::LayerMask ? 2u : 0u);
+        for (auto* w : m_depth_only) w->set_sensitive(m_f.depth != core::DepthSource::None);
+        if (m_invert) m_invert->set_active(m_f.invert);
+        if (m_depth_note) m_depth_note->set_visible(m_f.depth == core::DepthSource::LayerMask && !m_has_mask);
+    }
     if (m_remove) {   // s034
         m_remove->set_selected(m_f.remove == core::Remove::Lens ? 1u : m_f.remove == core::Remove::Motion ? 2u : 0u);
         for (auto* w : m_motion_only) w->set_visible(m_f.remove == core::Remove::Motion);
     }
     m_syncing = false;
+}
+
+// Add Noise's Amount, Distribution and Monochromatic -- s039: Lens Blur's Noise too.
+void FilterDialog::noise_rows(double lo, double hi, int digits, bool log) {
+    row("filter.amount", "Amount", lo, hi, digits, log, "%", &m_f.amount);
+    auto dist = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 12);
+    auto l = Gtk::make_managed<Gtk::Label>("Distribution");
+    l->set_xalign(0.0f);
+    l->set_size_request(76, -1);
+    l->add_css_class("dim-label");
+    dist->append(*l);
+    m_uniform = Gtk::make_managed<Gtk::CheckButton>("Uniform");
+    m_uniform->set_name("filter.uniform");
+    m_gauss = Gtk::make_managed<Gtk::CheckButton>("Gaussian");
+    m_gauss->set_name("filter.gaussian");
+    m_gauss->set_group(*m_uniform);
+    dist->append(*m_uniform);
+    dist->append(*m_gauss);
+    Gtk::Box& into = m_into ? *m_into : static_cast<Gtk::Box&>(m_body);
+    into.append(*dist);
+    m_mono = Gtk::make_managed<Gtk::CheckButton>("Monochromatic");
+    m_mono->set_name("filter.mono");
+    m_mono->set_tooltip_text("The same noise in every channel -- grey grain, no colour speckles");
+    into.append(*m_mono);
+    m_gauss->signal_toggled().connect([this] {
+        if (m_syncing) return;
+        m_f.gaussian = m_gauss->get_active();
+        m_changed.emit();
+    });
+    m_mono->signal_toggled().connect([this] {
+        if (m_syncing) return;
+        m_f.mono = m_mono->get_active();
+        m_changed.emit();
+    });
+}
+
+// s039 m2: Set Focal Point.
+bool FilterDialog::focal_picking() const { return m_focal_pick && m_focal_pick->get_active(); }
+void FilterDialog::focal_pick_off() {
+    if (focal_picking()) m_focal_pick->set_active(false);   // its handler re-modals and tells the Shell
+}
+void FilterDialog::set_focal_at(double depth) {
+    depth = std::clamp(depth, 0.0, 1.0);
+    m_f.focal = std::round((m_f.invert ? 1 - depth : depth) * 255);
+    focal_pick_off();
+    sync();
+    m_changed.emit();
+}
+
+// s037 / s039: Lens Blur -- Photoshop's order: the Depth Map, the Iris, the
+// Specular Highlights.
+void FilterDialog::lens_rows() {
+    const auto section = [this](const char* text) {
+        auto l = Gtk::make_managed<Gtk::Label>();
+        l->set_markup(std::string("<small><b>") + text + "</b></small>");
+        l->set_xalign(0.0f);
+        l->set_margin_top(6);
+        l->add_css_class("dim-label");
+        m_body.append(*l);
+    };
+    section("Depth Map");
+    auto line = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto l = Gtk::make_managed<Gtk::Label>("Source");
+    l->set_xalign(0.0f);
+    l->set_hexpand(true);
+    line->append(*l);
+    m_depth = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"None", "Transparency", "Layer Mask"}));
+    m_depth->set_name("filter.depth");
+    m_depth->set_tooltip_text("What says how far each pixel is: None -- the same blur everywhere; Transparency -- the layer's "
+                              "alpha; Layer Mask -- its mask (white 255, black 0). Shift-click the mask to switch it off "
+                              "and it still serves here");
+    line->append(*m_depth);
+    line->set_margin_bottom(4);
+    m_body.append(*line);
+    row("filter.focal", "Blur Focal Distance", 0, 255, 0, false, "", &m_f.focal);
+    m_depth_only = {m_rows.back().s, m_rows.back().n->get_parent()};
+    m_rows.back().s->set_tooltip_text("The depth that stays sharp; the further a pixel's depth from it, the more it blurs");
+    m_invert = Gtk::make_managed<Gtk::CheckButton>("Invert");
+    m_invert->set_name("filter.invert");
+    m_invert->set_tooltip_text("Turn the depth map over: what was near is far");
+    m_body.append(*m_invert);
+    m_depth_only.push_back(m_invert);
+    // s039 m2: Set Focal Point -- click the picture: what is there stays sharp.
+    m_focal_pick = Gtk::make_managed<Gtk::ToggleButton>("Set Focal Point");
+    m_focal_pick->set_name("filter.focal_pick");
+    m_focal_pick->set_tooltip_text("Then click the picture: the focal distance becomes the depth there, so it stays sharp "
+                                   "(Esc: never mind)");
+    m_focal_pick->set_halign(Gtk::Align::START);
+    m_body.append(*m_focal_pick);
+    m_depth_only.push_back(m_focal_pick);
+    m_focal_pick->signal_toggled().connect([this] {
+        const bool on = m_focal_pick->get_active();
+        set_modal(!on);   // armed: the canvas takes the next click
+        m_focal_signal.emit(on);
+    });
+    m_depth_note = Gtk::make_managed<Gtk::Label>("The layer has no mask: the blur is even, as None.");
+    m_depth_note->set_name("filter.depth_note");
+    m_depth_note->set_xalign(0.0f);
+    m_depth_note->set_wrap(true);
+    m_depth_note->add_css_class("dim-label");
+    m_depth_note->add_css_class("caption");
+    m_body.append(*m_depth_note);
+    m_depth->property_selected().signal_changed().connect([this] {
+        if (m_syncing) return;
+        const auto i = m_depth->get_selected();
+        m_f.depth = i == 1 ? core::DepthSource::Transparency : i == 2 ? core::DepthSource::LayerMask : core::DepthSource::None;
+        if (m_f.depth == core::DepthSource::None) focal_pick_off();
+        sync();
+        m_changed.emit();
+    });
+    m_invert->signal_toggled().connect([this] {
+        if (m_syncing) return;
+        m_f.invert = m_invert->get_active();
+        m_changed.emit();
+    });
+    section("Iris");
+    row("filter.radius", "Radius", 1, 100, 0, true, "pixels", &m_f.radius);
+    row("filter.blades", "Blades", 3, 8, 0, false, "", &m_f.blades);
+    row("filter.curvature", "Blade Curvature", 0, 100, 0, false, "%", &m_f.curvature);
+    row("filter.rotation", "Rotation", 0, 360, 0, false, "°", &m_angle);
+    // Folded away (the dialog fits a laptop's screen); open when in use.
+    const auto fold = [this](const char* title, const char* name, bool open) {
+        auto* ex = Gtk::make_managed<Gtk::Expander>(title);
+        ex->set_name(name);
+        ex->set_expanded(open);
+        ex->set_margin_top(4);
+        auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+        box->set_margin_start(12);
+        box->set_margin_top(4);
+        ex->set_child(*box);
+        m_body.append(*ex);
+        m_into = box;
+    };
+    fold("Specular Highlights", "filter.highlights", m_f.bright > 0);
+    row("filter.bright", "Brightness", 0, 100, 0, false, "%", &m_f.bright);
+    row("filter.threshold", "Threshold", 0, 255, 0, false, "levels", &m_threshold);
+    fold("Noise", "filter.noise_box", m_f.amount > 0);   // s039 m2: grain back in what is blurred
+    noise_rows(0, 100, 0, false);
+    m_rows[m_rows.size() - 1].s->set_tooltip_text("Blurring smooths the film grain or sensor noise away; this puts some back, "
+                                                  "as much as each pixel is blurred");
+    m_into = nullptr;
 }
 
 // s034: Smart Sharpen -- Amount, Radius, Reduce Noise, Remove (Motion: its

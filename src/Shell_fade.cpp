@@ -54,10 +54,11 @@ void Shell::fade_preview_soon() {
         const auto mode = m_fade_dialog->mode();
         const auto stack = l->filters;   // s018: the preview shows the layer as it will LOOK
         const pixel::Rect view = m_canvas.visible();
-        m_fade_job = start_job("Preview", [this, src, o, mode, stack, view](core::Jobs::Token& t) -> core::Jobs::Landing {
+        const auto depth = l->mask;   // s039: a Lens Blur's Layer Mask depth map
+        m_fade_job = start_job("Preview", [this, src, o, mode, stack, view, depth](core::Jobs::Token& t) -> core::Jobs::Landing {
             const auto stop = [&t] { return t.cancelled(); };
             auto out = core::fade::faded(src.before, *src.after, o, mode, stop);
-            if (out && !stack.empty()) out = core::live::run(*out, stack, &view, stop);
+            if (out && !stack.empty()) out = core::live::run(*out, stack, &view, stop, depth.get());
             if (!out || t.cancelled()) return [] {};
             auto res = std::make_shared<const pixel::TileMap>(std::move(*out));
             return [this, res, src] {

@@ -50,6 +50,7 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["delete-selection"] = add_action("delete-selection", sigc::mem_fun(*this, &Shell::on_delete_selection));
     m_canvas.signal_shape().connect(sigc::mem_fun(*this, &Shell::on_shape));
     m_canvas.signal_pick().connect(sigc::mem_fun(*this, &Shell::on_pick));
+    m_canvas.signal_point_pick().connect(sigc::mem_fun(*this, &Shell::on_focal_point));   // s039 m2
     m_canvas.signal_stroke().connect(sigc::mem_fun(*this, &Shell::on_stroke));
     m_canvas.signal_move().connect(sigc::mem_fun(*this, &Shell::on_move));   // s009
     m_canvas.signal_crop().connect(sigc::mem_fun(*this, &Shell::on_crop_box));
@@ -142,6 +143,7 @@ void Shell::bind_actions() {  // bindings
         m_canvas.set_brush_shape(o.tip, o.angle, o.roundness / 100.0);   // s017
         if (m_rail.tool() == "refine") m_canvas.set_hint_mode(1, o.size / 2.0);   // s038: the ring's size
     });
+    m_strip.signal_refine_overlay().connect([this] { queue_render(); });   // s039 m3
     m_layer_acts["select-feather"] = add_action("select-feather", sigc::mem_fun(*this, &Shell::on_feather));
     // s011 m4: Select > Modify.
     m_layer_acts["select-expand"]   = add_action("select-expand",   [this] { on_modify(core::select::Modify::Expand); });

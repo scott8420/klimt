@@ -144,6 +144,10 @@ public:
     sigc::signal<void()>& signal_transform_commit() { return m_xf_commit; }
     // s008 m3: the Eyedropper clicked at an image point; `background`: Alt.
     sigc::signal<void(int, int, bool)>& signal_pick() { return m_pick_signal; }
+    // s039 m2: a ONE-CLICK PICK over whatever tool (the Lens Blur dialog's Set
+    // Focal Point): while on, a primary click on the picture only emits (x, y).
+    void set_point_pick(bool on) { m_point_pick = on; update_cursor(); }
+    sigc::signal<void(int, int)>& signal_point_pick() { return m_point_pick_signal; }
     // s029: a right-click (a pen's barrel button) at (x, y), widget coordinates -- the tool's settings there.
     sigc::signal<void(double, double)>& signal_settings_at() { return m_settings_at_signal; }
     // s015: Alt- / Ctrl-click with the Clone Stamp: the source point.
@@ -319,6 +323,8 @@ private:
     void              lasso_land();                    // the trace done: tell the Shell
     double            m_press_x = 0, m_press_y = 0;    // screen
     sigc::signal<void(const Shape&)> m_shape_signal;
+    bool m_point_pick = false, m_pick_press = false;   // s039 m2
+    sigc::signal<void(int, int)> m_point_pick_signal;
     sigc::signal<void(int, int, bool)> m_pick_signal;
     sigc::signal<void(double, double)> m_settings_at_signal;   // s029
     sigc::signal<void(core::select::Pt)> m_source_signal;   // s015

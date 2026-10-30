@@ -99,6 +99,7 @@ void FilterLayerEditor::rebuild() {
     m_motion_only.clear();
     m_into = nullptr;
     m_gauss = m_mono = nullptr;
+    m_depth = nullptr; m_invert = nullptr; m_depth_only.clear();   // s039
     m_built = m_f.kind;
     auto head = Gtk::make_managed<Gtk::Label>();
     head->set_markup("<b>" + Glib::Markup::escape_text(std::string(F::label(m_f.kind))) + "</b>");
@@ -147,14 +148,49 @@ void FilterLayerEditor::rebuild() {
             row("filter_layer.radius", "Radius", 1, 100, 0, true, "px", &m_f.radius);
             row("filter_layer.threshold", "Threshold", 2, 255, 0, false, "levels", &m_threshold);
             break;
-        case FilterKind::LensBlur:   // s037: the iris, then the specular highlights
+        case FilterKind::LensBlur: {   // s037: the iris, then the specular highlights
+            // s039: the depth map -- the transparency of what is below (a
+            // filter layer has no pixels of its own to mask).
+            auto line = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            auto l = Gtk::make_managed<Gtk::Label>("Depth Map");
+            l->set_xalign(0.0f);
+            l->set_hexpand(true);
+            line->append(*l);
+            m_depth = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"None", "Transparency"}));
+            m_depth->set_name("filter_layer.depth");
+            m_depth->set_tooltip_text("Transparency: what is below it, its alpha as the depth (opaque 255)");
+            line->append(*m_depth);
+            m_body.append(*line);
+            m_depth->property_selected().signal_changed().connect([this] {
+                if (m_syncing) return;
+                m_f.depth = m_depth->get_selected() == 1 ? core::DepthSource::Transparency : core::DepthSource::None;
+                sync();
+                emit();
+            });
+            row("filter_layer.focal", "Blur Focal Distance", 0, 255, 0, false, "", &m_f.focal);
+            m_depth_only = {m_rows.back().s, m_rows.back().n->get_parent()};
+            m_invert = Gtk::make_managed<Gtk::CheckButton>("Invert");
+            m_invert->set_name("filter_layer.invert");
+            m_invert->signal_toggled().connect([this] { if (!m_syncing) { m_f.invert = m_invert->get_active(); emit(); } });
+            m_body.append(*m_invert);
+            m_depth_only.push_back(m_invert);
             row("filter_layer.radius", "Radius", 1, 100, 0, true, "px", &m_f.radius);
             row("filter_layer.blades", "Blades", 3, 8, 0, false, "", &m_f.blades);
             row("filter_layer.curvature", "Blade Curvature", 0, 100, 0, false, "%", &m_f.curvature);
             row("filter_layer.rotation", "Rotation", 0, 360, 0, false, "°", &m_angle);
             row("filter_layer.bright", "Highlight Brightness", 0, 100, 0, false, "%", &m_f.bright);
             row("filter_layer.threshold", "Highlight Threshold", 0, 255, 0, false, "levels", &m_threshold);
+            // s039 m2: its Noise
+            row("filter_layer.amount", "Noise", 0, 100, 0, false, "%", &m_f.amount);
+            m_gauss = Gtk::make_managed<Gtk::CheckButton>("Gaussian");
+            m_gauss->set_tooltip_text("Off: uniform noise");
+            m_gauss->signal_toggled().connect([this] { if (!m_syncing) { m_f.gaussian = m_gauss->get_active(); emit(); } });
+            m_body.append(*m_gauss);
+            m_mono = Gtk::make_managed<Gtk::CheckButton>("Monochromatic");
+            m_mono->signal_toggled().connect([this] { if (!m_syncing) { m_f.mono = m_mono->get_active(); emit(); } });
+            m_body.append(*m_mono);
             break;
+        }
         default: break;
     }
     auto note = Gtk::make_managed<Gtk::Label>("Filters everything below it. To filter one layer only, clip it to that layer "
@@ -180,6 +216,11 @@ void FilterLayerEditor::sync(int keep) {
     if (m_gauss) m_gauss->set_active(m_f.gaussian);
     if (m_mono) m_mono->set_active(m_f.mono);
     if (m_shape) m_shape->set_selected(m_f.round ? 1u : 0u);   // m3
+    if (m_depth) {   // s039
+        m_depth->set_selected(m_f.depth == core::DepthSource::Transparency ? 1u : 0u);
+        for (auto* w : m_depth_only) w->set_sensitive(m_f.depth != core::DepthSource::None);
+        m_invert->set_active(m_f.invert);
+    }
     if (m_remove) {   // s034
         m_remove->set_selected(m_f.remove == core::Remove::Lens ? 1u : m_f.remove == core::Remove::Motion ? 2u : 0u);
         for (auto* w : m_motion_only) w->set_visible(m_f.remove == core::Remove::Motion);

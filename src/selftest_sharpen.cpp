@@ -442,6 +442,171 @@ void selftest_sharpen(const Check& check) {
         check("lens: the preview's rectangle == the result there", same_in(*F::filtered(dark, f, nullptr), *F::filtered(dark, f, nullptr, false, &view), view), "");
     }
 
+    std::cout << "\n-- filters: Lens Blur's depth map (s039) --\n";
+    {
+        auto lb = F::fresh(FilterKind::LensBlur);
+        check("depth: Photoshop's defaults -- no source, focal distance 0, not inverted",
+              lb.depth == core::DepthSource::None && lb.focal == 0 && !lb.invert, "");
+        {
+            auto t = lb; t.focal = 300.4; t.depth = static_cast<core::DepthSource>(9);
+            const auto n = F::normalised(t);
+            check("depth: normalised -- focal 0..255, an unknown source is None", n.focal == 255 && n.depth == core::DepthSource::None, "");
+            auto g = F::fresh(FilterKind::GaussianBlur);
+            g.depth = core::DepthSource::LayerMask; g.focal = 90; g.invert = true;
+            const auto gn = F::normalised(g);
+            check("depth: its settings go back to their defaults on another kind",
+                  gn.depth == core::DepthSource::None && gn.focal == 0 && !gn.invert, "");
+        }
+        // The blur's share by depth: 0 at the focal distance, 1 at either end.
+        auto a = lb;
+        check("depth: focal 0 -- black sharp, white the full radius, grey half",
+              near(F::depth_amount(a, 0), 0, 1e-9) && near(F::depth_amount(a, 1), 1, 1e-9) && near(F::depth_amount(a, 0.5), 0.5, 1e-9), "");
+        a.focal = 100;
+        check("depth: focal 100 -- 100 sharp, 1 and 255 (nearly) fully blurred (Photoshop's example)",
+              near(F::depth_amount(a, 100 / 255.0), 0, 1e-9) && F::depth_amount(a, 1 / 255.0) > 0.98 && near(F::depth_amount(a, 1), 1, 1e-9),
+              num(F::depth_amount(a, 1 / 255.0)));
+        a.focal = 0; a.invert = true;
+        check("depth: Invert turns the map over", near(F::depth_amount(a, 1), 0, 1e-9) && near(F::depth_amount(a, 0), 1, 1e-9), "");
+        for (const char* k : {"none", "transparency", "layer-mask"})
+            check(std::string("depth: the key round-trips -- ") + k, F::depth_from(k) && F::depth_key(*F::depth_from(k)) == k, "");
+
+        // A picture with detail everywhere (8-bit), opaque.
+        auto rnd = P::TileMap(P::Format{}, 160, 120);
+        std::uint32_t seed = 5;
+        for (int y = 0; y < 120; ++y)
+            for (int x = 0; x < 160; ++x) {
+                seed = seed * 1664525u + 1013904223u;
+                const float v = static_cast<float>((seed >> 24) % 256) / 255.f;
+                rnd = rnd.fill({x, y, 1, 1}, P::rgba(v, 0.5f * v, 1 - v, 1));
+            }
+        auto even = lb; even.radius = 8;
+        const auto blurred = F::filtered(rnd, even, nullptr);
+        const P::Rect all{0, 0, 160, 120};
+        auto tr = even; tr.depth = core::DepthSource::Transparency;
+        const auto t0 = F::filtered(rnd, tr, nullptr);
+        check("depth: Transparency, opaque, focal 0 -- every pixel at the full radius (as None)",
+              blurred && t0 && same_in(*blurred, *t0, all, 1.5f / 255), "");
+        tr.focal = 255;
+        const auto t255 = F::filtered(rnd, tr, nullptr);
+        check("depth: Transparency, opaque, focal 255 -- every pixel sharp (nothing changes)", t255 && same_in(rnd, *t255, all), "");
+
+        // A layer mask: the left half hidden (black: depth 0), the right shown (white: 255).
+        P::Px hide{}; hide.c[0] = 1.f;
+        const P::Format mf{P::Depth::U8, P::Mode::Gray, false};
+        const auto mask = P::TileMap(mf, 160, 120).fill({0, 0, 80, 120}, hide);
+        auto lm = even; lm.depth = core::DepthSource::LayerMask;
+        check("depth: Layer Mask wants the mask", F::wants_mask(lm) && !F::wants_mask(even), "");
+        const auto m0 = F::filtered(rnd, lm, nullptr, false, nullptr, {}, {}, &mask);
+        check("depth: Layer Mask, focal 0 -- the black half stays sharp", m0 && same_in(rnd, *m0, {0, 0, 70, 120}), "");
+        check("depth: ... the white half has the full blur", m0 && blurred && same_in(*blurred, *m0, {90, 0, 70, 120}, 1.5f / 255), "");
+        lm.invert = true;
+        const auto mi = F::filtered(rnd, lm, nullptr, false, nullptr, {}, {}, &mask);
+        check("depth: inverted -- the other way round", mi && blurred && same_in(rnd, *mi, {90, 0, 70, 120}) &&
+              same_in(*blurred, *mi, {0, 0, 70, 120}, 1.5f / 255), "");
+        lm.invert = false;
+        const auto nomask = F::filtered(rnd, lm, nullptr);
+        check("depth: Layer Mask with no mask -- the blur is even (as None)", nomask && blurred && same_in(*blurred, *nomask, all), "");
+        // Mid grey: half the radius -- as Lens Blur of half the radius, evenly.
+        P::Px mid{}; mid.c[0] = 0.5f;
+        const auto grey = P::TileMap(mf, 160, 120).fill(all, mid);
+        auto big = lm; big.radius = 16;
+        const auto half = F::filtered(rnd, big, nullptr, false, nullptr, {}, {}, &grey);
+        check("depth: mid grey at radius 16 == an even blur of 8", half && blurred && same_in(*blurred, *half, all, 2.5f / 255), "");
+        const P::Rect view{50, 30, 60, 50};
+        check("depth: the preview's rectangle == the result there",
+              same_in(*F::filtered(rnd, lm, nullptr, false, nullptr, {}, {}, &mask),
+                      *F::filtered(rnd, lm, nullptr, false, &view, {}, {}, &mask), view), "");
+
+        // Live: a Lens Blur reading the layer's mask -- the look follows the mask.
+        core::live::clear_cache();
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        auto live = F::fresh(FilterKind::LensBlur);
+        live.radius = 6; live.depth = core::DepthSource::LayerMask;
+        check("depth: live Lens Blur on a layer", L::add_live(j, d, "L4", live), "");
+        const auto px = d.get("L4")->pixels;
+        const P::Rect box{0, 0, std::min(px->width(), 200), std::min(px->height(), 200)};
+        const auto before = core::live::look(*d.get("L4"));
+        check("depth: a mask added (Hide All: black, depth 0)", L::add_mask(j, d, "L4", L::MaskFrom::HideAll), "");
+        const auto after = core::live::look(*d.get("L4"));
+        check("depth: live -- with no mask the blur is even, with a black one (focal 0) the layer is sharp",
+              before && after && !same_in(*px, *before, box) && same_in(*px, *after, box), "");
+        live.focal = 40; live.invert = true;
+        check("depth: the live filter's focal distance and Invert set", L::set_live(j, d, "L4", d.get("L4")->filters.size() - 1, live), "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_s039_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image();
+        c.layers = d.snapshot();
+        c.next_id = d.next_id();
+        std::string err;
+        check("depth: saved", core::file::save_klimt(path, c, err), err);
+        const auto back = core::file::open(path, err);
+        check("depth: the source, focal distance and Invert back from the file",
+              back && back->layers.at("L4").filters == d.get("L4")->filters &&
+              back->layers.at("L4").filters.back().f.depth == core::DepthSource::LayerMask && back->layers.at("L4").filters.back().f.focal == 40, err);
+        fs::remove(path);
+    }
+
+    std::cout << "\n-- filters: Lens Blur's Noise (s039 m2) --\n";
+    {
+        auto lb = F::fresh(FilterKind::LensBlur);
+        lb.radius = 6;
+        {
+            auto t = lb; t.amount = 150; t.gaussian = true; t.mono = true; t.seed = 77;
+            const auto n = F::normalised(t);
+            check("noise: normalised -- 0..100 %, Gaussian / Monochromatic / the seed kept",
+                  n.amount == 100 && n.gaussian && n.mono && n.seed == 77 && F::fresh(FilterKind::LensBlur).amount == 0, "");
+        }
+        const auto flat = P::TileMap(f32(), 300, 300).fill({0, 0, 300, 300}, P::rgba(0.5f, 0.5f, 0.5f, 1));
+        const auto plain = F::filtered(flat, lb, nullptr);
+        auto nz = lb; nz.amount = 40; nz.seed = 3;
+        const auto grain = F::filtered(flat, nz, nullptr);
+        check("noise: none at 0 -- a flat grey blurs to itself", plain && spread(*plain, 0) < 1e-6, plain ? num(spread(*plain, 0)) : "");
+        check("noise: 40 % -- grain on the blurred grey", grain && spread(*grain, 0) > 0.01, grain ? num(spread(*grain, 0)) : "");
+        check("noise: the same seed, the same grain", grain && same_in(*grain, *F::filtered(flat, nz, nullptr), {0, 0, 300, 300}), "");
+        auto other = nz; other.seed = 4;
+        check("noise: another seed, other grain", grain && !same_in(*grain, *F::filtered(flat, other, nullptr), {0, 0, 300, 300}), "");
+        auto mono = nz; mono.mono = true;
+        const auto mg = F::filtered(flat, mono, nullptr);
+        check("noise: Monochromatic -- grey grain, no colour in it", mg && spread(*mg, -1) < 1e-6 && grain && spread(*grain, -1) > 0.01, "");
+        // A depth map: the sharp half keeps its own (no grain), the blurred half gets it.
+        P::Px hide{}; hide.c[0] = 1.f;
+        const auto mask = P::TileMap(P::Format{P::Depth::U8, P::Mode::Gray, false}, 300, 300).fill({0, 0, 150, 300}, hide);
+        auto dm = nz; dm.depth = core::DepthSource::LayerMask;
+        const auto half = F::filtered(flat, dm, nullptr, false, nullptr, {}, {}, &mask);
+        check("noise: with a depth map -- the sharp part has none", half && same_in(flat, *half, {0, 0, 140, 300}), "");
+        double s = 0, s2 = 0; int n = 0;
+        for (int y = 20; y < 280; y += 2)
+            for (int x = 170; x < 290; x += 2) { const double v = half ? half->get(x, y).c[0] : 0; s += v; s2 += v * v; ++n; }
+        const double sd = std::sqrt(std::max(0.0, s2 / n - (s / n) * (s / n)));
+        check("noise: ... the blurred part has it", sd > 0.01, num(sd));
+        const P::Rect view{100, 60, 120, 90};
+        check("noise: the preview's rectangle == the result there",
+              same_in(*F::filtered(flat, dm, nullptr, false, nullptr, {}, {}, &mask), *F::filtered(flat, dm, nullptr, false, &view, {}, {}, &mask), view), "");
+        // The file keeps it.
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        auto lf = nz; lf.gaussian = true; lf.seed = 91;
+        check("noise: live Lens Blur with Noise", L::add_live(j, d, "L4", lf), "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_s039n_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image();
+        c.layers = d.snapshot();
+        c.next_id = d.next_id();
+        std::string err;
+        check("noise: saved", core::file::save_klimt(path, c, err), err);
+        const auto back = core::file::open(path, err);
+        check("noise: amount, distribution and seed back from the file",
+              back && back->layers.at("L4").filters == d.get("L4")->filters && back->layers.at("L4").filters.back().f.seed == 91, err);
+        fs::remove(path);
+    }
+
     std::cout << "\n-- s034: live, filter layers, the file --\n";
     {
         core::live::clear_cache();

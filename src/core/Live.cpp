@@ -17,6 +17,7 @@ namespace {
 struct Entry {
     std::shared_ptr<const pixel::TileMap> src;   // held: the pointer stays unique while cached
     std::shared_ptr<const pixel::TileMap> mask;  // m3: the filter mask (nullptr: none)
+    std::shared_ptr<const pixel::TileMap> depth; // s039: the layer mask, when a Lens Blur reads it
     std::vector<LiveFilter> stack;
     Styles styles;   // s019 (and the fill, which styles keep off their effects)
     int fill = 100;
@@ -37,8 +38,9 @@ std::vector<LiveFilter> on_only(const std::vector<LiveFilter>& s) {
 
 // The whole look of `src`: the stack, the filter mask, the styles.
 std::shared_ptr<const pixel::TileMap> whole(const pixel::TileMap& src, const std::vector<LiveFilter>& stack,
-                                            const pixel::TileMap* mask, const Styles& st, int fill) {
-    auto out = run(src, stack);
+                                            const pixel::TileMap* mask, const Styles& st, int fill,
+                                            const pixel::TileMap* depth = nullptr) {
+    auto out = run(src, stack, nullptr, {}, depth);
     if (out && mask) out = masked(src, *out, *mask);
     if (out && st.any()) out = styles::drawn(*out, st, fill);
     return out ? std::make_shared<const pixel::TileMap>(std::move(*out)) : nullptr;
@@ -73,7 +75,8 @@ std::shared_ptr<const pixel::TileMap> partly(const pixel::TileMap& src, const pi
         return nullptr;
     if (src.has_outside() || was_src.has_outside() || was.has_outside()) return nullptr;
     for (const auto& f : stack)   // they depend on where they are: Add Noise, s023 a Dissolve blend
-        if (f.f.kind == FilterKind::AddNoise || f.mode == pixel::Blend::Dissolve) return nullptr;
+        if (f.f.kind == FilterKind::AddNoise || f.mode == pixel::Blend::Dissolve ||
+            (f.f.kind == FilterKind::LensBlur && f.f.amount > 0)) return nullptr;   // s039: Lens Blur's Noise
     int reach_px = 0;
     for (const auto& f : stack) reach_px += filter::reach(f.f);
     if (st.any()) reach_px += styles::reach(st);
@@ -110,8 +113,13 @@ std::shared_ptr<const pixel::TileMap> partly(const pixel::TileMap& src, const pi
 }
 }  // namespace
 
+bool wants_mask(const std::vector<LiveFilter>& stack) {
+    for (const auto& f : stack) if (f.on && filter::wants_mask(f.f)) return true;
+    return false;
+}
+
 std::optional<pixel::TileMap> run(const pixel::TileMap& src, const std::vector<LiveFilter>& stack, const pixel::Rect* only,
-                                  const std::function<bool()>& cancelled) {
+                                  const std::function<bool()>& cancelled, const pixel::TileMap* depth) {
     const auto on = on_only(stack);
     pixel::TileMap cur = src;
     for (std::size_t i = 0; i < on.size(); ++i) {
@@ -121,7 +129,7 @@ std::optional<pixel::TileMap> run(const pixel::TileMap& src, const std::vector<L
             for (std::size_t k = i + 1; k < on.size(); ++k) later += filter::reach(on[k].f);
             r = pixel::Rect{only->x - later, only->y - later, only->w + 2 * later, only->h + 2 * later};
         }
-        auto next = filter::filtered(cur, on[i].f, nullptr, false, r ? &*r : nullptr, cancelled);
+        auto next = filter::filtered(cur, on[i].f, nullptr, false, r ? &*r : nullptr, cancelled, {}, depth);
         if (!next) return std::nullopt;
         // s023: its blending -- the result faded over what went in.
         if (on[i].opacity < 100 || on[i].mode != pixel::Blend::Normal) {
@@ -195,6 +203,7 @@ int reach(const Layer& l) {
 std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
     if (!active(l)) return l.pixels;
     const auto stack = on_only(l.filters);
+    const auto depth = wants_mask(stack) ? l.mask : nullptr;   // s039
     std::shared_future<std::shared_ptr<const pixel::TileMap>> fut;
     std::promise<std::shared_ptr<const pixel::TileMap>> mine;
     bool compute = false;
@@ -203,7 +212,7 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
     {
         std::lock_guard g(g_mutex);
         for (auto& e : g_cache)
-            if (e.src == l.pixels && e.mask == l.filter_mask && e.stack == stack && e.styles == l.styles &&
+            if (e.src == l.pixels && e.mask == l.filter_mask && e.depth == depth && e.stack == stack && e.styles == l.styles &&
                 (!l.styles.any() || e.fill == l.fill)) { e.used = ++g_clock; fut = e.result; break; }
         if (!fut.valid()) {
             if (g_cache.size() >= kKeep) {   // the least used, finished entry goes
@@ -217,14 +226,14 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
             // pixels of the same size -- likely the same layer a dab ago.
             std::uint64_t best = 0;
             for (const auto& e : g_cache)
-                if (e.mask == l.filter_mask && e.stack == stack && e.styles == l.styles && (!l.styles.any() || e.fill == l.fill) &&
+                if (e.mask == l.filter_mask && e.depth == depth && e.stack == stack && e.styles == l.styles && (!l.styles.any() || e.fill == l.fill) &&
                     e.src && e.src->width() == l.pixels->width() && e.src->height() == l.pixels->height() && e.used > best) {
                     best = e.used;
                     parent_src = e.src;
                     parent = e.result;
                 }
             fut = mine.get_future().share();
-            g_cache.push_back({l.pixels, l.filter_mask, stack, l.styles, l.fill, fut, ++g_clock});
+            g_cache.push_back({l.pixels, l.filter_mask, depth, stack, l.styles, l.fill, fut, ++g_clock});
             compute = true;
         }
     }
@@ -233,12 +242,12 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
         // share most tiles with these (the stroke before) -- only the change
         // and its reach are worked.
         std::shared_ptr<const pixel::TileMap> out;
-        if (parent_src && parent.valid()) {
+        if (parent_src && parent.valid() && !depth) {   // s039: a depth map -- whole
             const auto was = parent.get();
             if (was) out = partly(*l.pixels, *parent_src, *was, stack, l.filter_mask.get(), l.styles, l.fill);
             if (out) g_partly.fetch_add(1, std::memory_order_relaxed);
         }
-        if (!out) out = whole(*l.pixels, stack, l.filter_mask.get(), l.styles, l.fill);   // s019: the effects, the fill on the content
+        if (!out) out = whole(*l.pixels, stack, l.filter_mask.get(), l.styles, l.fill, depth.get());   // s019: the effects, the fill on the content
         mine.set_value(out ? out : l.pixels);
     }
     return fut.get();

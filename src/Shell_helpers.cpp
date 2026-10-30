@@ -18,6 +18,12 @@ namespace klimt {
 
 // A demo document so the panels have something to show: LOADED, not a user
 // choice, so it is not a step. Replaced by File > Open when there are pixels.
+// s039 m3: the Refine brush in hand, its Overlay on, something selected --
+// the unselected show under Quick Mask's red.
+bool Shell::refine_overlay() const {
+    return m_rail.tool() == "refine" && m_strip.refine().overlay && m_doc.selection_ptr() != nullptr;
+}
+
 void Shell::load_demo() {
     namespace P = pixel;
     core::Document::Loading load(m_doc);
@@ -300,8 +306,10 @@ void Shell::queue_render() {
         // s016: Quick Mask's red follows the selection -- on / off redraws all;
         // a painted selection redraws the tiles whose mask changed.
         // s024: Color Range's preview shows the same way.
-        const bool qm_flag = m_quick_mask || m_range_preview;
-        const auto qm = m_range_preview ? m_range_preview : m_quick_mask ? m_doc.selection_ptr() : nullptr;
+        // s039 m3: the Refine brush's overlay -- the selection, the same way.
+        const bool ref_ov = refine_overlay();
+        const bool qm_flag = m_quick_mask || m_range_preview || ref_ov;
+        const auto qm = m_range_preview ? m_range_preview : (m_quick_mask || ref_ov) ? m_doc.selection_ptr() : nullptr;
         if (qm_flag != m_shown_qm_on) m_dirty.add_all();
         else if (qm_flag && qm != m_shown_qm) {
             if (!qm || !m_shown_qm) m_dirty.add_all();

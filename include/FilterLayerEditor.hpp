@@ -44,6 +44,9 @@ private:
     std::vector<Row> m_rows;
     Gtk::CheckButton* m_gauss = nullptr;
     Gtk::CheckButton* m_mono = nullptr;
+    Gtk::DropDown*    m_depth = nullptr;    // s039: Lens Blur's depth map -- None / Transparency
+    Gtk::CheckButton* m_invert = nullptr;
+    std::vector<Gtk::Widget*> m_depth_only;
     Gtk::Box m_body{Gtk::Orientation::VERTICAL, 4};
     bool m_syncing = false;
     core::FilterKind m_built = core::FilterKind::None;

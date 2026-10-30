@@ -616,8 +616,46 @@ void surface(const std::vector<float>& buf, std::vector<float>& out, int W, int 
 // row spans from prefix sums (the ends weighted by how much of the end pixel
 // the span covers) -- a pixel costs 2r + 1 rows, as the disc.
 // (A brightened light may pass 1: the write-out clamps it -- ranked().)
+// Each iris row's whole pixels [a, z] and its two part pixels (weights wl, wr).
+struct LensSpan { int a, z; double wl, wr; };
+// s039: one radius's iris as spans, and 1 / its area.
+struct LensLevel { int r = 0; std::vector<LensSpan> sp; double inv = 1; };
+LensLevel lens_level(const std::vector<IrisRow>& rows) {
+    LensLevel lv;
+    lv.r = static_cast<int>(rows.size() / 2);
+    lv.sp.resize(rows.size());
+    double count = 0;
+    for (std::size_t k = 0; k < rows.size(); ++k) {
+        const double lo = rows[k].lo - 0.5, hi = rows[k].hi + 0.5;   // pixel j covers [j - .5, j + .5]
+        LensSpan s{0, -1, 0, 0};
+        if (hi > lo) {
+            s.a = static_cast<int>(std::ceil(lo + 0.5));     // first pixel wholly inside
+            s.z = static_cast<int>(std::floor(hi - 0.5));    // last
+            if (s.a > s.z) { s.a = 0; s.z = -1; s.wl = hi - lo; }   // within one pixel: a part of it
+            else { s.wl = (s.a - 0.5) - lo; s.wr = hi - (s.z + 0.5); }
+        }
+        count += (s.z - s.a + 1) + s.wl + s.wr;
+        lv.sp[k] = s;
+    }
+    lv.inv = count > 0 ? 1.0 / count : 1.0;
+    return lv;
+}
+// s039: a DEPTH MAP's irises -- a level every quarter pixel of radius, 0 (sharp) .. the full one.
+constexpr int kLensSteps = 4;
+std::vector<LensLevel> lens_levels(const Filter& f) {
+    const int n = static_cast<int>(std::ceil(f.radius * kLensSteps));
+    std::vector<LensLevel> v(static_cast<std::size_t>(n + 1));
+    for (int k = 1; k <= n; ++k)
+        v[static_cast<std::size_t>(k)] = lens_level(iris(static_cast<double>(k) / kLensSteps, static_cast<int>(f.blades), f.curvature / 100, f.angle));
+    return v;
+}
+
+// `amt` (s039, nullptr: 1 everywhere) -- each of the band's own pixels' share
+// of the full radius, from the depth map; `levels` its irises. A pixel at 0
+// keeps its own value (not the brightened one).
 void lens(const std::vector<float>& buf, std::vector<float>& out, int W, int H, int C, int cc, bool has_a, const Rect& b,
-          const Filter& f, const std::function<bool()>& stop) {
+          const Filter& f, const std::function<bool()>& stop, const float* amt = nullptr,
+          const std::vector<LensLevel>* levels = nullptr) {
     const auto rows = iris(f.radius, static_cast<int>(f.blades), f.curvature / 100, f.angle);
     const int r = static_cast<int>(rows.size() / 2);
     // The highlights.
@@ -650,23 +688,10 @@ void lens(const std::vector<float>& buf, std::vector<float>& out, int W, int H, 
                 P[static_cast<std::size_t>(x + 1) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)] =
                     P[static_cast<std::size_t>(x) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)] + in[static_cast<std::size_t>(x) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)];
     }
-    // Each row's whole pixels [a, z] and its two part pixels (weights wl, wr).
-    struct Span { int a, z; double wl, wr; };
-    std::vector<Span> sp(rows.size());
-    double count = 0;
-    for (std::size_t k = 0; k < rows.size(); ++k) {
-        const double lo = rows[k].lo - 0.5, hi = rows[k].hi + 0.5;   // pixel j covers [j - .5, j + .5]
-        Span s{0, -1, 0, 0};
-        if (hi > lo) {
-            s.a = static_cast<int>(std::ceil(lo + 0.5));     // first pixel wholly inside
-            s.z = static_cast<int>(std::floor(hi - 0.5));    // last
-            if (s.a > s.z) { s.a = 0; s.z = -1; s.wl = hi - lo; }   // within one pixel: a part of it
-            else { s.wl = (s.a - 0.5) - lo; s.wr = hi - (s.z + 0.5); }
-        }
-        count += (s.z - s.a + 1) + s.wl + s.wr;
-        sp[k] = s;
-    }
-    const double inv = count > 0 ? 1.0 / count : 1.0;
+    using Span = LensSpan;
+    const LensLevel full = lens_level(rows);
+    const std::vector<Span>& sp = full.sp;
+    const double inv = full.inv;
     // A pixel with its edges clamped.
     const auto at = [&](int x, int yy, int c) {
         return static_cast<double>((*src)[(static_cast<std::size_t>(yy) * static_cast<std::size_t>(W) + static_cast<std::size_t>(std::clamp(x, 0, W - 1))) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)]);
@@ -703,6 +728,40 @@ void lens(const std::vector<float>& buf, std::vector<float>& out, int W, int H, 
             for (int c = 0; c < CC; ++c) A[c] += Pz[c] - Pa[c] + wl * Lp[c] + wr * Rp[c];
         }
     };
+    if (amt && levels && !levels->empty()) {
+        // s039 -- A DEPTH MAP: each pixel its own iris (the level nearest its
+        // share of the radius), its rows from the same prefix sums.
+        const int top = static_cast<int>(levels->size()) - 1;
+        for (int y = b.y; y < b.y + b.h; ++y) {
+            if ((y & 7) == 0 && stop && stop()) return;
+            for (int x = b.x; x < b.x + b.w; ++x) {
+                const float t = amt[static_cast<std::size_t>(y - b.y) * static_cast<std::size_t>(b.w) + static_cast<std::size_t>(x - b.x)];
+                const int k = std::clamp(static_cast<int>(std::lround(t * f.radius * kLensSteps)), 0, top);
+                float* o = out.data() + (static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)) * static_cast<std::size_t>(C);
+                const float* own = buf.data() + (static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)) * static_cast<std::size_t>(C);
+                if (k == 0) { std::copy(own, own + C, o); continue; }
+                const LensLevel& lv = (*levels)[static_cast<std::size_t>(k)];
+                double A[4] = {0, 0, 0, 0};
+                for (int dy = -lv.r; dy <= lv.r; ++dy) {
+                    const Span& s = lv.sp[static_cast<std::size_t>(dy + lv.r)];
+                    const int yy = std::clamp(y + dy, 0, H - 1);
+                    const double* P = pre.data() + static_cast<std::size_t>(yy - y0) * row_n;
+                    if (s.z >= s.a && x + s.a - 1 >= 0 && x + s.z + 1 <= W - 1) {
+                        const float* in = src->data() + static_cast<std::size_t>(yy) * static_cast<std::size_t>(W) * static_cast<std::size_t>(C);
+                        const double* Pa = P + static_cast<std::size_t>(x + s.a) * static_cast<std::size_t>(C);
+                        const double* Pz = P + static_cast<std::size_t>(x + s.z + 1) * static_cast<std::size_t>(C);
+                        const float* Lp = in + static_cast<std::ptrdiff_t>(x + s.a - 1) * C;
+                        const float* Rp = in + static_cast<std::size_t>(x + s.z + 1) * static_cast<std::size_t>(C);
+                        for (int c = 0; c < C; ++c) A[c] += Pz[c] - Pa[c] + s.wl * Lp[c] + s.wr * Rp[c];
+                    } else {
+                        slow(A, x, s, P, yy);
+                    }
+                }
+                for (int c = 0; c < C; ++c) o[c] = static_cast<float>(A[c] * lv.inv);
+            }
+        }
+        return;
+    }
     for (int y = b.y; y < b.y + b.h; ++y) {
         if ((y & 7) == 0 && stop && stop()) return;
         std::fill(acc.begin(), acc.end(), 0.0);
@@ -792,6 +851,25 @@ std::vector<IrisRow> iris(double radius, int blades, double curvature, double an
     return rows;
 }
 
+double depth_amount(const Filter& f, double d) {
+    d = std::clamp(d, 0.0, 1.0);
+    if (f.invert) d = 1 - d;
+    const double F = std::clamp(f.focal, 0.0, 255.0) / 255.0;
+    if (d < F) return (F - d) / F;
+    if (d > F) return (d - F) / (1 - F);
+    return 0;
+}
+std::string_view depth_key(DepthSource s) {
+    return s == DepthSource::Transparency ? "transparency" : s == DepthSource::LayerMask ? "layer-mask" : "none";
+}
+std::optional<DepthSource> depth_from(std::string_view k) {
+    if (k == "none") return DepthSource::None;
+    if (k == "transparency") return DepthSource::Transparency;
+    if (k == "layer-mask") return DepthSource::LayerMask;
+    return std::nullopt;
+}
+bool wants_mask(const Filter& f) { return f.kind == FilterKind::LensBlur && f.depth == DepthSource::LayerMask; }
+
 const std::vector<FilterKind>& kinds() {
     // Alphabetical within each submenu, as Photoshop's.
     static const std::vector<FilterKind> v{FilterKind::BoxBlur, FilterKind::GaussianBlur, FilterKind::LensBlur, FilterKind::MotionBlur, FilterKind::SurfaceBlur,
@@ -857,6 +935,7 @@ Filter normalised(const Filter& in) {
     if (f.kind == FilterKind::UnsharpMask || f.kind == FilterKind::SmartSharpen) f.amount = std::round(std::clamp(f.amount, 1.0, 500.0));
     else if (f.kind == FilterKind::AddNoise) f.amount = std::round(std::clamp(f.amount, 0.1, 400.0) * 10) / 10;
     else if (f.kind == FilterKind::ReduceNoise) f.amount = std::round(std::clamp(f.amount, 0.0, 10.0));
+    else if (f.kind == FilterKind::LensBlur) f.amount = std::round(std::clamp(f.amount, 0.0, 100.0));   // s039: its Noise
     else f.amount = 0;
     if (f.kind == FilterKind::SurfaceBlur) f.threshold = std::max(f.threshold, 2);   // m4
     else if (f.kind != FilterKind::UnsharpMask && f.kind != FilterKind::DustScratches && f.kind != FilterKind::LensBlur) f.threshold = 0;
@@ -881,8 +960,14 @@ Filter normalised(const Filter& in) {
         f.blades = std::round(std::clamp(f.blades, 3.0, 8.0));
         f.curvature = pct(f.curvature);
         f.bright = pct(f.bright);
-    } else { f.blades = blank.blades; f.curvature = blank.curvature; f.bright = blank.bright; }
-    if (f.kind != FilterKind::AddNoise) { f.gaussian = f.mono = false; f.seed = 1; }
+        // s039: the depth map
+        if (f.depth != DepthSource::Transparency && f.depth != DepthSource::LayerMask) f.depth = DepthSource::None;
+        f.focal = std::round(std::clamp(f.focal, 0.0, 255.0));
+    } else {
+        f.blades = blank.blades; f.curvature = blank.curvature; f.bright = blank.bright;
+        f.depth = blank.depth; f.focal = blank.focal; f.invert = blank.invert;
+    }
+    if (f.kind != FilterKind::AddNoise && f.kind != FilterKind::LensBlur) { f.gaussian = f.mono = false; f.seed = 1; }   // s039: Lens Blur's Noise has them
     if (f.kind == FilterKind::AddNoise) f.radius = 0.1;
     return f;
 }
@@ -926,7 +1011,7 @@ void blur_line(float* p, int n, int stride, double sigma) {
 
 std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& in, const pixel::TileMap* sel, bool keep_alpha,
                                        const Rect* only, const std::function<bool()>& cancelled,
-                                       const std::function<void(double)>& progress) {
+                                       const std::function<void(double)>& progress, const pixel::TileMap* depth) {
     const auto& fmt = src.format();
     if (fmt.mode != pixel::Mode::RGB && fmt.mode != pixel::Mode::Gray) return std::nullopt;
     if (in.kind == FilterKind::None) return src;
@@ -944,6 +1029,10 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
     const Plan pl = gaussian(f.kind) ? plan_of(f.radius) : f.kind == FilterKind::BoxBlur ? box_plan(static_cast<int>(f.radius)) : Plan{};
     const int pad = reach(f);
     const int bins = fmt.depth == pixel::Depth::U8 ? 256 : 1024;
+    // s039: Lens Blur's depth map -- the layer's alpha, or the mask passed in.
+    const bool by_depth = f.kind == FilterKind::LensBlur &&
+                          (f.depth == DepthSource::Transparency || (f.depth == DepthSource::LayerMask && depth));
+    const std::vector<LensLevel> levels = by_depth ? lens_levels(f) : std::vector<LensLevel>{};
 
     const int cols = src.cols(), rows = src.rows();
     std::vector<pixel::TileMap::TileRef> grid(static_cast<std::size_t>(cols) * static_cast<std::size_t>(rows));
@@ -992,8 +1081,35 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
             } else if (f.kind == FilterKind::MotionBlur || ranked(f.kind)) {
                 std::vector<float> out(buf.size());
                 const Rect own{b.x - R.x, b.y - R.y, b.w, b.h};
-                if (f.kind == FilterKind::LensBlur)   // s037
-                    lens(buf, out, R.w, R.h, C, cc, has_a, own, f, stop);
+                if (f.kind == FilterKind::LensBlur) {   // s037
+                    std::vector<float> amt;
+                    if (by_depth) {   // s039: each pixel's share of the radius
+                        amt.resize(static_cast<std::size_t>(b.w) * static_cast<std::size_t>(b.h));
+                        for (int y = b.y; y < b.y + b.h; ++y)
+                            for (int x = b.x; x < b.x + b.w; ++x) {
+                                double d = 1;   // no alpha: opaque everywhere
+                                if (f.depth == DepthSource::LayerMask) d = 1.0 - select::coverage(*depth, x, y);
+                                else if (has_a) d = buf[(static_cast<std::size_t>(y - R.y) * static_cast<std::size_t>(R.w) + static_cast<std::size_t>(x - R.x)) * static_cast<std::size_t>(C) + static_cast<std::size_t>(ai)];
+                                amt[static_cast<std::size_t>(y - b.y) * static_cast<std::size_t>(b.w) + static_cast<std::size_t>(x - b.x)] =
+                                    static_cast<float>(depth_amount(f, d));
+                            }
+                    }
+                    lens(buf, out, R.w, R.h, C, cc, has_a, own, f, stop, by_depth ? amt.data() : nullptr, by_depth ? &levels : nullptr);
+                    if (f.amount > 0) {   // s039: NOISE -- grain back in what blurred, as much as it blurred
+                        Filter nf = f;
+                        nf.amount = f.amount / 4;   // 100 % here: Add Noise's 25 %
+                        for (int y = b.y; y < b.y + b.h; ++y)
+                            for (int x = b.x; x < b.x + b.w; ++x) {
+                                const float t = by_depth ? amt[static_cast<std::size_t>(y - b.y) * static_cast<std::size_t>(b.w) + static_cast<std::size_t>(x - b.x)] : 1.f;
+                                if (t <= 0.f) continue;
+                                float* o = out.data() + (static_cast<std::size_t>(y - R.y) * static_cast<std::size_t>(R.w) + static_cast<std::size_t>(x - R.x)) * static_cast<std::size_t>(C);
+                                const float a = has_a ? o[ai] : 1.f;
+                                if (a <= 0.f) continue;
+                                for (int c = 0; c < cc; ++c)
+                                    o[c] = std::max(0.f, o[c] + noise(nf, x, y, f.mono ? 0 : c) * a * t);
+                            }
+                    }
+                }
                 else if (f.kind == FilterKind::SurfaceBlur)   // m4
                     surface(buf, out, R.w, R.h, C, own, static_cast<int>(f.radius), f.threshold, bins, stop);
                 else if (f.kind == FilterKind::Maximum || f.kind == FilterKind::Minimum)   // m3

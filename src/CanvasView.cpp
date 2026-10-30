@@ -84,6 +84,11 @@ CanvasView::CanvasView() {
     click->set_button(GDK_BUTTON_PRIMARY);
     click->signal_pressed().connect([this, click](int n, double x, double y) {
         grab_focus();
+        if (m_point_pick) {   // s039 m2: one click, a point of the picture
+            const int ix = static_cast<int>(std::floor(to_image_x(x))), iy = static_cast<int>(std::floor(to_image_y(y)));
+            if (ix >= 0 && iy >= 0 && ix < m_iw && iy < m_ih) m_point_pick_signal.emit(ix, iy);
+            return;
+        }
         if (m_tool == "crop" && n == 2 && m_crop && crop_hit(x, y) == -1) { commit_crop(); return; }
         if (m_xf.on) {   // s011: in a transform, a click is the box's; a double-click inside commits
             if (n == 2 && xf_inside(x, y)) m_xf_commit.emit();
@@ -122,6 +127,12 @@ CanvasView::CanvasView() {
         auto drag = Gtk::GestureDrag::create();
         drag->set_button(button);
         drag->signal_drag_begin().connect([this, button, drag](double x, double y) {
+            if (button == GDK_BUTTON_PRIMARY && m_point_pick) {   // s039 m2: the click is the pick's, nothing else's
+                m_pick_press = true;
+                m_panning = false;
+                drag->set_state(Gtk::EventSequenceState::DENIED);
+                return;
+            }
             m_panning = button == GDK_BUTTON_MIDDLE || m_space || m_tool == "hand";
             if (!m_panning && button == GDK_BUTTON_PRIMARY && lasso_open()) {   // s038: a corner, or the close
                 const bool alt = (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
@@ -258,6 +269,7 @@ CanvasView::CanvasView() {
             oy = static_cast<int>(std::lround(iy));
         };
         drag->signal_drag_update().connect([this, drag, offset](double dx, double dy) {
+            if (m_pick_press) return;   // s039 m2
             if (m_hint_drag) {   // s037: a point every quarter of the radius
                 const core::path::P q{to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)};
                 const auto& last = m_hint_cur.pts.back();
@@ -379,6 +391,7 @@ CanvasView::CanvasView() {
             queue_draw();
         });
         drag->signal_drag_end().connect([this, offset, drag](double dx, double dy) {
+            if (m_pick_press) { m_pick_press = false; return; }   // s039 m2
             if (m_hint_drag) {   // s037: the stroke told; the Shell lands it
                 m_hint_drag = false;
                 const core::path::P q{to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)};
@@ -732,6 +745,7 @@ void CanvasView::pen_modifiers() {
 
 void CanvasView::update_cursor() {
     if (m_panning) set_cursor("grabbing");
+    else if (m_point_pick) set_cursor("crosshair");   // s039 m2: Set Focal Point
     else if (m_space || m_tool == "hand") set_cursor("grab");
     else if (m_hint_mode) set_cursor("crosshair");   // s037: painting Isolate strokes (the ring shows the size)
     else if (m_tool == "zoom") set_cursor("zoom-in");

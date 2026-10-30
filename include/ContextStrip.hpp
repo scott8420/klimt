@@ -39,8 +39,11 @@ public:
     bool crop_deletes() const { return m_crop_delete; }
     // s038: the Refine brush -- how far the rough area may cut into the
     // figure (Edge, px), the soft edge (px); its size is brush("refine").size.
-    struct RefineOpts { int band = 12; int soft = 0; };
+    // s039 m3: `overlay` -- while the Refine tool is in hand, what is NOT
+    // selected shows under Quick Mask's red (Pixelmator's overlay).
+    struct RefineOpts { int band = 12; int soft = 0; bool overlay = true; };
     const RefineOpts& refine() const { return m_refine; }
+    sigc::signal<void()>& signal_refine_overlay() { return m_refine_overlay; }   // s039 m3: the overlay turned on / off
     // s008 m4: the Brush's and the Eraser's own options (each remembers).
     struct BrushOpts {
         int size = 30; int hardness = 80; int opacity = 100;
@@ -101,6 +104,7 @@ public:
 
 private:
     sigc::signal<void(bool)> m_pen_point;
+    sigc::signal<void()> m_refine_overlay;   // s039 m3
     std::vector<Gtk::ToggleButton*> m_variant_buttons;   // the shown tool's (managed by the strip)
     bool m_quiet = false;                                 // lighting a button, not choosing
     std::map<std::string, int> m_variant;

@@ -26,8 +26,13 @@ namespace klimt::core::live {
 // The stack runs here: `src` through each filter that is on, in order. With
 // `only`, just enough for that rectangle to be exact (each stage widened by
 // the reach of the stages after it) -- a dialog's preview.
+// s039: `depth` -- the layer's mask, for a Lens Blur whose depth map is its
+// Layer Mask (nullptr: such a blur is even).
 std::optional<pixel::TileMap> run(const pixel::TileMap& src, const std::vector<LiveFilter>& stack,
-                                  const pixel::Rect* only = nullptr, const std::function<bool()>& cancelled = {});
+                                  const pixel::Rect* only = nullptr, const std::function<bool()>& cancelled = {},
+                                  const pixel::TileMap* depth = nullptr);
+// s039: the stack has a Lens Blur reading the Layer Mask.
+bool wants_mask(const std::vector<LiveFilter>& stack);
 
 bool active(const Layer& l);              // a pixel layer with pixels and a filter on
 bool any(const Layers& ls);               // any layer active

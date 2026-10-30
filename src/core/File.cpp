@@ -354,7 +354,8 @@ json live_json(const LiveFilter& lf) {
             {"shadow_fade", f.shadow_fade}, {"shadow_tonal", f.shadow_tonal}, {"shadow_radius", f.shadow_radius},
             {"light_fade", f.light_fade}, {"light_tonal", f.light_tonal}, {"light_radius", f.light_radius},
             {"preserve", f.preserve}, {"colour", f.colour}, {"sharpen", f.sharpen}, {"round", f.round},
-            {"blades", f.blades}, {"curvature", f.curvature}, {"bright", f.bright}};   // s037: Lens Blur
+            {"blades", f.blades}, {"curvature", f.curvature}, {"bright", f.bright},   // s037: Lens Blur
+            {"depth", std::string(filter::depth_key(f.depth))}, {"focal", f.focal}, {"invert", f.invert}};   // s039
 }
 std::optional<LiveFilter> live_from(const json& j) {
     const std::string key = j.at("kind").get<std::string>();
@@ -387,9 +388,12 @@ std::optional<LiveFilter> live_from(const json& j) {
     lf.f.blades = j.value("blades", 6.0);       // s037
     lf.f.curvature = j.value("curvature", 0.0);
     lf.f.bright = j.value("bright", 0.0);
+    if (const auto d = filter::depth_from(j.value("depth", std::string("none")))) lf.f.depth = *d;   // s039
+    lf.f.focal = j.value("focal", 0.0);
+    lf.f.invert = j.value("invert", false);
     const std::uint32_t seed = lf.f.seed;
     lf.f = filter::normalised(lf.f);
-    lf.f.seed = lf.f.kind == FilterKind::AddNoise ? seed : lf.f.seed;
+    lf.f.seed = (lf.f.kind == FilterKind::AddNoise || lf.f.kind == FilterKind::LensBlur) ? seed : lf.f.seed;   // s039: Lens Blur's Noise
     return lf;
 }
 

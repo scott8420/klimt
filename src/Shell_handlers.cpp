@@ -94,6 +94,7 @@ void Shell::on_tool(const std::string& id) {  // view state: not a step
         update_paths();   // s035: the Pen shows the active path
         m_canvas.set_brush_size(m_strip.brush(id).size);
         m_canvas.set_hint_mode(id == "refine" ? 1 : 0, m_strip.brush("refine").size / 2.0);   // s038: the Refine brush paints hints
+        if (refine_overlay() != m_shown_qm_on) queue_render();   // s039 m3: the Refine overlay comes / goes with the tool
         { const auto o = m_strip.brush(id); m_canvas.set_brush_shape(o.tip, o.angle, o.roundness / 100.0); }   // s017
         if (auto lg = log::get(log::Area::Shell)) lg->info("tool: {}", id);
     }

@@ -31,6 +31,11 @@ enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass
 // s034: what Smart Sharpen takes away -- the blur it undoes.
 enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
 
+// s039: Lens Blur's DEPTH MAP source (Photoshop's): None (the same blur
+// everywhere), the layer's Transparency (its alpha), or its Layer Mask (as
+// painted: white 255, black 0).
+enum class DepthSource : std::uint8_t { None, Transparency, LayerMask };
+
 struct Filter {
     FilterKind kind = FilterKind::None;
     // Gaussian Blur, Unsharp Mask, High Pass: the radius in pixels, 0.1 .. 250
@@ -75,6 +80,15 @@ struct Filter {
     // than this is taken as a light, brightened before the blur, so it blooms
     // into the iris's shape -- bokeh).
     double blades = 6, curvature = 0, bright = 0;
+    // s039 -- Lens Blur's DEPTH MAP: `depth` the source; `focal` 0 .. 255,
+    // the Blur Focal Distance -- the depth that stays sharp, the blur growing
+    // to the full radius at either end (focal 100: 1 and 255 both fully
+    // blurred, Photoshop's example); `invert` turns the map over.
+    // Its NOISE (s039 m2): `amount` 0 .. 100, `gaussian` / `mono` / `seed` as
+    // Add Noise's -- grain put back in the blurred parts.
+    DepthSource depth = DepthSource::None;
+    double focal = 0;
+    bool invert = false;
     bool operator==(const Filter&) const = default;
 };
 
@@ -112,6 +126,15 @@ int reach(const Filter& f);
 struct IrisRow { double lo, hi; };
 std::vector<IrisRow> iris(double radius, int blades, double curvature, double angle_deg);
 
+// s039: how much of the full radius a pixel of depth `d` (0 .. 1, as the map
+// gives it -- before Invert) is blurred by: 0 at the focal distance, 1 at
+// whichever end is farther from it on that side. For the selftest too.
+double depth_amount(const Filter& f, double d);
+std::string_view depth_key(DepthSource s);        // "none", "transparency", "layer-mask"
+std::optional<DepthSource> depth_from(std::string_view key);
+// The Layer Mask source wants the layer's mask passed in (`depth` below).
+bool wants_mask(const Filter& f);
+
 // The 1-D blur Gaussian Blur, Unsharp Mask and High Pass share, along a line of n samples with
 // stride `stride` floats (edges clamp): sigma < 3 an exact Gaussian kernel,
 // else three box passes of Kovesi's widths. For the selftest.
@@ -127,7 +150,11 @@ void blur_line(float* p, int n, int stride, double sigma);
 std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& f, const pixel::TileMap* sel,
                                        bool keep_alpha = false, const pixel::Rect* only = nullptr,
                                        const std::function<bool()>& cancelled = {},
-                                       const std::function<void(double)>& progress = {});
+                                       const std::function<void(double)>& progress = {},
+                                       const pixel::TileMap* depth = nullptr);
+// s039: `depth` -- Lens Blur's Layer Mask source: the layer's mask (stored as
+// what it hides, as Document's). nullptr with that source: the blur is even
+// (as None). Transparency reads `src`'s own alpha.
 }  // namespace filter
 
 }  // namespace klimt::core

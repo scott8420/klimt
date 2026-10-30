@@ -436,6 +436,7 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
         append(*pt);
     }
     if (t.id == "refine") {   // s038: the Refine brush
+        with_settings("Settings", "The Refine brush: size, edge, soft, the overlay -- and Save as Default");   // s039 m3
         number_field(*this, "Size", 1, 2500, brush("refine").size, "px", "The stroke's width  ([ and ] change it)",
                      [this] { return brush("refine").size; },
                      [this](int v) {
@@ -451,6 +452,18 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
         number_field(*this, "Soft", 0, 64, m_refine.soft, "px",
                      "Hair, fur, soft focus: within this many pixels of the edge, how much is subject is read from the colour (0: a clean edge)",
                      [this] { return m_refine.soft; }, [this](int v) { m_refine.soft = v; });
+        // s039 m3: the overlay -- the unselected under red while you paint.
+        auto ov = Gtk::make_managed<Gtk::ToggleButton>("Overlay");
+        ov->set_name("strip.refine_overlay");
+        ov->set_tooltip_text("Show what is NOT selected under a red veil (Quick Mask's) while the Refine brush is in hand -- "
+                             "you see the cut, not just the ants");
+        ov->set_active(m_refine.overlay);
+        ov->signal_toggled().connect([this, ov] {
+            if (m_refine.overlay == ov->get_active()) return;
+            m_refine.overlay = ov->get_active();
+            m_refine_overlay.emit();
+        });
+        append(*ov);
     }
     if (t.id == "select" || t.id == "refine") {   // s038: the rough selection snapped to the subject
         auto snap = Gtk::make_managed<Gtk::Button>("Refine to Edges");
@@ -484,7 +497,7 @@ bool ContextStrip::is_brush_tool(const std::string& t) {
 }
 
 bool ContextStrip::has_settings(const std::string& t) {
-    return is_brush_tool(t) || t == "gradient" || t == "crop" || t == "select";
+    return is_brush_tool(t) || t == "gradient" || t == "crop" || t == "select" || t == "refine";   // s039 m3: Refine
 }
 
 std::string ContextStrip::tip_label(const BrushOpts& b) {
@@ -738,6 +751,18 @@ Gtk::Widget* ContextStrip::settings_panel(const std::string& id, Gtk::Popover* p
         check(w, "All layers", "Look at what you see (every layer); off: the selected layer only", m_wand.all_layers,
               [this](bool v) { m_wand.all_layers = v; });
     }
+    if (id == "refine") {   // s039 m3: the Refine brush -- so it can be saved as a default
+        auto r = page("refine", "Refine Brush");
+        field(r, "Size", 1, 2500, brush("refine").size, "px", "The stroke's width  ([ and ] change it)",
+              [this] { return brush("refine").size; },
+              [this](int v) { auto o = brush("refine"); o.size = v; m_brush["refine"] = o; m_brush_signal.emit(); });
+        field(r, "Edge", 2, 64, m_refine.band, "px", "How far your rough selection may cut INTO the subject",
+              [this] { return m_refine.band; }, [this](int v) { m_refine.band = v; });
+        field(r, "Soft", 0, 64, m_refine.soft, "px", "Hair, fur, soft focus: the soft edge's width (0: a clean edge)",
+              [this] { return m_refine.soft; }, [this](int v) { m_refine.soft = v; });
+        check(r, "Overlay", "What is NOT selected under a red veil while the Refine brush is in hand", m_refine.overlay,
+              [this](bool v) { if (m_refine.overlay != v) { m_refine.overlay = v; m_refine_overlay.emit(); } });
+    }
     if (pages == 0) {
         auto none = Gtk::make_managed<Gtk::Label>("No settings for this tool.");
         none->add_css_class("dim-label");
@@ -788,6 +813,7 @@ const char* group_of(const std::string& t) {
     if (t == "crop") return "crop";
     if (t == "select") return "wand";
     if (t == "clone" || t == "heal") return "source";
+    if (t == "refine") return "refine";   // s039 m3
     return nullptr;
 }
 int get_or(const std::map<std::string, int>& m, const char* k, int v) { const auto it = m.find(k); return it == m.end() ? v : it->second; }
@@ -797,7 +823,7 @@ void ContextStrip::set_defaults_file(const std::string& file) {
     m_defaults_file = file;
     m_defaults = core::load_tool_defaults(file);
     for (const auto& [tool, p] : m_defaults.brushes) if (is_brush_tool(tool)) m_brush[tool] = opts_of(p);
-    for (const char* t : {"gradient", "crop", "select", "clone"}) apply_defaults(t, false);
+    for (const char* t : {"gradient", "crop", "select", "clone", "refine"}) apply_defaults(t, false);   // s039 m3: Refine
     if (!m_shown.empty()) refresh_strip(m_shown);
     m_brush_signal.emit();
 }
@@ -825,6 +851,15 @@ void ContextStrip::apply_defaults(const std::string& t, bool factory) {
         m_gradient.to_transparent = get_or(m, "to_transparent", f.to_transparent) != 0;
     } else if (t == "crop") {
         m_crop_delete = get_or(m, "delete", 0) != 0;
+    } else if (t == "refine") {   // s039 m3
+        const RefineOpts f;
+        auto o = brush("refine");
+        o.size = std::clamp(get_or(m, "size", BrushOpts{}.size), 1, 2500);
+        m_brush["refine"] = o;
+        m_refine.band = std::clamp(get_or(m, "edge", f.band), 2, 64);
+        m_refine.soft = std::clamp(get_or(m, "soft", f.soft), 0, 64);
+        const bool ov = get_or(m, "overlay", f.overlay) != 0;
+        if (ov != m_refine.overlay) { m_refine.overlay = ov; m_refine_overlay.emit(); }
     } else if (t == "select") {
         const Wand f;
         m_wand.tolerance = std::clamp(get_or(m, "tolerance", f.tolerance), 0, 255);
@@ -866,6 +901,8 @@ void ContextStrip::save_tool_default(const std::string& t) {
         m_defaults.others["crop"] = {{"delete", m_crop_delete}};
     else if (t == "select")
         m_defaults.others["wand"] = {{"tolerance", m_wand.tolerance}, {"contiguous", m_wand.contiguous}, {"all_layers", m_wand.all_layers}};
+    else if (t == "refine")   // s039 m3
+        m_defaults.others["refine"] = {{"size", brush("refine").size}, {"edge", m_refine.band}, {"soft", m_refine.soft}, {"overlay", m_refine.overlay}};
     else if (t == "clone" || t == "heal")
         m_defaults.others["source"] = {{"aligned", m_clone.aligned}, {"all_layers", m_clone.all_layers}};
     if (!m_defaults_file.empty()) core::save_tool_defaults(m_defaults_file, m_defaults);

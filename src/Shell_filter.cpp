@@ -60,9 +60,10 @@ void Shell::filter_run(const core::Filter& f) {
     const auto sel = m_doc.selection_ptr();
     const bool keep_alpha = (cur->locks & core::lock::Alpha) != 0;
     const std::string label(F::label(f.kind));
-    m_filter_landing = start_job(label, [this, target, before, sel, f, keep_alpha, label](core::Jobs::Token& t) -> core::Jobs::Landing {
+    const auto depth = F::wants_mask(f) ? cur->mask : nullptr;   // s039: Lens Blur's depth map
+    m_filter_landing = start_job(label, [this, target, before, sel, f, keep_alpha, label, depth](core::Jobs::Token& t) -> core::Jobs::Landing {
         auto out = F::filtered(*before, f, sel.get(), keep_alpha, nullptr, [&t] { return t.cancelled(); },
-                               [&t](double p) { t.progress(p); });
+                               [&t](double p) { t.progress(p); }, depth.get());
         if (!out || t.cancelled()) return [] {};
         auto res = std::make_shared<pixel::TileMap>(std::move(*out));
         return [this, target, before, sel, res, label] {
@@ -111,14 +112,16 @@ void Shell::filter_preview_soon() {
         if (editing) stack[*m_filter_edit].f = f;
         else if (live) stack.push_back({f, true});
         const int later = core::live::reach(*l);
-        m_filter_job = start_job("Preview", [this, src, sel, keep_alpha, f, view, target, stack, editing, live, later](core::Jobs::Token& t) -> core::Jobs::Landing {
+        const auto depth = l->mask;   // s039: Lens Blur's depth map (Layer Mask)
+        m_filter_job = start_job("Preview", [this, src, sel, keep_alpha, f, view, target, stack, editing, live, later, depth](core::Jobs::Token& t) -> core::Jobs::Landing {
             const auto stop = [&t] { return t.cancelled(); };
             std::optional<pixel::TileMap> out;
-            if (editing || live) out = core::live::run(*src, stack, &view, stop);
+            if (editing || live) out = core::live::run(*src, stack, &view, stop, depth.get());
             else {   // the pixels changed, then the stack over them
                 const pixel::Rect wide{view.x - later, view.y - later, view.w + 2 * later, view.h + 2 * later};
-                auto base = F::filtered(*src, f, sel.get(), keep_alpha, &wide, stop, [&t](double p) { t.progress(p); });
-                if (base) out = core::live::run(*base, stack, &view, stop);
+                auto base = F::filtered(*src, f, sel.get(), keep_alpha, &wide, stop, [&t](double p) { t.progress(p); },
+                                        F::wants_mask(f) ? depth.get() : nullptr);
+                if (base) out = core::live::run(*base, stack, &view, stop, depth.get());
             }
             if (!out || t.cancelled()) return [] {};
             auto res = std::make_shared<const pixel::TileMap>(std::move(*out));
@@ -136,6 +139,25 @@ void Shell::filter_preview_soon() {
     }, 120);
 }
 
+// s039 m2: SET FOCAL POINT -- the depth map's value at (x, y) becomes the
+// focal distance (the dialog turns it over when Invert is on).
+void Shell::on_focal_point(int x, int y) {
+    m_canvas.set_point_pick(false);
+    if (!m_filter_dialog || !m_filter_dialog->get_visible()) return;
+    const auto l = m_doc.get(m_filter_target);
+    const auto& f = m_filter_dialog->value();
+    if (!l || f.kind != core::FilterKind::LensBlur) { m_filter_dialog->focal_pick_off(); return; }
+    double d = 1;
+    if (f.depth == core::DepthSource::LayerMask) {
+        if (!l->mask) { toast("Set Focal Point: the layer has no mask"); m_filter_dialog->focal_pick_off(); return; }
+        d = 1.0 - core::select::coverage(*l->mask, x, y);
+    } else if (f.depth == core::DepthSource::Transparency) {
+        if (l->pixels && l->pixels->format().alpha) d = l->pixels->get(x, y).c[static_cast<std::size_t>(l->pixels->format().colour_channels())];
+    } else { m_filter_dialog->focal_pick_off(); return; }
+    m_filter_dialog->set_focal_at(d);
+    toast("Focal distance " + std::to_string(static_cast<int>(m_filter_dialog->value().focal)) + " -- the depth there");
+}
+
 void Shell::on_filter(core::FilterKind k) {
     if (!filter_layer_ok(std::string(F::label(k)))) return;
     core::Filter start = (m_last_filter && m_last_filter->kind == k) ? *m_last_filter : F::fresh(k);
@@ -146,8 +168,14 @@ void Shell::on_filter(core::FilterKind k) {
         m_filter_dialog->signal_changed().connect(sigc::mem_fun(*this, &Shell::filter_preview_soon));
         m_filter_dialog->signal_closed().connect(sigc::mem_fun(*this, &Shell::filter_preview_stop));
         m_filter_dialog->signal_ok().connect(sigc::mem_fun(*this, &Shell::filter_run));
+        // s039 m2: Set Focal Point -- the next click on the picture, the depth there.
+        m_filter_dialog->signal_focal_pick().connect([this](bool on) {
+            m_canvas.set_point_pick(on);
+            if (on) toast("Click the picture where it should stay sharp (Esc: never mind)");
+        });
     }
     m_filter_dialog->set_live(m_filter_live, false);
+    m_filter_dialog->set_has_mask(m_doc.get(m_filter_target)->mask != nullptr);   // s039
     m_filter_dialog->ask(start, m_doc.get(m_filter_target)->name);
     filter_preview_soon();
 }
@@ -160,6 +188,7 @@ void Shell::on_live_edit(const core::Document::Id& id, std::size_t i) {
     on_filter(l->filters[i].f.kind);   // makes the dialog (and its signals) if need be
     m_filter_edit = i;
     m_filter_dialog->set_live(true, true);
+    m_filter_dialog->set_has_mask(l->mask != nullptr);   // s039
     m_filter_dialog->ask(l->filters[i].f, l->name);
     filter_preview_soon();
 }

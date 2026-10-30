@@ -179,6 +179,7 @@ private:
     void on_feather();                           // category: select: Select > Feather (asks the radius)
     void on_modify(core::select::Modify k);      // category: select: Select > Modify > ... (asks; a job) (s011 m4)
     void on_pick(int x, int y, bool background); // category: select: the Eyedropper
+    void on_focal_point(int x, int y);            // category: filter: s039 m2 -- Lens Blur's Set Focal Point
     void update_select_actions();                // category: select: grey Deselect when nothing is
 
     // ── paint (s008 m4) ────────────────────────────────────────────────────
@@ -414,6 +415,7 @@ private:
     bool               m_quick_mask = false;
     std::shared_ptr<const pixel::TileMap> m_shown_qm;   // the selection the red was drawn from
     bool               m_shown_qm_on = false;
+    bool refine_overlay() const;   // s039 m3: the Refine brush's overlay is showing
     core::select::Pt   m_stroke_last;              // Shift-click draws from here
     core::Document::Id m_stroke_last_id;
     bool               m_stroke_last_valid = false;

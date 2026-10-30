@@ -9,6 +9,8 @@
 
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/dropdown.h>
+#include <gtkmm/label.h>
+#include <gtkmm/togglebutton.h>
 #include <gtkmm/window.h>
 #include <sigc++/signal.h>
 
@@ -32,6 +34,14 @@ public:
     bool preview() const { return m_preview.get_active(); }
     const core::Filter& value() const { return m_f; }
     void set_busy(bool b);   // the preview is being made
+    // s039: whether the layer has a mask (Lens Blur's Layer Mask depth map).
+    void set_has_mask(bool on) { m_has_mask = on; }
+    // s039 m2: SET FOCAL POINT -- the button armed (the dialog lets the canvas
+    // have a click) or not; the Shell answers with the depth there (0 .. 1).
+    sigc::signal<void(bool)>& signal_focal_pick() { return m_focal_signal; }
+    void set_focal_at(double depth);   // the focal distance that keeps that depth sharp; disarms
+    void focal_pick_off();             // disarms (Escape, the source changed, closed)
+    bool focal_picking() const;
 
     sigc::signal<void()>& signal_changed() { return m_changed; }    // the settings or Preview moved
     sigc::signal<void(const core::Filter&)>& signal_ok() { return m_ok; }
@@ -55,6 +65,15 @@ private:
     void smart_rows();
     void reduce_rows();
     void extreme_rows();
+    void lens_rows();                                  // s039
+    void noise_rows(double lo, double hi, int digits, bool log);   // Add Noise's, Lens Blur's
+    Gtk::ToggleButton*        m_focal_pick = nullptr;  // s039 m2
+    sigc::signal<void(bool)>  m_focal_signal;
+    Gtk::DropDown*            m_depth = nullptr;       // s039: the depth map's source
+    Gtk::CheckButton*         m_invert = nullptr;
+    Gtk::Label*               m_depth_note = nullptr;
+    std::vector<Gtk::Widget*> m_depth_only;            // the rows that need a source
+    bool                      m_has_mask = false;
     std::vector<Row>     m_rows;
     Gtk::CheckButton*    m_gauss = nullptr;
     Gtk::CheckButton*    m_uniform = nullptr;

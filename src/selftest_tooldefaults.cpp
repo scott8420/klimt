@@ -29,8 +29,11 @@ void selftest_tooldefaults(const Check& check) {
     d.brushes["eraser"] = e;
     d.others["gradient"] = {{"opacity", 60}, {"reverse", 1}, {"to_transparent", 0}};
     d.others["wand"] = {{"tolerance", 12}, {"contiguous", 0}, {"all_layers", 1}};
+    d.others["refine"] = {{"size", 80}, {"edge", 20}, {"soft", 6}, {"overlay", 0}};   // s039 m3: the Refine brush
     check("defaults: saved", core::save_tool_defaults(file, d) && fs::exists(file) && !fs::exists(file + ".tmp"), "");
     check("defaults: read back the same", core::load_tool_defaults(file) == d, "");
+    check("defaults: the Refine brush's size, edge, soft and overlay kept (s039)",
+          core::load_tool_defaults(file).others.at("refine") == d.others.at("refine"), "");
     { std::ofstream(file) << "{ broken"; }
     check("defaults: a broken file -- none saved", core::load_tool_defaults(file) == core::ToolDefaults{}, "");
     { std::ofstream(file) << R"({"brushes":{"brush":{"size":99999,"scatter":-4,"count":40},"x":7},
