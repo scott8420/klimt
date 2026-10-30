@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s036")
+set(KLIMT_BUILD "s038")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -98,6 +98,8 @@ add_library(klimt_core STATIC
     # THE SELECTION (s008): a mask on the tile grid; shapes, set arithmetic,
     # feather, the ants' outline, fill / delete through it.
     src/core/Selection.cpp
+    src/core/Lasso.cpp     # s038: the Lasso's trace -- Alt's straight sides
+    src/core/Refine.cpp    # s038: Refine to Edges / the Refine brush -- the session (rough area, strokes)
     # PATHS (s035): Bezier outlines for selections and masks -- geometry, verbs.
     src/core/Path.cpp
     src/core/Paths.cpp
@@ -210,6 +212,7 @@ add_executable(klimt
     src/Shell_tabs.cpp
     src/Shell_adjust.cpp      # s013: adjustment layers, Image > Adjustments
     src/Shell_paths.cpp src/Shell_filter.cpp      # s014: the Filter menu
+    src/Shell_refine.cpp   # s038: Refine to Edges, the Refine brush
     src/SizeDialog.cpp
     src/NewDialog.cpp
     src/NumberDialog.cpp

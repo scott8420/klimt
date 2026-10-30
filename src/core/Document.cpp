@@ -507,6 +507,24 @@ bool set_path_switches(DocJournal& j, Document& d, const Id& id, bool mask, bool
     return j.run(label + " “" + l->name + "”", {id, kSelectionId}, [&] { d.put(id, *l); d.put(kSelectionId, sel); });
 }
 
+bool set_path_hints(DocJournal& j, Document& d, const Id& id, const path::Hints& h, const std::string& label) {
+    auto l = d.get(id);
+    if (!l || l->kind != Kind::Path || d.locked_all(id)) return false;
+    const path::Hints none;
+    if ((l->hints ? *l->hints : none) == h) return false;
+    l->hints = h.empty() ? nullptr : std::make_shared<const path::Hints>(h);
+    return j.run(label, {id}, [&] { d.put(id, *l); });
+}
+
+bool add_path_stroke(DocJournal& j, Document& d, const Id& id, const path::Stroke& s) {
+    if (s.pts.empty() || !(s.radius > 0)) return false;
+    const auto l = d.get(id);
+    if (!l || l->kind != Kind::Path) return false;
+    path::Hints h = l->hints ? *l->hints : path::Hints{};
+    h.strokes.push_back(s);
+    return set_path_hints(j, d, id, h, s.figure ? "Figure Stroke" : "Background Stroke");
+}
+
 // s030: a filter layer, with its mask, as one step.
 Id add_filter_layer(DocJournal& j, Document& d, const Filter& f_in, const Id& above) {
     const Filter f = filter::normalised(f_in);
@@ -1391,6 +1409,19 @@ const std::vector<Verb>& verbs() {
              [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
         {"path_isolate",    [](DocJournal& j, Document& d) { paths::isolate(j, d, "L6", 8); },
              [](Document& d) { load_path_layer(d, paths::rect_path(90, 90, 310, 260)); }},
+        // s037: Isolate's strokes.
+        {"path_stroke",     [](DocJournal& j, Document& d) { add_path_stroke(j, d, "L6", {false, 6, {{100, 100}, {140, 100}}}); },
+             [](Document& d) { load_path_layer(d, paths::rect_path(90, 90, 310, 260)); }},
+        {"path_strokes_clear", [](DocJournal& j, Document& d) { set_path_hints(j, d, "L6", {}, "Clear Isolate Strokes"); },
+             [](Document& d) {
+                 load_path_layer(d, paths::rect_path(90, 90, 310, 260));
+                 Document::Loading load(d);
+                 auto l = *d.get("L6");
+                 path::Hints h;
+                 h.strokes = {{true, 8, {{150, 150}}}};
+                 l.hints = std::make_shared<const path::Hints>(h);
+                 d.put("L6", l);
+             }},
         {"crop_paths",      [](DocJournal& j, Document& d) { canvas::crop(j, d, {50, 40, 400, 300}, pixel::rgba(1, 1, 1, 1)); },
              [](Document& d) { load_path_layer(d, paths::ellipse_path(100, 100, 50, 40), true); }},
         // s032: guides.

@@ -176,6 +176,9 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Select tool: drag", "Rectangle / ellipse / lasso (the strip's choice); a click deselects"},
         {"Mouse", "", {}, "Shift / Alt / Shift+Alt at the press", "Add to / subtract from / intersect the selection"},
         {"Mouse", "", {}, "Shift while dragging", "A square or a circle"},
+        {"Mouse", "", {}, "Lasso: Alt during the drag", "Straight sides -- the button may be let go, each click a corner; let Alt go to close (or Enter, a double-click, the start). Backspace: the last corner; Esc drops it"},
+        {"Mouse", "", {}, "L  /  Shift+W", "The Lasso / the Wand"},
+        {"Mouse", "", {}, "Refine (W): drag  /  Alt-drag", "Paint over what belongs -- the selection snaps to its edges / take away; [ and ] the size"},
         {"Mouse", "", {}, "Brush / Eraser: drag  /  Shift+click", "Paint a stroke / a straight line from the last one"},
         {"Mouse", "", {}, "Eyedropper: click  /  Alt+click", "Foreground / background colour from what you see"},
         {"Mouse", "", {}, "Click a colour swatch", "Choose the foreground / background colour"},
@@ -198,6 +201,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
     reg.push_back({"Select", "win.deselect", {"<Ctrl>d"}, "", "Deselect"});
     reg.push_back({"Select", "win.select-invert", {"<Ctrl><Shift>i"}, "", "Invert the selection"});
     reg.push_back({"Select", "win.select-feather", {"<Shift>F6"}, "", "Feather the selection"});
+    reg.push_back({"Select", "win.refine-edges", {"<Ctrl><Alt>r"}, "", "Refine to Edges -- the rough selection (or the picked path) snapped to the figure"});   // s038
     reg.push_back({"Select", "", {}, "Q", "Quick Mask: paint the selection (black masks, white selects)"});   // s016
     reg.push_back({"Select", "", {}, "Ctrl+Enter", "Load the path as a selection"});   // s035
     reg.push_back({"Select", "", {}, "Ctrl+Shift+H", "Hide / show the path's outline (its mask still works)"});

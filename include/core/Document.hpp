@@ -135,6 +135,10 @@ struct Layer {
     std::shared_ptr<const path::Path> path;
     bool          path_mask = false;
     bool          path_select = false;
+    // s037: a path layer's ISOLATE STROKES -- "this is figure" / "this is
+    // background" hints (path::Hints), shared by pointer like the outline.
+    // nullptr: none. They draw nothing and mask nothing; Isolate reads them.
+    std::shared_ptr<const path::Hints> hints;
     bool operator==(const Layer&) const = default;
 };
 
@@ -461,6 +465,11 @@ void load_filter_layer(Document& d, FilterKind k);
 Id   add_path_layer(DocJournal& j, Document& d, const path::Path& p, const Id& above = {}, const std::string& label = "New Path");
 bool set_path_layer(DocJournal& j, Document& d, const Id& id, const path::Path& p, const std::string& label);
 bool set_path_switches(DocJournal& j, Document& d, const Id& id, bool mask, bool select);
+// s037: the path layer's Isolate strokes, ONE step ("Figure Stroke", "Clear
+// Isolate Strokes" ...). Empty hints: none. Refused on another kind, or no change.
+bool set_path_hints(DocJournal& j, Document& d, const Id& id, const path::Hints& h, const std::string& label);
+// One stroke more -- "Figure Stroke" / "Background Stroke". Refused for a stroke with no point.
+bool add_path_stroke(DocJournal& j, Document& d, const Id& id, const path::Stroke& s);
 // A path layer "L6" holding `p` at the top, LOADED (a verb's setup; tests).
 void load_path_layer(Document& d, const path::Path& p, bool mask = false, bool select = false);
 // s032: these guides on the picture (a verb's setup; tests).

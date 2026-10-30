@@ -444,4 +444,38 @@ Sub fit(const std::vector<P>& loop, double tol) {
     return out;
 }
 
+// ── Isolate's strokes (s037) ─────────────────────────────────────────────────
+bool Hints::any(bool figure) const {
+    for (const auto& s : strokes)
+        if (s.figure == figure && !s.pts.empty()) return true;
+    return false;
+}
+
+Hints mapped(const Hints& h, const std::function<P(P)>& f) {
+    Hints q = h;
+    const P o = f({0, 0}), ex = f({1, 0}), ey = f({0, 1});
+    const double sx = std::hypot(ex.x - o.x, ex.y - o.y), sy = std::hypot(ey.x - o.x, ey.y - o.y);
+    const double k = (sx + sy) / 2;
+    for (auto& s : q.strokes) {
+        for (auto& pt : s.pts) pt = f(pt);
+        s.radius = std::max(0.5, s.radius * k);
+    }
+    return q;
+}
+
+Box box(const Hints& h, bool figure) {
+    Box b;
+    bool first = true;
+    for (const auto& s : h.strokes) {
+        if (s.figure != figure) continue;
+        for (const P q : s.pts) {
+            const Box e{q.x - s.radius, q.y - s.radius, q.x + s.radius, q.y + s.radius};
+            if (first) { b = e; first = false; continue; }
+            b.x0 = std::min(b.x0, e.x0); b.y0 = std::min(b.y0, e.y0);
+            b.x1 = std::max(b.x1, e.x1); b.y1 = std::max(b.y1, e.y1);
+        }
+    }
+    return b;
+}
+
 }  // namespace klimt::core::path

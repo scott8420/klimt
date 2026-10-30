@@ -25,7 +25,8 @@ namespace klimt::core {
 
 enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass, AddNoise, BoxBlur, MotionBlur, Median,
                                        SmartSharpen, DustScratches, ReduceNoise,   // s034
-                                       Maximum, Minimum, SurfaceBlur };   // m4
+                                       Maximum, Minimum, SurfaceBlur,     // m4
+                                       LensBlur };                        // s037
 
 // s034: what Smart Sharpen takes away -- the blur it undoes.
 enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
@@ -67,6 +68,13 @@ struct Filter {
     // s034 m3 -- Maximum / Minimum: `radius` 1 .. 500; Preserve Roundness (a
     // disc) or, off, Squareness (a square -- the fast one).
     bool round = false;
+    // s037 -- Lens Blur: `radius` 1 .. 100 px (the aperture's size); the
+    // IRIS -- `blades` 3 .. 8 (its sides), `curvature` 0 .. 100 % (straight
+    // sides .. a circle), `angle` 0 .. 360 degrees (its rotation); SPECULAR
+    // HIGHLIGHTS -- `bright` 0 .. 100 %, `threshold` 0 .. 255 (what is lighter
+    // than this is taken as a light, brightened before the blur, so it blooms
+    // into the iris's shape -- bokeh).
+    double blades = 6, curvature = 0, bright = 0;
     bool operator==(const Filter&) const = default;
 };
 
@@ -96,6 +104,13 @@ bool identity(const Filter& f);               // changes nothing
 
 // How far a pixel reads, in pixels (0 for Add Noise).
 int reach(const Filter& f);
+
+// s037: Lens Blur's iris -- for each row dy (-r .. r, r = ceil(radius)), the
+// span of x it covers, [lo, hi] in real pixels (lo > hi: none). The polygon
+// of `blades` sides on a circle of `radius`, rotated by `angle`, its sides
+// bowed out toward the circle by `curvature` (0 .. 1). For the selftest too.
+struct IrisRow { double lo, hi; };
+std::vector<IrisRow> iris(double radius, int blades, double curvature, double angle_deg);
 
 // The 1-D blur Gaussian Blur, Unsharp Mask and High Pass share, along a line of n samples with
 // stride `stride` floats (edges clamp): sigma < 3 an exact Gaussian kernel,

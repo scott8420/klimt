@@ -35,6 +35,10 @@ void Shell::update_paths() {
     const bool outline = id.empty() || !m_outlines_off.count(id);
     m_canvas.set_path(p ? *p : core::path::Path{}, outline && !hidden && (p != nullptr || m_rail.tool() == "pen"));
     m_properties.set_path_outline(outline);
+    {   // s037: its Isolate strokes, while it's picked and shown
+        const auto l = id.empty() ? std::nullopt : m_doc.get(id);
+        m_canvas.set_hints(l && l->hints ? *l->hints : core::path::Hints{}, l.has_value());
+    }
     // Forget the hidden outlines of layers that are gone.
     for (auto it = m_outlines_off.begin(); it != m_outlines_off.end();)
         it = m_doc.get(*it) ? std::next(it) : m_outlines_off.erase(it);
@@ -104,6 +108,17 @@ void Shell::on_path_make_work() {
     });
 }
 
+// s037: a stroke painted -- ONE step on the picked path layer; then, when
+// Properties says so, Isolate again with it.
+void Shell::on_path_stroke(const core::path::Stroke& st) {
+    const auto id = path_layer();
+    if (id.empty()) { m_properties.stop_strokes(); return; }
+    if (m_doc.locked_all(id)) { toast("The path layer is locked"); return; }
+    if (!L::add_path_stroke(m_journal, m_doc, id, st)) return;
+    if (auto lg = log::get(log::Area::Shell)) lg->info("isolate stroke on {}: {} r {} ({} points)", id, st.figure ? "figure" : "background", st.radius, st.pts.size());
+    if (m_properties.isolate_after_stroke()) on_path_isolate(id, m_properties.isolate_band(), m_properties.isolate_soft());
+}
+
 void Shell::on_path_isolate(const std::string& id, double band, double soft) {
     const auto p = P::of(m_doc, id);
     if (!p || p->empty()) { toast("Isolate: the path is empty"); return; }
@@ -112,14 +127,21 @@ void Shell::on_path_isolate(const std::string& id, double band, double soft) {
     const core::Image im = m_doc.image();
     const auto layers = m_doc.snapshot();
     const auto mf = m_doc.mask_format();
-    m_path_job = start_job("Isolate", [this, im, layers, mf, path = *p, band, soft, expect](core::Jobs::Token& t) -> core::Jobs::Landing {
+    const auto lay = m_doc.get(id);
+    const auto hints = lay ? lay->hints : nullptr;   // s037: the strokes, as they are now
+    m_path_job = start_job("Isolate", [this, im, layers, mf, path = *p, band, soft, expect, hints](core::Jobs::Token& t) -> core::Jobs::Landing {
         const auto pic = P::picture_for_isolate(im, layers);
         if (!pic || t.cancelled()) return {};
         core::isolate::Options o;
         o.band = band;
         o.soft = soft;   // s036
+        o.hints = hints.get();   // s037
         auto m = core::isolate::isolated(*pic, path, mf, o, [&t] { return t.cancelled(); }, [&t](double f) { t.progress(f); });
-        if (!m) return {};
+        if (!m && t.cancelled()) return {};
+        if (!m) return [this] {   // s038 (52): say so, never silently nothing
+            m_path_job = 0;
+            toast("Isolate: no figure found -- the path may cut off too much of it; Refine to Edges, then the Refine brush (W) on what's missing");
+        };
         return [this, expect, mask = std::move(*m)]() mutable {
             m_path_job = 0;
             if (core::select::set_if(m_journal, m_doc, expect, core::select::empty(mask) ? std::nullopt : std::optional<pixel::TileMap>(std::move(mask)),

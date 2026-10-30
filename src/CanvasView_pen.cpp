@@ -6,6 +6,7 @@
 // Shell the whole new path and a step name -- ONE step a gesture.
 #include "CanvasView.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace klimt {
@@ -339,6 +340,65 @@ void CanvasView::draw_path(const Cairo::RefPtr<Cairo::Context>& cr) {
                 cr->stroke();
             }
         }
+    }
+    cr->restore();
+}
+
+// ── s037: Isolate's strokes ──────────────────────────────────────────────────
+void CanvasView::set_hints(const path::Hints& h, bool show) {
+    if (h == m_hints && show == m_show_hints) return;
+    m_hints = h;
+    m_show_hints = show;
+    queue_draw();
+}
+
+void CanvasView::set_hint_mode(int mode, double radius) {
+    m_hint_mode = std::clamp(mode, 0, 2);
+    m_hint_r = std::max(0.5, radius);
+    if (!m_hint_mode) m_hint_drag = false;
+    update_cursor();
+    queue_draw();
+}
+
+void CanvasView::draw_hints(const Cairo::RefPtr<Cairo::Context>& cr) {
+    const bool cur = m_hint_drag && !m_hint_cur.pts.empty();
+    if ((!m_show_hints || m_hints.empty()) && !cur && !(m_hint_mode && m_px >= 0)) return;
+    cr->save();
+    // halo: a light rim 2 px wider, so a red stroke still reads on red (seen under Xvfb).
+    const auto lay = [&](const path::Stroke& st, bool halo) {
+        if (st.pts.empty()) return;
+        cr->move_to(to_screen_x(st.pts[0].x), to_screen_y(st.pts[0].y));
+        if (st.pts.size() == 1) cr->line_to(to_screen_x(st.pts[0].x), to_screen_y(st.pts[0].y));
+        for (std::size_t i = 1; i < st.pts.size(); ++i) cr->line_to(to_screen_x(st.pts[i].x), to_screen_y(st.pts[i].y));
+        cr->set_line_width(std::max(1.0, 2 * st.radius * m_zoom) + (halo ? 4 : 0));
+        if (halo) cr->set_source_rgb(1, 1, 1);
+        else if (st.figure) cr->set_source_rgb(0.16, 0.78, 0.32);
+        else cr->set_source_rgb(0.92, 0.22, 0.20);
+        cr->stroke();
+    };
+    // Opaque, in order, into a group (a later stroke covers an earlier one, as
+    // Isolate reads them), the rims first under them all, then shown see-through.
+    cr->push_group();
+    cr->set_line_cap(Cairo::Context::LineCap::ROUND);
+    cr->set_line_join(Cairo::Context::LineJoin::ROUND);
+    for (const bool halo : {true, false}) {
+        if (m_show_hints) for (const auto& st : m_hints.strokes) lay(st, halo);
+        if (cur) lay(m_hint_cur, halo);
+    }
+    cr->pop_group_to_source();
+    cr->paint_with_alpha(0.55);
+    // The stroke's size at the pointer.
+    if (m_hint_mode && m_px >= 0 && !m_panning) {
+        const double r = std::max(2.0, m_hint_r * m_zoom);
+        cr->arc(m_px, m_py, r, 0, 2 * M_PI);
+        cr->set_line_width(2.5);
+        cr->set_source_rgba(1, 1, 1, 0.7);
+        cr->stroke_preserve();
+        cr->set_line_width(1.25);
+        const int mode = m_tool == "refine" && m_pen_alt ? 3 - m_hint_mode : m_hint_mode;   // s038: Alt held -- the Refine brush takes away
+        if (mode == 1) cr->set_source_rgb(0.10, 0.60, 0.22);
+        else cr->set_source_rgb(0.80, 0.14, 0.12);
+        cr->stroke();
     }
     cr->restore();
 }

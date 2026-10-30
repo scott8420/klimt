@@ -377,6 +377,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     sel->append("Feather…", "win.select-feather");
     sel->append("Edit in Quick Mask Mode", "win.quick-mask");   // s016
     sel->append("Color Range…", "win.select-range");          // s024
+    sel->append("Refine to Edges", "win.refine-edges");        // s038: the rough selection (or path) to the figure's edge
     sel->append("Save Selection", "win.select-save");          // s016: to the Channels tab
     {   // s035: paths
         auto ps = Gio::Menu::create();

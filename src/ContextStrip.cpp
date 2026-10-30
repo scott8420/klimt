@@ -435,6 +435,31 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
         pt->append(*smooth);
         append(*pt);
     }
+    if (t.id == "refine") {   // s038: the Refine brush
+        number_field(*this, "Size", 1, 2500, brush("refine").size, "px", "The stroke's width  ([ and ] change it)",
+                     [this] { return brush("refine").size; },
+                     [this](int v) {
+                         auto o = brush("refine");
+                         if (o.size == v) return;
+                         o.size = v;
+                         m_brush["refine"] = o;
+                         m_brush_signal.emit();
+                     });
+        number_field(*this, "Edge", 2, 64, m_refine.band, "px",
+                     "How far your rough selection may cut INTO the subject (outside it, as loose as you like)",
+                     [this] { return m_refine.band; }, [this](int v) { m_refine.band = v; });
+        number_field(*this, "Soft", 0, 64, m_refine.soft, "px",
+                     "Hair, fur, soft focus: within this many pixels of the edge, how much is subject is read from the colour (0: a clean edge)",
+                     [this] { return m_refine.soft; }, [this](int v) { m_refine.soft = v; });
+    }
+    if (t.id == "select" || t.id == "refine") {   // s038: the rough selection snapped to the subject
+        auto snap = Gtk::make_managed<Gtk::Button>("Refine to Edges");
+        snap->set_name("strip.refine_edges");
+        snap->set_action_name("win.refine-edges");
+        snap->set_tooltip_text("Snap the selection -- a rough Lasso round the subject is enough -- to the subject's real edge  (Ctrl+Alt+R). "
+                               "Then the Refine brush (W): paint what belongs, Alt-paint what doesn't");
+        append(*snap);
+    }
     if (t.id == "select") {
         // Klimt's strength, one click from the selection tools (docs/ui.md 4).
         // Shown, greyed, until there are pixels for them to work on.
@@ -448,10 +473,6 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
         subject->set_sensitive(false);
         subject->set_tooltip_text("Arrives with libs/seg (local models)");
         append(*subject);
-        auto refine = Gtk::make_managed<Gtk::Button>("Refine Edge");
-        refine->set_sensitive(false);
-        refine->set_tooltip_text("Arrives with libs/seg (local models)");
-        append(*refine);
     }
 }
 

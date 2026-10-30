@@ -73,6 +73,7 @@ void Shell::bind_actions() {  // bindings
     // s016: saved selections -- the Channels tab and Select > Save Selection.
     m_layer_acts["select-save"] = add_action("select-save", sigc::mem_fun(*this, &Shell::on_save_selection));
     m_layer_acts["select-range"] = add_action("select-range", sigc::mem_fun(*this, &Shell::on_colour_range));   // s024
+    m_layer_acts["refine-edges"] = add_action("refine-edges", sigc::mem_fun(*this, &Shell::on_refine_edges));   // s038
     m_channels.signal_save().connect(sigc::mem_fun(*this, &Shell::on_save_selection));
     m_channels.signal_view().connect(sigc::mem_fun(*this, &Shell::on_channel_view));           // s026
     m_channels.signal_load_colour().connect(sigc::mem_fun(*this, &Shell::on_colour_load));
@@ -139,6 +140,7 @@ void Shell::bind_actions() {  // bindings
         const auto o = m_strip.brush(m_rail.tool());
         m_canvas.set_brush_size(o.size);
         m_canvas.set_brush_shape(o.tip, o.angle, o.roundness / 100.0);   // s017
+        if (m_rail.tool() == "refine") m_canvas.set_hint_mode(1, o.size / 2.0);   // s038: the ring's size
     });
     m_layer_acts["select-feather"] = add_action("select-feather", sigc::mem_fun(*this, &Shell::on_feather));
     // s011 m4: Select > Modify.
@@ -198,6 +200,17 @@ void Shell::bind_actions() {  // bindings
     m_properties.signal_path_load().connect([this](const std::string&) { on_path_selection(core::select::Op::Replace); });
     m_properties.signal_path_isolate().connect(sigc::mem_fun(*this, &Shell::on_path_isolate));
     m_properties.signal_path_outline().connect([this](bool on) { show_path_outline(on); });
+    // s037: Isolate's strokes -- the toggles set the canvas painting; a stroke lands, Isolate again.
+    m_properties.signal_stroke_mode().connect([this](int mode, double r) {
+        m_canvas.set_hint_mode(path_layer().empty() ? 0 : mode, r);
+        if (mode && path_layer().empty()) m_properties.stop_strokes();
+    });
+    m_properties.signal_strokes_clear().connect([this](const std::string& id) {
+        if (core::layers::set_path_hints(m_journal, m_doc, id, {}, "Clear Isolate Strokes")) toast(m_journal.undo_label(), true);
+    });
+    m_canvas.signal_hint_stroke().connect([this](const core::path::Stroke& st) {   // s038: the Refine brush's, or a path layer's
+        if (m_rail.tool() == "refine") on_refine_stroke(st); else on_path_stroke(st);
+    });
     add_action("path-outline", [this] { if (!path_layer().empty()) toggle_path_outline(path_layer()); });
     m_layers.signal_outline_toggle().connect(sigc::mem_fun(*this, &Shell::toggle_path_outline));
     m_canvas.signal_pen_mode().connect([this](int v) { m_strip.show_variant("pen", v); });   // s035: Ctrl / Alt held -- the button lights
@@ -319,6 +332,12 @@ void Shell::bind_actions() {  // bindings
             // Backspace / Delete take its last anchor (or the picked one).
             // Ctrl+Enter (any tool): the active path as the selection.
             if ((keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) && mods == CTRL) { activate_action("win.path-selection"); return true; }
+            if (keyval == GDK_KEY_Escape && mods == NONE && m_refine_job) { m_jobs.cancel(m_refine_job); m_refine_job = 0; toast("Refine stopped"); return true; }   // s038
+            if (m_canvas.lasso_open() && mods == NONE) {   // s038: the Lasso's straight sides
+                if (keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) { m_canvas.lasso_finish(); return true; }
+                if (keyval == GDK_KEY_Escape) { m_canvas.lasso_cancel(); return true; }
+                if (keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete) { m_canvas.lasso_back(); return true; }
+            }
             if (m_rail.tool() == "pen" && mods == NONE) {
                 if ((keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter || keyval == GDK_KEY_Escape) && m_canvas.pen_drawing()) {
                     m_canvas.pen_finish();
@@ -362,12 +381,18 @@ void Shell::bind_actions() {  // bindings
                 m_strip.set_variant("pen", keyval == GDK_KEY_a ? 1 : 0);
                 return true;
             }
+            if ((keyval == GDK_KEY_l && mods == NONE) || ((keyval == GDK_KEY_W || keyval == GDK_KEY_w) && mods == SHIFT)) {   // s038: L the Lasso, Shift+W the Wand
+                if (m_rail.tool() != "select") { m_rail.set_tool("select"); on_tool("select"); }
+                m_strip.set_variant("select", keyval == GDK_KEY_l ? 2 : 3);
+                return true;
+            }
             if (mods != NONE) return false;
             // s008: the colour pair -- X swaps, D resets (Photoshop's).
             if (keyval == GDK_KEY_x) { m_rail.swap_colours(); return true; }
             // s008 m4: [ and ] -- the brush's size, a step at a time.
             if ((keyval == GDK_KEY_bracketleft || keyval == GDK_KEY_bracketright) &&
-                (m_rail.tool() == "brush" || m_rail.tool() == "eraser" || m_rail.tool() == "clone" || m_rail.tool() == "heal" || m_rail.tool() == "smudge")) {
+                (m_rail.tool() == "brush" || m_rail.tool() == "eraser" || m_rail.tool() == "clone" || m_rail.tool() == "heal" || m_rail.tool() == "smudge" ||
+                 m_rail.tool() == "refine")) {   // s038: the Refine brush too
                 const int s = m_strip.brush(m_rail.tool()).size;
                 const int step = s < 10 ? 1 : s < 50 ? 5 : s < 200 ? 10 : 50;
                 m_strip.set_brush_size(m_rail.tool(), keyval == GDK_KEY_bracketright ? s + step : s - step);
@@ -427,6 +452,11 @@ void Shell::bind_actions() {  // bindings
             const auto m2 = state & (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK | Gdk::ModifierType::ALT_MASK);
             const bool enter = keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter;
             if (enter && m2 == Gdk::ModifierType::CONTROL_MASK) { activate_action("win.path-selection"); return true; }
+            if (m_canvas.lasso_open() && (m2 == Gdk::ModifierType{} || m2 == Gdk::ModifierType::ALT_MASK)) {   // s038
+                if (enter) { m_canvas.lasso_finish(); return true; }
+                if (keyval == GDK_KEY_Escape) { m_canvas.lasso_cancel(); return true; }
+                if (keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete) { m_canvas.lasso_back(); return true; }
+            }
             if (m_rail.tool() == "pen" && m2 == Gdk::ModifierType{}) {
                 if ((enter || keyval == GDK_KEY_Escape) && m_canvas.pen_drawing()) { m_canvas.pen_finish(); return true; }
                 if ((keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete) && m_canvas.pen_backspace()) return true;

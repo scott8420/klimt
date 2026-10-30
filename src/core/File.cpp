@@ -297,6 +297,31 @@ json path_json(const path::Path& p) {
     }
     return subs;
 }
+// s037: Isolate's strokes -- [{"figure": true, "r": 8, "pts": [x, y, x, y ...]}].
+json hints_json(const path::Hints& h) {
+    json a = json::array();
+    for (const auto& st : h.strokes) {
+        json pts = json::array();
+        for (const auto& q : st.pts) { pts.push_back(q.x); pts.push_back(q.y); }
+        a.push_back({{"figure", st.figure}, {"r", st.radius}, {"pts", std::move(pts)}});
+    }
+    return a;
+}
+path::Hints hints_from(const json& a) {
+    path::Hints h;
+    if (!a.is_array()) return h;
+    for (const auto& js : a) {
+        if (!js.is_object() || !js.contains("pts") || !js["pts"].is_array()) continue;
+        path::Stroke st;
+        st.figure = js.value("figure", true);
+        st.radius = std::clamp(js.value("r", 8.0), 0.5, 1000.0);
+        const auto& pts = js["pts"];
+        for (std::size_t i = 0; i + 1 < pts.size(); i += 2)
+            if (pts[i].is_number() && pts[i + 1].is_number()) st.pts.push_back({pts[i].get<double>(), pts[i + 1].get<double>()});
+        if (!st.pts.empty()) h.strokes.push_back(std::move(st));
+    }
+    return h;
+}
 path::Path path_from(const json& subs) {
     path::Path p;
     if (!subs.is_array()) return p;
@@ -328,7 +353,8 @@ json live_json(const LiveFilter& lf) {
             {"remove", std::string(filter::remove_key(f.remove))}, {"noise", f.noise},
             {"shadow_fade", f.shadow_fade}, {"shadow_tonal", f.shadow_tonal}, {"shadow_radius", f.shadow_radius},
             {"light_fade", f.light_fade}, {"light_tonal", f.light_tonal}, {"light_radius", f.light_radius},
-            {"preserve", f.preserve}, {"colour", f.colour}, {"sharpen", f.sharpen}, {"round", f.round}};
+            {"preserve", f.preserve}, {"colour", f.colour}, {"sharpen", f.sharpen}, {"round", f.round},
+            {"blades", f.blades}, {"curvature", f.curvature}, {"bright", f.bright}};   // s037: Lens Blur
 }
 std::optional<LiveFilter> live_from(const json& j) {
     const std::string key = j.at("kind").get<std::string>();
@@ -358,6 +384,9 @@ std::optional<LiveFilter> live_from(const json& j) {
     lf.f.colour = j.value("colour", blank.colour);
     lf.f.sharpen = j.value("sharpen", blank.sharpen);
     lf.f.round = j.value("round", false);
+    lf.f.blades = j.value("blades", 6.0);       // s037
+    lf.f.curvature = j.value("curvature", 0.0);
+    lf.f.bright = j.value("bright", 0.0);
     const std::uint32_t seed = lf.f.seed;
     lf.f = filter::normalised(lf.f);
     lf.f.seed = lf.f.kind == FilterKind::AddNoise ? seed : lf.f.seed;
@@ -560,6 +589,10 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 L.path = std::make_shared<const path::Path>(path_from(l.value("path", json::array())));
                 L.path_mask = l.value("path_mask", false);
                 L.path_select = l.value("path_select", false);
+                if (l.contains("hints")) {   // s037
+                    auto h = hints_from(l["hints"]);
+                    if (!h.empty()) L.hints = std::make_shared<const path::Hints>(std::move(h));
+                }
             }
             else if (kind == "adjustment") {   // s013
                 L.kind = Kind::Adjustment;
@@ -806,6 +839,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
             l["path_mask"] = L.path_mask;
             l["path_select"] = L.path_select;
         }
+        if (L.kind == Kind::Path && L.hints && !L.hints->empty()) l["hints"] = hints_json(*L.hints);   // s037
         if (L.kind == Kind::Filter) {   // s030: its one filter
             json fs = json::array();
             for (const auto& lf : L.filters) fs.push_back(live_json(lf));

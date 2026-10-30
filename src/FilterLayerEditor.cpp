@@ -147,6 +147,14 @@ void FilterLayerEditor::rebuild() {
             row("filter_layer.radius", "Radius", 1, 100, 0, true, "px", &m_f.radius);
             row("filter_layer.threshold", "Threshold", 2, 255, 0, false, "levels", &m_threshold);
             break;
+        case FilterKind::LensBlur:   // s037: the iris, then the specular highlights
+            row("filter_layer.radius", "Radius", 1, 100, 0, true, "px", &m_f.radius);
+            row("filter_layer.blades", "Blades", 3, 8, 0, false, "", &m_f.blades);
+            row("filter_layer.curvature", "Blade Curvature", 0, 100, 0, false, "%", &m_f.curvature);
+            row("filter_layer.rotation", "Rotation", 0, 360, 0, false, "°", &m_angle);
+            row("filter_layer.bright", "Highlight Brightness", 0, 100, 0, false, "%", &m_f.bright);
+            row("filter_layer.threshold", "Highlight Threshold", 0, 255, 0, false, "levels", &m_threshold);
+            break;
         default: break;
     }
     auto note = Gtk::make_managed<Gtk::Label>("Filters everything below it. To filter one layer only, clip it to that layer "

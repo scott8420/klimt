@@ -93,6 +93,7 @@ void Shell::on_tool(const std::string& id) {  // view state: not a step
         m_canvas.set_tool(id, m_strip.variant(id));   // s007: Hand pans, Zoom zooms; s008: Select selects
         update_paths();   // s035: the Pen shows the active path
         m_canvas.set_brush_size(m_strip.brush(id).size);
+        m_canvas.set_hint_mode(id == "refine" ? 1 : 0, m_strip.brush("refine").size / 2.0);   // s038: the Refine brush paints hints
         { const auto o = m_strip.brush(id); m_canvas.set_brush_shape(o.tip, o.angle, o.roundness / 100.0); }   // s017
         if (auto lg = log::get(log::Area::Shell)) lg->info("tool: {}", id);
     }

@@ -239,6 +239,8 @@ void Shell::after_switch() {
     m_nudge = {};
     m_stroke_last_valid = false;
     m_channel_view = -1;   // s026: the picture, in the tab that comes in
+    if (m_refine_job) { m_jobs.cancel(m_refine_job); m_refine_job = 0; }   // s038: Refine's memory is the old document's
+    m_refine.reset();
     m_preview.clear();
     m_shown = {};
     m_shown_image = {};

@@ -12,6 +12,8 @@
 #include "core/Selection.hpp"
 #include "core/Transform.hpp"
 
+#include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -58,6 +60,7 @@ struct Doc {
     Doc() { d.set_door([this] { return j.open(); }); L::load_fixture(d); }
 };
 }  // namespace
+
 
 void selftest_paths(const Check& check) {
     std::cout << "\n-- paths: geometry (s035) --\n";
@@ -315,6 +318,7 @@ void selftest_paths(const Check& check) {
 
 // ── s035 m7: the max-flow and Isolate ───────────────────────────────────────
 #include "core/Isolate.hpp"
+#include "core/Refine.hpp"
 #include "core/Matte.hpp"
 #include "core/MaxFlow.hpp"
 
@@ -374,6 +378,305 @@ P::TileMap figure(int W, int H, double cx, double cy, double r) {
 }
 P::TileMap disc_mask(int W, int H, double cx, double cy, double r) {
     return S::ellipse_mask(mff(), W, H, cx - r, cy - r, cx + r, cy + r);
+}
+}  // namespace
+
+namespace {
+// A picture: the textured red disc (the figure) at (cx, cy, r), with extra
+// discs painted over it -- {x, y, r, figure-red (true) or ground (false)}.
+struct Blob { double x, y, r; bool red; };
+P::TileMap figure_with(int W, int H, double cx, double cy, double r, const std::vector<Blob>& extra) {
+    auto base = figure(W, H, cx, cy, r);
+    return base.paint({0, 0, W, H}, [&](int x, int y, const P::Px& px) {
+        for (const auto& b : extra)
+            if (std::hypot(x + 0.5 - b.x, y + 0.5 - b.y) <= b.r)
+                return b.red ? P::rgba(0.72f, 0.18f, 0.15f, 1) : P::rgba(0.82f, 0.80f, 0.70f, 1);
+        return px;
+    });
+}
+path::Stroke stroke(bool fig, double r, std::vector<path::P> pts) { return {fig, r, std::move(pts)}; }
+
+void selftest_isolate_strokes(const Check& check) {
+    const int W = 320, H = 300;
+    // The pure parts: any(), box(), mapped().
+    {
+        path::Hints h;
+        h.strokes = {stroke(true, 5, {{10, 10}, {30, 10}}), stroke(false, 3, {{100, 50}})};
+        const auto b = path::box(h, true);
+        check("strokes: any() of each kind; box() of the figure strokes, radius in", h.any(true) && h.any(false) && b.x0 == 5 && b.y0 == 5 && b.x1 == 35 && b.y1 == 15,
+              num(b.x0) + "," + num(b.y0) + "," + num(b.x1) + "," + num(b.y1));
+        const auto m = path::mapped(h, [](path::P q) { return path::P{q.x * 2, q.y * 2}; });
+        check("strokes: mapped by x2 -- the points and the radius double", m.strokes[0].pts[1] == path::P{60, 20} && std::abs(m.strokes[0].radius - 10) < 1e-9, num(m.strokes[0].radius));
+    }
+    // 1. A BACKGROUND stroke: a second red blob (background, the figure's own
+    // colour) inside a loose box -- Isolate takes it too; a stroke across it says no.
+    {
+        const auto pic = figure_with(W, H, 120, 150, 60, {{235, 150, 26, true}});
+        const auto truth = disc_mask(W, H, 120, 150, 60);
+        const auto box = paths::rect_path(40, 70, 280, 230);
+        core::isolate::Options o;
+        o.band = 12;
+        const auto a = core::isolate::isolated(pic, box, mff(), o);
+        const bool blob_in = a && S::coverage(*a, 235, 150) > 0.5f;
+        path::Hints h;
+        h.strokes = {stroke(false, 6, {{222, 150}, {248, 150}})};   // ONE short stroke, inside the blob (seen under Xvfb: it once carved only itself out)
+        o.hints = &h;
+        const auto b = core::isolate::isolated(pic, box, mff(), o);
+        check("strokes: without them a same-coloured blob is taken (the case strokes are for)", blob_in, a ? num(S::coverage(*a, 235, 150)) : "nullopt");
+        check("strokes: one background stroke in it -> the WHOLE blob left out (its reach), the figure kept",
+              b && S::coverage(*b, 235, 150) < 0.5f && S::coverage(*b, 235, 130) < 0.5f && S::coverage(*b, 252, 166) < 0.5f && iou(*b, truth) > 0.95,
+              b ? num(iou(*b, truth)) + " blob " + num(S::coverage(*b, 250, 160)) : "nullopt");
+    }
+    // 1b. The same, big enough for the COARSE pass (> 300k pixels to decide):
+    // the stroke's reach goes from the coarse grid to the fine strip.
+    {
+        const int BW = 1000, BH = 800;
+        const auto pic = figure_with(BW, BH, 300, 400, 150, {{590, 400, 65, true}});
+        const auto truth = disc_mask(BW, BH, 300, 400, 150);
+        const auto box = paths::rect_path(80, 150, 720, 650);
+        core::isolate::Options o;
+        o.band = 12;
+        path::Hints h;
+        h.strokes = {stroke(false, 8, {{570, 400}, {610, 400}})};
+        o.hints = &h;
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto b = core::isolate::isolated(pic, box, mff(), o);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        check("strokes: the coarse pass too -- one stroke, the whole blob out, the figure kept",
+              b && S::coverage(*b, 590, 400) < 0.5f && S::coverage(*b, 590, 345) < 0.5f && S::coverage(*b, 640, 430) < 0.5f && iou(*b, truth) > 0.95,
+              b ? num(iou(*b, truth)) + " (" + num(ms) + " ms)" : "nullopt");
+    }
+    // 2. A FIGURE stroke: a patch of the ground's colour inside the figure (a
+    // button, a highlight) -- cut out as a hole; a stroke on it keeps it.
+    {
+        const auto pic = figure_with(W, H, 160, 150, 80, {{160, 150, 20, false}});
+        const auto truth = disc_mask(W, H, 160, 150, 80);
+        const auto loose = paths::ellipse_path(160, 150, 92, 92);
+        core::isolate::Options o;
+        o.band = 14;
+        const auto a = core::isolate::isolated(pic, loose, mff(), o);
+        path::Hints h;
+        h.strokes = {stroke(true, 12, {{150, 150}, {170, 150}})};
+        o.hints = &h;
+        const auto b = core::isolate::isolated(pic, loose, mff(), o);
+        check("strokes: without them a ground-coloured patch in the figure is a hole", a && S::coverage(*a, 160, 150) < 0.5f, a ? num(S::coverage(*a, 160, 150)) : "nullopt");
+        check("strokes: a figure stroke on it -> the patch kept (all of it, not just the stroke)",
+              b && S::coverage(*b, 160, 150) > 0.5f && S::coverage(*b, 160, 136) > 0.5f && iou(*b, truth) > 0.95,
+              b ? num(iou(*b, truth)) + " edge " + num(S::coverage(*b, 160, 136)) : "nullopt");
+    }
+    // 3. A figure stroke BEYOND the path: the path cuts off the figure's right
+    // side by far more than the band; a stroke there brings it in.
+    {
+        const auto pic = figure(W, H, 160, 150, 70);
+        const auto truth = disc_mask(W, H, 160, 150, 70);
+        const auto cut_off = paths::rect_path(80, 70, 180, 230);   // ends 50 px short of the right edge
+        core::isolate::Options o;
+        o.band = 8;
+        const auto a = core::isolate::isolated(pic, cut_off, mff(), o);
+        path::Hints h;
+        h.strokes = {stroke(true, 6, {{196, 100}, {212, 122}, {218, 150}, {212, 178}, {196, 200}})};   // along the far side
+        o.hints = &h;
+        const auto b = core::isolate::isolated(pic, cut_off, mff(), o);
+        check("strokes: a path short of the figure leaves its far side out", a && S::coverage(*a, 220, 150) < 0.5f, a ? num(S::coverage(*a, 220, 150)) : "nullopt");
+        check("strokes: a figure stroke beyond it -> the far side found, to the real edge",
+              b && S::coverage(*b, 222, 150) > 0.5f && S::coverage(*b, 238, 150) < 0.5f && iou(*b, truth) > iou(*a, truth) + 0.05,
+              b ? num(iou(*b, truth)) + " vs " + num(iou(*a, truth)) + " at 222: " + num(S::coverage(*b, 222, 150)) + " at 238: " + num(S::coverage(*b, 238, 150)) : "nullopt");
+        // Strokes alone (no outline): a figure stroke is enough to look round.
+        const auto c = core::isolate::isolated(pic, path::Path{}, mff(), o);
+        check("strokes: no outline but a figure stroke -> something found (not refused)", c.has_value() && !S::empty(*c), "");
+        check("strokes: no outline, no figure stroke -> nullopt", [&] {
+            path::Hints bg;
+            bg.strokes = {stroke(false, 6, {{20, 20}})};
+            core::isolate::Options q;
+            q.hints = &bg;
+            return !core::isolate::isolated(pic, path::Path{}, mff(), q);
+        }(), "");
+    }
+    // 4. The verbs: ONE step a stroke, the .klimt keeps them, Crop carries them, Isolate reads them.
+    {
+        const auto pic = figure_with(W, H, 120, 150, 60, {{235, 150, 26, true}});
+        Doc t;
+        {
+            core::Document::Loading load(t.d);
+            core::Image im = t.d.image();
+            im.width = W; im.height = H; im.format = P::Format{};
+            core::Layer bg;
+            bg.name = "Background";
+            bg.pixels = std::make_shared<const P::TileMap>(pic);
+            t.d.replace(im, {{"L1", bg}}, 2);
+        }
+        const auto id = L::add_path_layer(t.j, t.d, paths::rect_path(40, 70, 280, 230), "L1");
+        const bool s1 = L::add_path_stroke(t.j, t.d, id, stroke(false, 7, {{235, 128}, {235, 172}}));
+        const std::string lab1 = t.j.undo_label();
+        const bool s2 = L::add_path_stroke(t.j, t.d, id, stroke(false, 7, {{213, 150}, {257, 150}}));
+        check("strokes (verb): ONE step each -- \"Background Stroke\"", s1 && s2 && lab1 == "Background Stroke" && t.d.get(id)->hints && t.d.get(id)->hints->strokes.size() == 2, lab1);
+        check("strokes (verb): no point -> refused", !L::add_path_stroke(t.j, t.d, id, stroke(true, 7, {})), "");
+        check("strokes (verb): refused on a pixel layer", !L::add_path_stroke(t.j, t.d, "L1", stroke(true, 7, {{1, 1}})), "");
+        check("Isolate (verb) reads the layer's strokes -- the blob left out",
+              core::paths::isolate(t.j, t.d, id, 12) && t.d.selection() && S::coverage(*t.d.selection(), 235, 150) < 0.5f && S::coverage(*t.d.selection(), 120, 150) > 0.5f, "");
+        t.j.undo();
+        t.j.undo();
+        check("strokes: undo takes the last one back", t.d.get(id)->hints && t.d.get(id)->hints->strokes.size() == 1, "");
+        t.j.redo();
+        check("strokes: clear -> none (one step)", L::set_path_hints(t.j, t.d, id, {}, "Clear Isolate Strokes") && !t.d.get(id)->hints &&
+              t.j.undo_label() == "Clear Isolate Strokes", t.j.undo_label());
+        t.j.undo();
+        // Through the .klimt.
+        const auto file = (std::filesystem::temp_directory_path() / ("klimt_strokes_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = t.d.image();
+        c.layers = t.d.snapshot();
+        c.next_id = t.d.next_id();
+        std::string err;
+        const bool saved = core::file::save_klimt(file, c, err);
+        const auto back = saved ? core::file::open(file, err) : std::nullopt;
+        const core::Layer* bl = back && back->layers.count(id) ? &back->layers.at(id) : nullptr;
+        check("strokes: the .klimt keeps them", bl && bl->hints && *bl->hints == *t.d.get(id)->hints, err);
+        std::filesystem::remove(file);
+        // Crop: they move with the picture.
+        core::canvas::crop(t.j, t.d, {20, 10, 280, 260}, P::rgba(1, 1, 1, 1));
+        const auto cl = t.d.get(id);
+        check("strokes: Crop moves them with the picture", cl && cl->hints && cl->hints->strokes[0].pts[0] == path::P{215, 118}, "");
+    }
+}
+// s038 -- Refine to Edges: a SELECTION as the rough area; the session.
+void selftest_refine(const Check& check) {
+    const int W = 320, H = 300;
+    using M = std::shared_ptr<const P::TileMap>;
+    // 1. A rough Lasso round the figure (a hexagon, loose) -> its real edge.
+    {
+        const auto pic = figure(W, H, 160, 150, 70);
+        const auto truth = disc_mask(W, H, 160, 150, 70);
+        std::vector<S::Pt> hex;
+        for (int k = 0; k < 6; ++k) hex.push_back({160 + 95 * std::cos(k * M_PI / 3), 150 + 95 * std::sin(k * M_PI / 3)});
+        const auto rough = S::polygon_mask(mff(), W, H, hex);
+        core::isolate::Options o;
+        o.band = 12;
+        const auto a = core::isolate::isolated(pic, rough, mff(), o);
+        check("refine: a rough Lasso round the figure -> its real edge", a && iou(*a, truth) > 0.95 && iou(rough, truth) < 0.85,
+              a ? num(iou(*a, truth)) + " (the lasso: " + num(iou(rough, truth)) + ")" : "nullopt");
+        // The path and the same shape as a selection agree.
+        const auto box = paths::rect_path(70, 60, 250, 240);
+        const auto b = core::isolate::isolated(pic, box, mff(), o);
+        const auto c = core::isolate::isolated(pic, S::rect_mask(mff(), W, H, {70, 60, 180, 180}), mff(), o);
+        check("refine: a box as a path and as a selection -- the same cut", b && c && iou(*b, *c) > 0.99, b && c ? num(iou(*b, *c)) : "nullopt");
+        // A feathered (partly selected) rough area: from half up counts.
+        const auto soft = S::feathered(rough, 6);
+        const auto d = soft ? core::isolate::isolated(pic, *soft, mff(), o) : std::nullopt;
+        check("refine: a feathered rough area works the same", d && iou(*d, truth) > 0.95, d ? num(iou(*d, truth)) : "nullopt");
+        check("refine: an area of another size -> nullopt", !core::isolate::isolated(pic, S::rect_mask(mff(), 100, 100, {0, 0, 50, 50}), mff(), o), "");
+    }
+    // 2. The session: strokes on top of the same rough area; Ctrl+Z; a new Lasso.
+    {
+        namespace R = core::refine;
+        const M rough = std::make_shared<const P::TileMap>(S::rect_mask(mff(), W, H, {10, 10, 50, 50}));
+        R::Session s;
+        s.start(rough, rough);
+        check("session: Refine to Edges starts one -- the rough area, no strokes", s.active() && s.rough() == rough && s.hints().empty() && s.runs() == 1, "");
+        const M r1 = std::make_shared<const P::TileMap>(S::rect_mask(mff(), W, H, {12, 12, 40, 40}));
+        s.landed(r1, s.hints());
+        const bool c1 = s.stroke(stroke(true, 5, {{70, 70}}), r1);
+        check("session: a stroke on its result carries on (same rough area)", c1 && s.rough() == rough && s.hints().strokes.size() == 1, "");
+        const bool c2 = s.stroke(stroke(false, 5, {{20, 20}}), r1);   // before the first stroke's run landed
+        check("session: a second stroke while the first still runs -- both kept", c2 && s.hints().strokes.size() == 2, std::to_string(s.hints().strokes.size()));
+        const M r2 = std::make_shared<const P::TileMap>(S::rect_mask(mff(), W, H, {12, 12, 60, 60}));
+        s.landed(r2, s.hints());
+        const bool c3 = s.stroke(stroke(true, 5, {{90, 90}}), r1);   // Ctrl+Z went back to r1
+        check("session: Ctrl+Z back to an earlier result -- its strokes only, then the new one",
+              c3 && s.hints().strokes.size() == 1,
+              std::to_string(s.hints().strokes.size()));
+        check("session: ... the stroke is the new one", s.hints().strokes.back().pts[0] == path::P{90, 90} && s.runs() == 2, std::to_string(s.runs()));
+        const M lasso = std::make_shared<const P::TileMap>(S::rect_mask(mff(), W, H, {100, 100, 50, 50}));
+        const bool c4 = s.stroke(stroke(true, 5, {{120, 120}}), lasso);
+        check("session: a stroke on a selection it didn't make -- a fresh one from it", !c4 && s.rough() == lasso && s.hints().strokes.size() == 1, "");
+        R::Session pth;   // a path's area: the rough area isn't the selection; nothing selected
+        pth.start(rough, nullptr);
+        const bool c6 = pth.stroke(stroke(true, 5, {{70, 70}}), nullptr);
+        check("session: from a path's area -- a stroke with nothing selected carries on (the path stays the rough area)", c6 && pth.rough() == rough, "");
+        {
+            path::Hints h;
+            R::add_stroke(h, stroke(true, 6, {{100, 100}, {120, 100}}));
+            R::add_stroke(h, stroke(true, 6, {{200, 200}}));
+            R::add_stroke(h, stroke(false, 4, {{118, 108}}));   // crosses the first add (6 + 4 >= 8.2)
+            check("add_stroke: an Alt stroke over an add -- the add overruled, the other add kept",
+                  h.strokes.size() == 2 && h.strokes[0].pts[0] == path::P{200, 200} && !h.strokes[1].figure, std::to_string(h.strokes.size()));
+            R::add_stroke(h, stroke(false, 4, {{300, 300}}));
+            check("add_stroke: the same kind, or not crossing -- kept", h.strokes.size() == 3, std::to_string(h.strokes.size()));
+        }
+        R::Session n;
+        const bool c5 = n.stroke(stroke(true, 5, {{120, 120}}), nullptr);
+        check("session: a first stroke with nothing selected -- a session with no rough area", !c5 && n.active() && !n.rough() && n.hints().strokes.size() == 1, "");
+    }
+    // 2b. Seen under Xvfb (s038): the rough area cuts a SECOND blob of the
+    // figure's colour; an add stroke on it must bring in the blob (all of it)
+    // and nothing of the rough area's background; an Alt stroke over that add
+    // takes the blob out again, all of it.
+    {
+        const int BW = 480, BH = 300;
+        const auto pic = figure_with(BW, BH, 160, 150, 80, {{330, 150, 45, true}});
+        const auto big = disc_mask(BW, BH, 160, 150, 80);
+        const auto both = S::combine(&big, disc_mask(BW, BH, 330, 150, 45), S::Op::Add);
+        const auto rough = S::polygon_mask(mff(), BW, BH, {{60, 50}, {300, 40}, {300, 260}, {60, 270}});   // ends in the small blob
+        namespace R = core::refine;
+        path::Hints h;
+        R::add_stroke(h, stroke(true, 12, {{320, 152}, {345, 152}}));
+        core::isolate::Options o;
+        o.band = 12;
+        o.hints = &h;
+        const auto a = core::isolate::isolated(pic, rough, mff(), o);
+        check("refine brush: an add on a blob the rough area cut -- the whole blob in, no background",
+              a && iou(*a, both) > 0.95 && S::coverage(*a, 330, 112) > 0.5f && S::coverage(*a, 80, 60) < 0.5f, a ? num(iou(*a, both)) : "nullopt");
+        R::add_stroke(h, stroke(false, 12, {{325, 146}, {340, 146}}));
+        const auto b = core::isolate::isolated(pic, rough, mff(), o);
+        check("refine brush: then Alt over it -- the add overruled, the blob out, all of it",
+              b && iou(*b, big) > 0.95 && S::coverage(*b, 330, 150) < 0.5f && S::coverage(*b, 330, 112) < 0.5f, b ? num(iou(*b, big)) : "nullopt");
+    }
+    // 2c. The same on a NOISY picture with SOFT edges and a many-coloured
+    // ground (seen under Xvfb, s038: the strokes' reach walked across a soft
+    // edge, pixel by pixel, and the rough area's ground came in as figure).
+    {
+        const int BW = 480, BH = 300;
+        const auto pic = P::TileMap(P::Format{}, BW, BH).paint({0, 0, BW, BH}, [&](int x, int y, const P::Px&) {
+            const auto cov = [&](double cx, double cy, double r) { return std::clamp(r - std::hypot(x + 0.5 - cx, y + 0.5 - cy) + 1.5, 0.0, 3.0) / 3.0; };
+            const double f = std::max(cov(160, 150, 80), cov(330, 150, 45));   // a 3 px soft edge
+            std::uint32_t h = static_cast<std::uint32_t>(x) * 73856093u ^ static_cast<std::uint32_t>(y) * 19349663u;
+            h = h * 1664525u + 1013904223u;
+            const auto n = [&](int k) { return (static_cast<float>((h >> (8 * k)) & 255u) / 255.f - 0.5f) * 0.22f; };   // +-0.11
+            const float gr = 0.80f + 0.12f * std::sin(x * 0.03f), gg = 0.75f + 0.15f * std::cos(y * 0.04f + x * 0.01f), gb = 0.55f + 0.2f * std::sin((x + y) * 0.02f);
+            const auto mix = [&](float a, float b) { return static_cast<float>(a * f + b * (1 - f)); };
+            return P::rgba(std::clamp(mix(0.70f, gr) + n(0), 0.f, 1.f), std::clamp(mix(0.20f, gg) + n(1), 0.f, 1.f), std::clamp(mix(0.16f, gb) + n(2), 0.f, 1.f), 1);
+        });
+        const auto big = disc_mask(BW, BH, 160, 150, 80);
+        const auto both = S::combine(&big, disc_mask(BW, BH, 330, 150, 45), S::Op::Add);
+        const auto rough = S::polygon_mask(mff(), BW, BH, {{60, 50}, {300, 40}, {300, 260}, {60, 270}});
+        namespace R = core::refine;
+        path::Hints h;
+        R::add_stroke(h, stroke(true, 12, {{320, 152}, {345, 152}}));
+        core::isolate::Options o;
+        o.band = 12;
+        o.hints = &h;
+        const auto a = core::isolate::isolated(pic, rough, mff(), o);
+        check("refine brush, noisy + soft edges: an add on the cut blob -- the blob in, none of the ground",
+              a && iou(*a, both) > 0.93 && S::coverage(*a, 330, 112) > 0.5f && S::coverage(*a, 80, 60) < 0.5f && S::coverage(*a, 280, 60) < 0.5f,
+              a ? num(iou(*a, both)) : "nullopt");
+        R::add_stroke(h, stroke(false, 12, {{325, 146}, {340, 146}}));
+        const auto b = core::isolate::isolated(pic, rough, mff(), o);
+        check("refine brush, noisy + soft edges: then Alt over it -- the blob out, the big one kept",
+              b && iou(*b, big) > 0.93 && S::coverage(*b, 330, 150) < 0.5f, b ? num(iou(*b, big)) : "nullopt");
+    }
+    // 3. The brush from nothing: one figure stroke across the figure, no rough area.
+    {
+        const auto pic = figure(W, H, 160, 150, 70);
+        const auto truth = disc_mask(W, H, 160, 150, 70);
+        path::Hints h;
+        h.strokes = {stroke(true, 10, {{110, 150}, {160, 120}, {210, 150}, {160, 185}})};
+        core::isolate::Options o;
+        o.band = 12;   // the stroke looks kStrokeReach round itself
+        o.hints = &h;
+        const auto a = core::isolate::isolated(pic, P::TileMap(mff(), W, H), mff(), o);
+        check("refine brush: strokes alone (no rough area, the wide band) -> the figure",
+              a && S::coverage(*a, 160, 150) > 0.5f && S::coverage(*a, 20, 20) < 0.5f && iou(*a, truth) > 0.9, a ? num(iou(*a, truth)) : "nullopt");
+    }
 }
 }  // namespace
 
@@ -451,7 +754,7 @@ void selftest_isolate(const Check& check) {
             return false;
         }(), "");
         check("isolate: cancelled -> nullopt", !core::isolate::isolated(pic, loose, mff(), o, [] { return true; }), "");
-        check("isolate: an empty path -> nullopt", !core::isolate::isolated(pic, {}, mff(), o), "");
+        check("isolate: an empty path -> nullopt", !core::isolate::isolated(pic, path::Path{}, mff(), o), "");
         // The verb, on a document holding the picture.
         Doc t;
         {
@@ -502,4 +805,12 @@ void selftest_isolate(const Check& check) {
         const auto m = core::isolate::isolated(pf, path, mf8(), o);
         check("soft edge: Isolate takes it -- the figure still found", m && iou(*m, disc_mask(W, H, 150, 100, 60)) > 0.9, m ? num(iou(*m, disc_mask(W, H, 150, 100, 60))) : "");
     }
+
+    // s037 -- the STROKES: "this is figure" / "this is background", hard hints.
+    std::cout << "\n-- paths: Isolate's strokes (s037) --\n";
+    selftest_isolate_strokes(check);
+
+    // s038 -- Refine to Edges: any selection as the rough area; the Refine brush's session.
+    std::cout << "\n-- Refine to Edges (s038) --\n";
+    selftest_refine(check);
 }

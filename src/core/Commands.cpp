@@ -62,6 +62,7 @@ const std::vector<Command>& commands() {
             {"Contract Selection", "Select", "win.select-contract", "", "modify shrink smaller", ""},
             {"Border Selection", "Select", "win.select-border", "", "modify edge band outline ring", ""},
             {"Color Range", "Select", "win.select-range", "", "colour color pick sample similar fuzziness range", ""},
+            {"Refine to Edges", "Select", "win.refine-edges", "", "snap edge subject figure isolate rough lasso cut out select and mask", "Ctrl+Alt+R"},
             {"Save Selection", "Select", "win.select-save", "", "channel alpha keep store remember", ""},
             {"Quick Mask", "Select", "win.quick-mask", "", "paint selection mask red overlay brush", "Q"},
             {"Smooth Selection", "Select", "win.select-smooth", "", "modify clean specks holes round", ""},
@@ -83,6 +84,7 @@ const std::vector<Command>& commands() {
             {"Box Blur", "Filter", "win.filter-box-blur", "", "filter blur average square soften", ""},
             {"Motion Blur", "Filter", "win.filter-motion-blur", "", "filter blur streak speed movement angle", ""},
             {"Surface Blur", "Filter", "win.filter-surface-blur", "", "filter blur smooth skin edge-preserving bilateral retouch", ""},
+            {"Lens Blur", "Filter", "win.filter-lens-blur", "", "filter blur bokeh depth of field aperture iris blades highlights camera", ""},   // s037
             {"Median", "Filter", "win.filter-median", "", "filter noise despeckle dust remove smooth", ""},
             // s034
             {"Smart Sharpen", "Filter", "win.filter-smart-sharpen", "", "filter sharpen crisp detail lens deblur focus halo", ""},
@@ -98,6 +100,7 @@ const std::vector<Command>& commands() {
             {"New Filter Layer: Box Blur", "Layer", "win.filter-layer-box-blur", "", "filter layer live non-destructive blur average", ""},
             {"New Filter Layer: Motion Blur", "Layer", "win.filter-layer-motion-blur", "", "filter layer live non-destructive blur streak speed", ""},
             {"New Filter Layer: Surface Blur", "Layer", "win.filter-layer-surface-blur", "", "filter layer live non-destructive blur smooth skin edge-preserving", ""},
+            {"New Filter Layer: Lens Blur", "Layer", "win.filter-layer-lens-blur", "", "filter layer live non-destructive blur bokeh depth of field aperture", ""},   // s037
             {"New Filter Layer: Median", "Layer", "win.filter-layer-median", "", "filter layer live non-destructive despeckle dust", ""},
             {"New Filter Layer: Smart Sharpen", "Layer", "win.filter-layer-smart-sharpen", "", "filter layer live non-destructive sharpen crisp lens deblur", ""},
             {"New Filter Layer: Dust & Scratches", "Layer", "win.filter-layer-dust-scratches", "", "filter layer live non-destructive despeckle dust scratch", ""},

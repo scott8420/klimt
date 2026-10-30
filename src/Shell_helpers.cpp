@@ -105,7 +105,7 @@ void Shell::update_layer_actions() {
     // s009: with no image, the verbs that need one grey.
     const bool img = has_image();
     on("guides-clear", img && !m_doc.image().guides.empty());   // s032
-    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save", "select-range",
+    for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save", "select-range", "refine-edges",
                           "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
                           "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate"})
         on(a, img);

@@ -578,12 +578,13 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
     std::vector<Id> path_ids;   // s035
     if (r.path_map)
         for (const auto& [id, l] : d.snapshot())
-            if (l.kind == Kind::Path && l.path) { path_ids.push_back(id); ids.push_back(id); }
+            if (l.kind == Kind::Path && (l.path || l.hints)) { path_ids.push_back(id); ids.push_back(id); }
     return j.run(label, ids, [&] {
         for (const auto& id : path_ids) {   // s035: the outlines go with the picture
             auto l = d.get(id);
             if (!l) continue;
-            l->path = std::make_shared<const path::Path>(path::mapped(*l->path, r.path_map));
+            if (l->path) l->path = std::make_shared<const path::Path>(path::mapped(*l->path, r.path_map));
+            if (l->hints) l->hints = std::make_shared<const path::Hints>(path::mapped(*l->hints, r.path_map));   // s037: the strokes too
             d.put(id, *l);
         }
         Layer im;

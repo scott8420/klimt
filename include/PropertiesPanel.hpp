@@ -48,6 +48,15 @@ public:
     // (the figure the path goes round; `band`: how far off its edge the path may be).
     sigc::signal<void(const Id&)>& signal_path_load() { return m_path_load; }
     sigc::signal<void(const Id&, double, double)>& signal_path_isolate() { return m_path_isolate; }   // s036: + the soft edge (px)
+    // s037: ISOLATE'S STROKES. The painting mode the toggles ask for (0 off,
+    // 1 figure, 2 background) and the stroke's radius (image px); Clear; and
+    // what Isolate after a stroke should use.
+    sigc::signal<void(int, double)>& signal_stroke_mode() { return m_stroke_mode; }
+    sigc::signal<void(const Id&)>& signal_strokes_clear() { return m_strokes_clear; }
+    void   stop_strokes();   // the toggles off (Esc, another tool, another layer)
+    double isolate_band() const { return m_band.get_value(); }
+    double isolate_soft() const { return m_soft.get_value(); }
+    bool   isolate_after_stroke() const { return m_stroke_auto.get_active(); }
     // s035: the path's outline on the canvas (a view setting, not the document's).
     void set_path_outline(bool shown);
     sigc::signal<void(bool)>& signal_path_outline() { return m_path_outline; }
@@ -105,6 +114,18 @@ private:
     Id                    m_path_id;
     sigc::signal<void(const Id&)> m_path_load;
     sigc::signal<void(const Id&, double, double)> m_path_isolate;
+    // s037: Isolate's strokes.
+    Gtk::ToggleButton     m_stroke_fig{"Figure"};
+    Gtk::ToggleButton     m_stroke_bg{"Background"};
+    Gtk::SpinButton       m_stroke_size;
+    Gtk::CheckButton      m_stroke_auto{"Isolate after each stroke"};
+    Gtk::Label            m_stroke_info;
+    Gtk::Button           m_stroke_clear{"Clear Strokes"};
+    bool                  m_stroke_guard = false;
+    Gtk::Widget*          m_stroke_row = nullptr;   // s038: the count and Clear (managed)
+    sigc::signal<void(int, double)> m_stroke_mode;
+    sigc::signal<void(const Id&)>   m_strokes_clear;
+    void stroke_toggled(bool figure);
     // s036: the MASK'S EDGES -- Density, Feather, Defringe: a value over a
     // slider each (Feather / Defringe squared onto the slider: fine near 0).
     struct EdgeRow { Gtk::Scale* s = nullptr; Gtk::SpinButton* n = nullptr; Gtk::Widget* top = nullptr; double hi = 100; bool sq = false; };

@@ -359,6 +359,89 @@ void selftest_sharpen(const Check& check) {
               same_in(*F::filtered(n, sb, nullptr), *F::filtered(n, sb, nullptr, false, &view), view), "");
     }
 
+    std::cout << "\n-- filters: Lens Blur (s037) --\n";
+    {
+        const auto lb = F::fresh(FilterKind::LensBlur);
+        check("lens: Photoshop's defaults (15 px, a hexagon, threshold 255), under Blur", lb.radius == 15 && lb.blades == 6 && lb.threshold == 255 &&
+              lb.bright == 0 && lb.curvature == 0 && F::group(FilterKind::LensBlur) == "Blur", "");
+        {
+            auto t = lb;
+            t.blades = 11; t.angle = 400; t.curvature = 130; t.bright = -5; t.radius = 0.2;
+            const auto n = F::normalised(t);
+            check("lens: normalised -- blades 3..8, rotation 0..360, curvature / brightness 0..100, radius 1..100",
+                  n.blades == 8 && n.angle == 360 && n.curvature == 100 && n.bright == 0 && n.radius == 1, "");
+            auto g = F::fresh(FilterKind::GaussianBlur);
+            g.blades = 3; g.bright = 50;
+            check("lens: its settings go back to their defaults on another kind", F::normalised(g).blades == 6 && F::normalised(g).bright == 0, "");
+        }
+        // The iris's area: a hexagon's (3 sqrt 3 / 2 R^2), a circle's at full curvature.
+        const auto area = [](const std::vector<F::IrisRow>& rows) {
+            double a = 0;
+            for (const auto& r : rows) if (r.hi > r.lo) a += r.hi - r.lo + 1;   // a row's pixels, its two half ends included
+            return a;
+        };
+        const double R = 30;
+        const double hex = area(F::iris(R, 6, 0, 0)), want_hex = 3 * std::sqrt(3.0) / 2 * R * R;
+        const double circ = area(F::iris(R, 6, 1, 0)), want_circ = 3.14159265 * R * R;
+        check("lens: the iris -- a hexagon's area", std::abs(hex - want_hex) / want_hex < 0.04, num(hex) + " vs " + num(want_hex));
+        check("lens: the iris -- full curvature, a circle's", std::abs(circ - want_circ) / want_circ < 0.04, num(circ) + " vs " + num(want_circ));
+        const auto h0 = F::iris(R, 6, 0, 0), h60 = F::iris(R, 6, 0, 60);
+        bool sym = h0.size() == h60.size();
+        for (std::size_t i = 0; i < h0.size() && sym; ++i) sym = std::abs(h0[i].lo - h60[i].lo) < 1e-6 && std::abs(h0[i].hi - h60[i].hi) < 1e-6;
+        check("lens: a hexagon turned 60 degrees is the same iris", sym, "");
+        const auto tri = F::iris(R, 3, 0, 0);
+        const auto rw = [&](int dy) { const auto& r = tri[static_cast<std::size_t>(dy + 30)]; return r.hi - r.lo; };
+        check("lens: a triangle, corner up -- narrow at the top, wide below", rw(-25) < rw(10), num(rw(-25)) + " vs " + num(rw(10)));
+        // A light: one bright pixel on black -> the iris's shape (a corner up, a flat side to the right).
+        const P::Format ff{P::Depth::F32, P::Mode::RGB, true};   // a light spread over ~1000 pixels is under one 8-bit level
+        auto dark = P::TileMap(ff, 120, 120).fill({0, 0, 120, 120}, P::rgba(0, 0, 0, 1)).fill({60, 60, 1, 1}, P::rgba(1, 1, 1, 1));
+        auto f = lb;
+        f.radius = 20;
+        const auto o = F::filtered(dark, f, nullptr);
+        check("lens: one light -> a hexagon -- reaches 19 px toward a corner (up; the corner at 20) ...", o && o->get(60, 41).c[0] > 0.f, o ? num(o->get(60, 41).c[0]) : "");
+        check("lens: ... but not 19 px toward a side (right; the side at 17.3)", o && o->get(79, 60).c[0] == 0.f, o ? num(o->get(79, 60).c[0]) : "");
+        f.bright = 100; f.threshold = 200;
+        const auto lit = F::filtered(dark, f, nullptr);
+        check("lens: highlight brightness -- the light blooms brighter", o && lit && lit->get(60, 55).c[0] > 4 * o->get(60, 55).c[0],
+              num(o ? o->get(60, 55).c[0] : 0) + " -> " + num(lit ? lit->get(60, 55).c[0] : 0));
+        auto f2 = f; f2.threshold = 255;
+        const auto unlit = F::filtered(dark, f2, nullptr);
+        check("lens: threshold 255 -- nothing is a light", unlit && o && std::abs(unlit->get(60, 55).c[0] - o->get(60, 55).c[0]) < 1e-6f, "");
+        // Brute force: the mean over the iris's rows, the ends' part pixels weighted (8-bit storage).
+        auto rnd = P::TileMap(P::Format{}, 50, 40);
+        std::uint32_t seed = 21;
+        for (int y = 0; y < 40; ++y)
+            for (int x = 0; x < 50; ++x) {
+                seed = seed * 1664525u + 1013904223u;
+                const float v = static_cast<float>((seed >> 24) % 256) / 255.f;
+                rnd = rnd.fill({x, y, 1, 1}, P::rgba(v, 1 - v, 0.5f, 1));
+            }
+        auto b = lb;
+        b.radius = 4; b.blades = 5; b.curvature = 30; b.angle = 17;
+        const auto out = F::filtered(rnd, b, nullptr);
+        const auto rows = F::iris(4, 5, 0.3, 17);
+        bool ok = out.has_value();
+        for (int y = 0; y < 40 && ok; y += 3)
+            for (int x = 0; x < 50 && ok; x += 3) {
+                double sum = 0, den = 0;
+                for (int dy = -4; dy <= 4; ++dy) {
+                    const auto& r = rows[static_cast<std::size_t>(dy + 4)];
+                    if (!(r.hi > r.lo)) continue;
+                    for (int dx = -8; dx <= 8; ++dx) {   // pixel dx covers [dx - .5, dx + .5]; the span [lo - .5, hi + .5]
+                        const double w = std::clamp(std::min(dx + 0.5, r.hi + 0.5) - std::max(dx - 0.5, r.lo - 0.5), 0.0, 1.0);
+                        if (w <= 0) continue;
+                        sum += w * rnd.get(std::clamp(x + dx, 0, 49), std::clamp(y + dy, 0, 39)).c[0];
+                        den += w;
+                    }
+                }
+                ok = std::abs(out->get(x, y).c[0] - sum / den) <= 0.6 / 255;
+                if (!ok) std::cout << "    at " << x << "," << y << ": " << out->get(x, y).c[0] * 255 << " vs " << sum / den * 255 << "\n";
+            }
+        check("lens: the brute force agrees (8-bit, a curved pentagon turned 17 degrees, the edges clamped)", ok, "");
+        const P::Rect view{30, 30, 50, 40};
+        check("lens: the preview's rectangle == the result there", same_in(*F::filtered(dark, f, nullptr), *F::filtered(dark, f, nullptr, false, &view), view), "");
+    }
+
     std::cout << "\n-- s034: live, filter layers, the file --\n";
     {
         core::live::clear_cache();
@@ -379,6 +462,9 @@ void selftest_sharpen(const Check& check) {
         auto mn = F::fresh(FilterKind::Minimum);
         mn.radius = 3; mn.round = true;
         check("s034: live Minimum, round", L::add_live(j, d, "L4", mn), "");
+        auto lb = F::fresh(FilterKind::LensBlur);   // s037
+        lb.blades = 5; lb.curvature = 20; lb.angle = 30; lb.bright = 40; lb.threshold = 210;
+        check("s037: live Lens Blur", L::add_live(j, d, "L4", lb), "");
         namespace fs = std::filesystem;
         const auto path = (fs::temp_directory_path() / ("klimt_s034_" + std::to_string(::getpid()) + ".klimt")).string();
         core::file::Contents c;

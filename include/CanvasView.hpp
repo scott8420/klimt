@@ -16,6 +16,7 @@
 //     middle-drag, Space+drag and the Hand tool pan; the Zoom tool clicks in
 //     (Alt: out); keys through zoom_in / zoom_out / fit / actual_size.
 #include "core/Selection.hpp"   // s008: the ants' segments, the op
+#include "core/Lasso.hpp"       // s038: the Lasso's straight sides
 
 #include <gtkmm/drawingarea.h>
 #include <cairomm/surface.h>
@@ -71,6 +72,7 @@ public:
         if (id != "crop") m_crop = false;   // s009: the box belongs to the Crop tool
         if (id != "pen") m_pen_sub = -1;     // s035: another tool ends the Pen's subpath
         m_pen_shown = -1;
+        if ((id != m_tool || variant != m_variant) && m_lasso.active()) { m_lasso.cancel(); m_rubber = false; m_drag = {}; }   // s038
         m_tool = id; m_variant = variant; update_cursor(); queue_draw();
     }
 
@@ -88,6 +90,11 @@ public:
         core::select::Op op = core::select::Op::Replace;
     };
     sigc::signal<void(const Shape&)>& signal_shape() { return m_shape_signal; }
+    // s038: the Lasso with Alt's straight sides -- open between clicks.
+    bool lasso_open() const { return m_rubber && m_lasso.active(); }
+    void lasso_finish();               // Enter: close it as it stands
+    void lasso_cancel();               // Esc: drop it
+    bool lasso_back();                 // Backspace: the last corner
     // s008 m4: a Brush / Eraser stroke: Begin (with Shift: a straight line
     // from where the last stroke ended), Move, End. Image coords.
     enum class StrokeAt { Begin, Move, End };
@@ -194,6 +201,15 @@ public:
     bool pen_backspace();              // the last (or the picked) anchor out; false: nothing to remove
     // s035 m5: the strip's Corner / Smooth -- the picked anchor; false: none picked.
     bool pen_set_smooth(bool smooth);
+    // s037: ISOLATE'S STROKES. The picked path layer's strokes drawn over the
+    // picture (figure green, background red) when `show`. In a painting mode
+    // (1 figure, 2 background; 0 off) a left-drag paints one, whatever the
+    // tool -- Alt held at its start paints the other kind -- told at its end
+    // (image px). docs/paths.md.
+    void set_hints(const core::path::Hints& h, bool show);
+    void set_hint_mode(int mode, double radius);
+    int  hint_mode() const { return m_hint_mode; }
+    sigc::signal<void(const core::path::Stroke&)>& signal_hint_stroke() { return m_hint_stroke; }
     // s035: the Pen's mode in effect changed -- Ctrl / Alt held or let go (0
     // Draw, 1 Select, 2 Convert); the strip lights it.
     sigc::signal<void(int)>& signal_pen_mode() { return m_pen_mode_signal; }
@@ -205,6 +221,14 @@ private:
     void pen_drag(double sx, double sy, bool alt);
     void pen_release();
     void draw_path(const Cairo::RefPtr<Cairo::Context>& cr);
+    void draw_hints(const Cairo::RefPtr<Cairo::Context>& cr);   // s037
+    core::path::Hints  m_hints;
+    bool               m_show_hints = false;
+    int                m_hint_mode = 0;
+    double             m_hint_r = 8;
+    bool               m_hint_drag = false;
+    core::path::Stroke m_hint_cur;
+    sigc::signal<void(const core::path::Stroke&)> m_hint_stroke;
     void pen_emit(const std::string& label);
     core::path::Path m_path;
     bool             m_show_path = false;
@@ -291,6 +315,8 @@ private:
     double            m_zbx = 0, m_zby = 0;
     void              zoom_to_box(double x0, double y0, double x1, double y1, bool out = false);
     Shape             m_drag;                          // its points so far (image coords)
+    core::select::LassoTrace m_lasso;                  // s038: the Lasso's points (m_drag.kind Lasso)
+    void              lasso_land();                    // the trace done: tell the Shell
     double            m_press_x = 0, m_press_y = 0;    // screen
     sigc::signal<void(const Shape&)> m_shape_signal;
     sigc::signal<void(int, int, bool)> m_pick_signal;

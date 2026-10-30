@@ -37,6 +37,10 @@ public:
     const GradientOpts& gradient() const { return m_gradient; }
     // s010: the Crop tool's "Delete cropped pixels" (off: they're kept beyond the image).
     bool crop_deletes() const { return m_crop_delete; }
+    // s038: the Refine brush -- how far the rough area may cut into the
+    // figure (Edge, px), the soft edge (px); its size is brush("refine").size.
+    struct RefineOpts { int band = 12; int soft = 0; };
+    const RefineOpts& refine() const { return m_refine; }
     // s008 m4: the Brush's and the Eraser's own options (each remembers).
     struct BrushOpts {
         int size = 30; int hardness = 80; int opacity = 100;
@@ -102,6 +106,7 @@ private:
     std::map<std::string, int> m_variant;
     Wand m_wand;
     bool m_crop_delete = false;
+    RefineOpts m_refine;
     GradientOpts m_gradient;
     CloneOpts m_clone;
     sigc::signal<void()> m_clone_signal;

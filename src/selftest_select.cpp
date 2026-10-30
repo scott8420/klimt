@@ -2,6 +2,7 @@
 // the ants' outline, pixels through a mask, and the verbs' steps.
 #include "core/Document.hpp"
 #include "core/Selection.hpp"
+#include "core/Lasso.hpp"
 #include "core/Composite.hpp"
 
 #include <array>
@@ -354,5 +355,130 @@ void selftest_paint(const Check& check) {
         cov = Pa::add_dabs(cov, e, {{150, 100}}, touched);
         const auto out = Pa::apply(orig, orig, cov, nullptr, e, touched);
         check("eraser, no alpha: the background colour", out.get(150, 100).c[1] == 1.f && out.get(10, 10).c[1] == 0.f, "");
+    }
+
+    std::cout << "\n-- the Lasso: Alt's straight sides (s038) --\n";
+    {
+        using L = S::LassoTrace;
+        const auto same = [](S::Pt a, S::Pt b) { return std::abs(a.x - b.x) < 1e-9 && std::abs(a.y - b.y) < 1e-9; };
+        {   // freehand only: the drag's points, closed on release
+            L t;
+            t.start({0, 0}, false, 4, 1);
+            for (int i = 1; i <= 10; ++i) t.move({double(i * 10), double(i)}, false);
+            t.release({100, 50}, false);
+            check("lasso trace: freehand -- every move a point, done on release", t.done() && t.points().size() == 12 && !t.went_straight(), std::to_string(t.points().size()));
+        }
+        {   // Alt mid-drag: a corner where it went down; moves don't add points; the band follows
+            L t;
+            t.start({0, 0}, false, 4, 1);
+            t.move({50, 0}, false);
+            t.move({60, 0}, true);
+            t.move({70, 30}, true);
+            t.move({80, 90}, true);
+            check("lasso trace: Alt down -- straight, the band only", t.straight() && t.points().size() == 3 && same(t.tip(), {80, 90}), std::to_string(t.points().size()));
+            t.move({90, 100}, false);   // Alt up, button down: the side lands, freehand again
+            t.move({95, 120}, false);
+            check("lasso trace: Alt up, button down -- the side lands, freehand on", !t.straight() && t.points().size() == 5 && same(t.points()[3], {90, 100}), std::to_string(t.points().size()));
+            t.release({95, 140}, false);
+            check("lasso trace: button up without Alt -- closes", t.done(), "");
+        }
+        {   // Alt held, button let go: open; clicks lay corners; Alt up closes
+            L t;
+            t.start({0, 0}, false, 4, 1);
+            t.move({10, 0}, false);
+            t.move({20, 0}, true);
+            t.release({100, 0}, true);
+            check("lasso trace: Alt held at release -- open, a corner there", t.open() && same(t.points().back(), {100, 0}), "");
+            t.move({100, 50}, true);
+            check("lasso trace: open -- the band follows the pointer", same(t.tip(), {100, 50}) && t.points().size() == 4, std::to_string(t.points().size()));
+            t.press({100, 100}, true);
+            t.release({100, 100}, true);
+            check("lasso trace: a click while open -- one corner", t.open() && t.points().size() == 5 && same(t.points().back(), {100, 100}), std::to_string(t.points().size()));
+            t.alt_up();
+            check("lasso trace: Alt let go, button up -- closes", t.done() && t.points().size() == 5, "");
+        }
+        {   // Alt gone while the keys were elsewhere: the next move closes it
+            L t;
+            t.start({0, 0}, false, 4, 1);
+            t.move({10, 0}, true);
+            t.release({50, 0}, true);
+            t.move({50, 40}, false);
+            check("lasso trace: a move with Alt up while open -- closes", t.done(), "");
+        }
+        {   // close by clicking the start; by a double-click; Enter; Esc
+            L t;
+            t.start({0, 0}, false, 4, 1);
+            t.move({1, 0}, false);   // arms Alt
+            t.move({2, 0}, true);
+            t.release({100, 0}, true);
+            t.press({100, 100}, true);
+            t.release({100, 100}, true);
+            t.press({2, 3}, true);   // within 4 of the start
+            check("lasso trace: a click on the start -- closes, no corner added", t.done() && t.points().size() == 5, std::to_string(t.points().size()));
+            L u;
+            u.start({0, 0}, false, 4, 1);
+            u.move({2, 0}, true);
+            u.release({100, 0}, true);
+            u.press({100, 100}, true);
+            u.release({100, 100}, true);
+            u.press({101, 101}, true);   // the double-click's second press
+            check("lasso trace: a double-click -- closes", u.done() && u.points().size() == 4, std::to_string(u.points().size()));
+            L v;
+            v.start({0, 0}, false, 4, 1);
+            v.move({2, 0}, true);
+            v.move({50, 50}, true);
+            v.finish();
+            check("lasso trace: Enter mid-side -- the band's end is the last corner", v.done() && same(v.points().back(), {50, 50}), "");
+            L w;
+            w.start({0, 0}, false, 4, 1);
+            w.move({2, 0}, true);
+            w.release({50, 0}, true);
+            w.cancel();
+            check("lasso trace: Esc -- cancelled, nothing done", w.state() == L::State::Cancelled && !w.done(), "");
+        }
+        {   // Alt at the press is the Subtract op: not straight until let go once
+            L t;
+            t.start({0, 0}, true, 4, 1);
+            t.move({10, 0}, true);
+            t.move({20, 5}, true);
+            check("lasso trace: Alt at the press -- freehand (it's the op)", !t.straight() && t.points().size() == 3, std::to_string(t.points().size()));
+            t.move({30, 5}, false);
+            t.move({40, 5}, true);
+            check("lasso trace: ... Alt again after letting go -- straight", t.straight(), "");
+            L u;
+            u.start({0, 0}, true, 4, 1);
+            u.move({10, 0}, true);
+            u.release({20, 0}, true);
+            check("lasso trace: Alt at the press, held to release -- closes (not open)", u.done(), "");
+        }
+        {   // Backspace: the last corner goes; the start stays
+            L t;
+            t.start({0, 0}, false, 4, 1);
+            t.move({2, 0}, true);
+            t.release({100, 0}, true);
+            t.press({100, 100}, true);
+            t.release({100, 100}, true);
+            const auto n = t.points().size();
+            const bool b1 = t.back();
+            check("lasso trace: Backspace -- the last corner goes", b1 && t.points().size() == n - 1 && same(t.points().back(), {100, 0}), std::to_string(t.points().size()));
+            t.back();
+            t.back();
+            t.back();
+            check("lasso trace: Backspace to the end -- the start stays", !t.points().empty() && same(t.points().front(), {0, 0}) && t.open(), "");
+        }
+        {   // the trace's polygon makes the same mask as the shape it draws
+            L t;
+            t.start({100, 100}, false, 4, 1);
+            t.move({101, 100}, false);
+            t.move({101, 100}, true);
+            t.release({300, 100}, true);
+            t.press({300, 300}, true);
+            t.release({300, 300}, true);
+            t.press({100, 300}, true);
+            t.release({100, 300}, true);
+            t.alt_up();
+            const auto m = S::polygon_mask(kMask, 400, 400, t.points());
+            check("lasso trace: three straight sides -- the square's mask", t.done() && std::abs(area(m) - 40000.0) < 2 * 200 + 1, std::to_string(area(m)));
+        }
     }
 }

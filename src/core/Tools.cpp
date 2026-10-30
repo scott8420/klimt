@@ -9,6 +9,9 @@ const std::vector<ToolSpec>& tools() {
         {"select",     "Select",      "klimt-tool-select-symbolic",     'm', 0,
          {"Rectangle", "Ellipse", "Lasso", "Wand", "Colour Range"},
          "Drag to select (the Wand: click). Shift adds, Alt subtracts, both intersect; a click deselects."},
+        {"refine",     "Refine",      "klimt-tool-refine-symbolic",     'w', 0, {},   // s038 (Scott: "could it like pixelmator")
+         "Paint over what belongs -- the selection snaps to its edges; Alt-paint takes away. [ and ] the size. "
+         "Starts from the selection you have (a rough Lasso round the subject is best), or from nothing."},
         {"pen",        "Pen",         "klimt-tool-pen-symbolic",        'p', 0, {"Draw", "Select", "Convert"},   // s035
          "Draw: click a corner, drag a smooth point, click the first point to close. Select: pick a point, drag points and handles. "
          "Convert: click a point -- corner <-> smooth. Corner / Smooth set the picked point. P draws, A selects, Shift+P: the next mode; "

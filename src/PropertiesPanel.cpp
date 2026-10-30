@@ -2,6 +2,7 @@
 #include "Log.hpp"
 #include "core/Live.hpp"   // s018
 #include "core/Paths.hpp"  // s035: what a path masks
+#include <glibmm/main.h>
 #include <gtkmm/button.h>
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/gestureclick.h>
@@ -200,7 +201,8 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
         iso_head->set_margin_top(6);
         m_path_box.append(*iso_head);
         auto note = Gtk::make_managed<Gtk::Label>("Look here: the figure the path goes round, found in the picture -- "
-                                                  "its real edge, cleaner than the path.");
+                                                  "its real edge, cleaner than the path. Then the Refine brush (W) puts right "
+                                                  "what it got wrong: paint what belongs, Alt-paint what doesn't.");
         note->set_wrap(true);
         note->set_xalign(0.0f);
         note->add_css_class("dim-label");
@@ -249,6 +251,67 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
                               "inside it the figure, the band decided from the picture");
         iso->signal_clicked().connect([this] { if (!m_path_id.empty()) m_path_isolate.emit(m_path_id, m_band.get_value(), m_soft.get_value()); });
         m_path_box.append(*iso);
+        // s037: STROKES -- paint "this is figure" / "this is background" on the
+        // canvas; Isolate takes them as sure. s038 (Scott: "confusing ... could
+        // it like pixelmator"): the toggles are OUT -- the Refine brush (W) in
+        // the rail paints them now, on the selection. Only the count and Clear
+        // stay, shown while a layer still holds strokes from s037.
+        auto st_head = Gtk::make_managed<Gtk::Label>();
+        st_head->set_markup("<b>Strokes</b>");
+        st_head->set_xalign(0.0f);
+        st_head->set_margin_top(4);
+        auto st_note = Gtk::make_managed<Gtk::Label>("Where Isolate got it wrong, paint on the picture: Figure for what belongs, "
+                                                     "Background for what doesn't. Alt paints the other kind; Esc stops.");
+        st_note->set_wrap(true);
+        st_note->set_xalign(0.0f);
+        st_note->add_css_class("dim-label");
+        st_note->add_css_class("caption");
+        auto st_row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+        st_row->add_css_class("linked");
+        m_stroke_fig.set_name("properties.path.stroke_figure");
+        m_stroke_fig.set_tooltip_text("Paint what IS the figure -- Isolate keeps it (Alt while painting: Background)");
+        m_stroke_fig.set_hexpand(true);
+        m_stroke_bg.set_name("properties.path.stroke_background");
+        m_stroke_bg.set_tooltip_text("Paint what is NOT the figure -- Isolate leaves it out (Alt while painting: Figure)");
+        m_stroke_bg.set_hexpand(true);
+        st_row->append(m_stroke_fig);
+        st_row->append(m_stroke_bg);
+        m_stroke_fig.signal_toggled().connect([this] { stroke_toggled(true); });
+        m_stroke_bg.signal_toggled().connect([this] { stroke_toggled(false); });
+        auto zrow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        auto zl = Gtk::make_managed<Gtk::Label>("Stroke size");
+        zl->set_xalign(0.0f);
+        zl->set_hexpand(true);
+        zrow->append(*zl);
+        m_stroke_size.set_name("properties.path.stroke_size");
+        m_stroke_size.set_range(1, 200);
+        m_stroke_size.set_increments(1, 10);
+        m_stroke_size.set_digits(0);
+        m_stroke_size.set_value(16);
+        m_stroke_size.set_width_chars(4);
+        m_stroke_size.set_tooltip_text("The stroke's width, in picture pixels");
+        m_stroke_size.signal_value_changed().connect([this] {
+            const int mode = m_stroke_fig.get_active() ? 1 : m_stroke_bg.get_active() ? 2 : 0;
+            if (mode) m_stroke_mode.emit(mode, m_stroke_size.get_value() / 2);
+        });
+        zrow->append(m_stroke_size);
+        auto zpx = Gtk::make_managed<Gtk::Label>("px");
+        zpx->add_css_class("dim-label");
+        zrow->append(*zpx);
+        m_stroke_auto.set_name("properties.path.stroke_auto");
+        m_stroke_auto.set_active(true);
+        m_stroke_auto.set_tooltip_text("Run Isolate again as each stroke ends, with the edge settings above");
+        auto crow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        m_stroke_info.set_xalign(0.0f);
+        m_stroke_info.set_hexpand(true);
+        m_stroke_info.add_css_class("dim-label");
+        crow->append(m_stroke_info);
+        m_stroke_clear.set_name("properties.path.stroke_clear");
+        m_stroke_clear.set_tooltip_text("Take every stroke off this path layer (one step)");
+        m_stroke_clear.signal_clicked().connect([this] { if (!m_path_id.empty()) m_strokes_clear.emit(m_path_id); });
+        crow->append(m_stroke_clear);
+        m_path_box.append(*crow);
+        m_stroke_row = crow;   // s038: only while the layer still holds s037's strokes
         m_fields.append(m_path_box);
     }
     build_edges();   // s036
@@ -290,6 +353,27 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
 void PropertiesPanel::show(const std::vector<Id>& selection) {
     m_sel = selection;
     paint();
+}
+
+// s037: one of the stroke toggles moved -- the other lets go; the mode told.
+void PropertiesPanel::stroke_toggled(bool figure) {
+    if (m_stroke_guard) return;
+    m_stroke_guard = true;
+    auto& me = figure ? m_stroke_fig : m_stroke_bg;
+    auto& other = figure ? m_stroke_bg : m_stroke_fig;
+    if (me.get_active()) other.set_active(false);
+    m_stroke_guard = false;
+    const int mode = m_stroke_fig.get_active() ? 1 : m_stroke_bg.get_active() ? 2 : 0;
+    m_stroke_mode.emit(mode, m_stroke_size.get_value() / 2);
+}
+
+void PropertiesPanel::stop_strokes() {
+    if (!m_stroke_fig.get_active() && !m_stroke_bg.get_active()) return;
+    m_stroke_guard = true;
+    m_stroke_fig.set_active(false);
+    m_stroke_bg.set_active(false);
+    m_stroke_guard = false;
+    m_stroke_mode.emit(0, m_stroke_size.get_value() / 2);
 }
 
 void PropertiesPanel::set_path_outline(bool shown) {
@@ -347,6 +431,7 @@ void PropertiesPanel::paint() {
     // s035: one path layer picked: its switches and actions.
     const bool pth = l->kind == core::Kind::Path && m_sel.size() == 1 && l->path;
     m_path_box.set_visible(pth);
+    if (m_path_id != (pth ? primary() : Id{})) Glib::signal_idle().connect_once([this] { stop_strokes(); });   // s037: another layer -- painting strokes stops
     m_path_id = pth ? primary() : Id{};
     if (pth) {
         m_path_box.set_sensitive(!m_doc.locked_all(primary()));
@@ -361,6 +446,13 @@ void PropertiesPanel::paint() {
                                              : "Masks " + what + (l->path_mask ? "" : " (when on)"));
         }
         m_path_select.set_active(l->path_select);
+        {   // s037: the strokes it holds
+            std::size_t nf = 0, nb = 0;
+            if (l->hints) for (const auto& st : l->hints->strokes) (st.figure ? nf : nb) += 1;
+            m_stroke_info.set_text(nf + nb == 0 ? "No strokes" : "Strokes: " + std::to_string(nf) + " figure, " + std::to_string(nb) + " background");
+            if (m_stroke_row) m_stroke_row->set_visible(nf + nb > 0);
+            m_stroke_clear.set_sensitive(nf + nb > 0);
+        }
         std::size_t open = 0;
         for (const auto& s : l->path->subs) open += s.closed ? 0 : 1;
         m_path_info.set_text(std::to_string(l->path->anchors()) + " anchors, " + std::to_string(l->path->subs.size()) + " subpath" +
@@ -567,6 +659,7 @@ void PropertiesPanel::paint_live(const core::Layer& l) {
         else if (lf.f.kind == core::FilterKind::SmartSharpen) std::snprintf(num, sizeof num, "  %.0f %%, %.1f px", lf.f.amount, lf.f.radius);   // s034
         else if (lf.f.kind == core::FilterKind::ReduceNoise) std::snprintf(num, sizeof num, "  %.0f", lf.f.amount);
         else if (lf.f.kind == core::FilterKind::DustScratches || lf.f.kind == core::FilterKind::SurfaceBlur) std::snprintf(num, sizeof num, "  %.0f px, %d", lf.f.radius, lf.f.threshold);
+        else if (lf.f.kind == core::FilterKind::LensBlur) std::snprintf(num, sizeof num, "  %.0f px, %.0f blades", lf.f.radius, lf.f.blades);   // s037
         else if (lf.f.kind == core::FilterKind::Maximum || lf.f.kind == core::FilterKind::Minimum)
             std::snprintf(num, sizeof num, "  %.0f px%s", lf.f.radius, lf.f.round ? ", round" : "");
         else std::snprintf(num, sizeof num, "  %.1f px", lf.f.radius);

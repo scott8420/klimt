@@ -90,4 +90,27 @@ Path toggled(const Path& p, int sub, int node);
 // rectangle comes back with its corners), the rest smooth.
 Sub fit(const std::vector<P>& loop, double tol);
 
+// ── Isolate's STROKES (s037): hints, never artwork ──────────────────────────
+// Painted on a path layer: "this is figure" / "this is background". Isolate
+// takes every pixel a stroke covers as sure (core/Isolate.hpp). Not drawn
+// into any picture -- the canvas shows them over it while the layer is
+// picked. A stroke: a polyline swept by a disc of `radius` px.
+struct Stroke {
+    bool           figure = true;
+    double         radius = 8;
+    std::vector<P> pts;
+    bool operator==(const Stroke&) const = default;
+};
+struct Hints {
+    std::vector<Stroke> strokes;
+    bool empty() const { return strokes.empty(); }
+    bool any(bool figure) const;
+    bool operator==(const Hints&) const = default;
+};
+// Every point through `f`; each radius scaled by how much `f` stretches
+// (the mean of its x and y scale) -- crop, canvas / image size, rotate.
+Hints mapped(const Hints& h, const std::function<P(P)>& f);
+// The box the strokes of one kind cover (radius included). All 0: none.
+Box box(const Hints& h, bool figure);
+
 }  // namespace klimt::core::path

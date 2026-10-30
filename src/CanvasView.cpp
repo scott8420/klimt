@@ -123,10 +123,29 @@ CanvasView::CanvasView() {
         drag->set_button(button);
         drag->signal_drag_begin().connect([this, button, drag](double x, double y) {
             m_panning = button == GDK_BUTTON_MIDDLE || m_space || m_tool == "hand";
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && lasso_open()) {   // s038: a corner, or the close
+                const bool alt = (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+                m_press_x = x;
+                m_press_y = y;
+                m_lasso.set_scale(6 / m_zoom, 1.5 / m_zoom);
+                m_lasso.press({to_image_x(x), to_image_y(y)}, alt);
+                if (m_lasso.done()) { lasso_land(); drag->set_state(Gtk::EventSequenceState::DENIED); }
+                queue_draw();
+                return;
+            }
             if (!m_panning && button == GDK_BUTTON_PRIMARY && m_xf.on) {   // s011: the transform box first
                 m_press_x = x;
                 m_press_y = y;
                 xf_press(x, y);
+                return;
+            }
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && m_hint_mode && m_iw > 0) {   // s037: an Isolate stroke, whatever the tool
+                const bool alt = (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+                m_press_x = x;
+                m_press_y = y;
+                m_hint_drag = true;
+                m_hint_cur = {(m_hint_mode == 1) != alt, m_hint_r, {{to_image_x(x), to_image_y(y)}}};
+                queue_draw();
                 return;
             }
             if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "pen" && m_iw > 0) {   // s035: the Pen
@@ -210,6 +229,7 @@ CanvasView::CanvasView() {
                 m_drag.pts = {{to_image_x(x), to_image_y(y)}};
                 if (m_drag.kind == Shape::Kind::Rect || m_drag.kind == Shape::Kind::Ellipse)   // s032: snap the corner
                     m_drag.pts[0] = {snap_x(m_drag.pts[0].x), snap_y(m_drag.pts[0].y)};
+                if (m_drag.kind == Shape::Kind::Lasso) m_lasso.start(m_drag.pts[0], alt, 6 / m_zoom, 1.5 / m_zoom);   // s038
                 m_press_x = x;
                 m_press_y = y;
                 m_rubber = true;
@@ -238,6 +258,12 @@ CanvasView::CanvasView() {
             oy = static_cast<int>(std::lround(iy));
         };
         drag->signal_drag_update().connect([this, drag, offset](double dx, double dy) {
+            if (m_hint_drag) {   // s037: a point every quarter of the radius
+                const core::path::P q{to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)};
+                const auto& last = m_hint_cur.pts.back();
+                if (std::hypot(q.x - last.x, q.y - last.y) >= std::max(0.75, m_hint_cur.radius / 4)) { m_hint_cur.pts.push_back(q); queue_draw(); }
+                return;
+            }
             if (m_pen_drag) {   // s035
                 pen_drag(m_press_x + dx, m_press_y + dy, (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{});
                 return;
@@ -316,7 +342,13 @@ CanvasView::CanvasView() {
                 return;
             }
             if (m_rubber && m_drag.kind == Shape::Kind::Point) return;   // the Wand: a click, not a drag
-            if (m_rubber) {
+            if (m_rubber && !m_panning && m_drag.kind == Shape::Kind::Lasso) {   // s038: Alt -- a straight side
+                const bool alt = (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+                m_lasso.move({to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)}, alt);
+                queue_draw();
+                return;
+            }
+            if (m_rubber && !m_panning) {
                 const double sx = m_press_x + dx, sy = m_press_y + dy;
                 core::select::Pt p{to_image_x(sx), to_image_y(sy)};
                 if (m_drag.kind != Shape::Kind::Lasso) p = {snap_x(p.x), snap_y(p.y)};   // s032
@@ -347,6 +379,16 @@ CanvasView::CanvasView() {
             queue_draw();
         });
         drag->signal_drag_end().connect([this, offset, drag](double dx, double dy) {
+            if (m_hint_drag) {   // s037: the stroke told; the Shell lands it
+                m_hint_drag = false;
+                const core::path::P q{to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)};
+                if (!(q == m_hint_cur.pts.back()) && (dx != 0 || dy != 0)) m_hint_cur.pts.push_back(q);
+                auto st = std::move(m_hint_cur);
+                m_hint_cur = {};
+                queue_draw();
+                m_hint_stroke.emit(st);
+                return;
+            }
             if (m_pen_drag) { pen_release(); return; }   // s035
             if (m_guide_drag >= 0) {   // s032: its new place told (off the picture: removed)
                 const int g = m_guide_drag;
@@ -388,7 +430,18 @@ CanvasView::CanvasView() {
                 m_stroke_signal.emit(StrokeAt::End, {to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)}, false, pressure_of(drag));
                 return;
             }
-            if (m_rubber) {
+            if (m_rubber && !m_panning && m_drag.kind == Shape::Kind::Lasso) {   // s038
+                const bool alt = (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+                const bool click = !m_lasso.went_straight() && m_lasso.points().size() <= 2 && std::hypot(dx, dy) < 3;
+                m_lasso.release({to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)}, alt);
+                if (m_lasso.done()) {
+                    if (click) m_drag.kind = Shape::Kind::None;   // a click deselects
+                    lasso_land();
+                }
+                queue_draw();
+                return;
+            }
+            if (m_rubber && !m_panning) {
                 m_rubber = false;
                 Shape s = m_drag;
                 m_drag = {};
@@ -413,12 +466,18 @@ CanvasView::CanvasView() {
     motion->signal_motion().connect([this, motion](double x, double y) {
         m_px = x;
         m_py = y;
+        if (lasso_open() && m_lasso.open()) {   // s038: the band follows; Alt gone -- it closes
+            const bool alt = (motion->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+            m_lasso.move({to_image_x(x), to_image_y(y)}, alt);
+            if (m_lasso.done()) lasso_land();
+            queue_draw();
+        }
         if (m_tool == "pen" && !m_pen_drag) {   // s035: the modifiers as they are now (the keys may have gone to another widget)
             const auto st = motion->get_current_event_state();
             const bool c = (st & Gdk::ModifierType::CONTROL_MASK) != Gdk::ModifierType{}, a = (st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
             if (c != m_pen_ctrl || a != m_pen_alt) { m_pen_ctrl = c; m_pen_alt = a; pen_modifiers(); }
         }
-        if (painting() || (m_tool == "pen" && m_pen_sub >= 0)) queue_draw();   // the brush outline / the Pen's rubber band follows the pointer
+        if (painting() || m_hint_mode || (m_tool == "pen" && m_pen_sub >= 0)) queue_draw();   // the brush outline / the Pen's rubber band follows the pointer
         if (m_on_pointer) m_on_pointer(x, y);   // s031: the rulers' marks
         if (m_tool == "move" && !m_space && !m_panning && m_guide_drag < 0) {   // s032: over a guide
             const int g = guide_near(x, y);
@@ -426,7 +485,7 @@ CanvasView::CanvasView() {
             else update_cursor();
         }
     });
-    motion->signal_leave().connect([this] { m_px = m_py = -1; if (painting()) queue_draw(); if (m_on_pointer) m_on_pointer(-1, -1); });
+    motion->signal_leave().connect([this] { m_px = m_py = -1; if (painting() || m_hint_mode) queue_draw(); if (m_on_pointer) m_on_pointer(-1, -1); });
     add_controller(motion);
 
     // Ctrl+scroll zooms at the pointer; scroll pans.
@@ -453,6 +512,7 @@ CanvasView::CanvasView() {
         if (k == GDK_KEY_Control_L || k == GDK_KEY_Control_R || k == GDK_KEY_Alt_L || k == GDK_KEY_Alt_R) {
             if (k == GDK_KEY_Control_L || k == GDK_KEY_Control_R) m_pen_ctrl = true; else m_pen_alt = true;
             if (m_tool == "pen") pen_modifiers();
+            if (m_hint_mode) queue_draw();   // s038: the Refine ring's colour
             return false;
         }
         if (k != GDK_KEY_space) return false;
@@ -461,7 +521,12 @@ CanvasView::CanvasView() {
     }, false);
     keys->signal_key_released().connect([this](guint k, guint, Gdk::ModifierType) {
         if (k == GDK_KEY_Control_L || k == GDK_KEY_Control_R) { m_pen_ctrl = false; if (m_tool == "pen") pen_modifiers(); }
-        if (k == GDK_KEY_Alt_L || k == GDK_KEY_Alt_R) { m_pen_alt = false; if (m_tool == "pen") pen_modifiers(); }
+        if (k == GDK_KEY_Alt_L || k == GDK_KEY_Alt_R) {
+            m_pen_alt = false;
+            if (m_tool == "pen") pen_modifiers();
+            if (lasso_open() && m_lasso.open()) { m_lasso.alt_up(); if (m_lasso.done()) lasso_land(); queue_draw(); }   // s038
+            if (m_hint_mode) queue_draw();
+        }
         if (k == GDK_KEY_space) { m_space = false; update_cursor(); }
     });
     add_controller(keys);
@@ -668,6 +733,7 @@ void CanvasView::pen_modifiers() {
 void CanvasView::update_cursor() {
     if (m_panning) set_cursor("grabbing");
     else if (m_space || m_tool == "hand") set_cursor("grab");
+    else if (m_hint_mode) set_cursor("crosshair");   // s037: painting Isolate strokes (the ring shows the size)
     else if (m_tool == "zoom") set_cursor("zoom-in");
     else if (m_tool == "move") set_cursor("move");
     else if (m_tool == "pen" && (m_variant == 1 || (m_variant == 0 && m_pen_ctrl))) set_cursor("default");    // s035: Select (or Ctrl held): the arrow
@@ -723,9 +789,19 @@ void CanvasView::draw_rubber(const Cairo::RefPtr<Cairo::Context>& cr) {
     cr->save();
     cr->set_line_width(1);
     const auto& a = m_drag.pts.front();
-    if (m_drag.kind == Shape::Kind::Lasso) {
-        cr->move_to(to_screen_x(a.x), to_screen_y(a.y));
-        for (const auto& p : m_drag.pts) cr->line_to(to_screen_x(p.x), to_screen_y(p.y));
+    if (m_drag.kind == Shape::Kind::Lasso) {   // s038: the trace, and Alt's band to the pointer
+        const auto& pts = m_lasso.points();
+        if (pts.empty()) { cr->restore(); return; }
+        cr->move_to(to_screen_x(pts.front().x), to_screen_y(pts.front().y));
+        for (const auto& p : pts) cr->line_to(to_screen_x(p.x), to_screen_y(p.y));
+        if (m_lasso.straight()) {
+            const auto t = m_lasso.tip();
+            cr->line_to(to_screen_x(t.x), to_screen_y(t.y));
+            // the start, as a target: a click there closes
+            const double sx = std::round(to_screen_x(pts.front().x)) + 0.5, sy = std::round(to_screen_y(pts.front().y)) + 0.5;
+            cr->move_to(sx + 3.5, sy);
+            cr->arc(sx, sy, 3.5, 0, 2 * M_PI);
+        }
     } else if (m_drag.pts.size() >= 2) {
         const auto& b = m_drag.pts.back();
         const double x0 = std::round(to_screen_x(std::min(a.x, b.x))) + 0.5, y0 = std::round(to_screen_y(std::min(a.y, b.y))) + 0.5;
@@ -745,6 +821,38 @@ void CanvasView::draw_rubber(const Cairo::RefPtr<Cairo::Context>& cr) {
     cr->set_dash(std::vector<double>{4, 4}, 0);
     cr->stroke();
     cr->restore();
+}
+
+// ── s038: the Lasso's trace ─────────────────────────────────────────────────
+void CanvasView::lasso_land() {
+    Shape s = m_drag;
+    s.pts = m_lasso.points();
+    m_lasso = {};
+    m_drag = {};
+    m_rubber = false;
+    queue_draw();
+    m_shape_signal.emit(s);
+}
+
+void CanvasView::lasso_finish() {
+    if (!lasso_open()) return;
+    m_lasso.finish();
+    lasso_land();
+}
+
+void CanvasView::lasso_cancel() {
+    if (!lasso_open()) return;
+    m_lasso.cancel();
+    m_lasso = {};
+    m_drag = {};
+    m_rubber = false;
+    queue_draw();
+}
+
+bool CanvasView::lasso_back() {
+    if (!lasso_open() || !m_lasso.back()) return false;
+    queue_draw();
+    return true;
 }
 
 // ── s009 m2: the crop box ─────────────────────────────────────────────────────
@@ -1138,6 +1246,7 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
             cr->paint();
             cr->restore();
         }
+    draw_hints(cr);  // s037: Isolate's strokes, under the outline
     draw_path(cr);   // s035 -- under the ants, so a path loaded as the selection still shows its ants
     draw_ants(cr, w, h);
     draw_rubber(cr);

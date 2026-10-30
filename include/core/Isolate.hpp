@@ -26,16 +26,32 @@
 
 namespace klimt::core::isolate {
 
+// s038: how far round itself a figure stroke looks (px) -- its blob may
+// reach well beyond the rough area and the band.
+constexpr double kStrokeReach = 64;
+
 struct Options {
     double band = 12;     // how far the path may cut into the figure, px (2 .. 64)
     int    rounds = 3;    // cut, re-learn, cut ...
     double soft = 0;      // s036: a soft edge this wide (px, 0: off) -- hair, fur (core/Matte.hpp)
+    // s037: the STROKES -- every pixel a figure stroke covers is surely
+    // figure, a background stroke's surely background (a later stroke over an
+    // earlier one wins). A figure stroke beyond the path widens the work to
+    // take it in; both feed the first colour models. nullptr: none.
+    const path::Hints* hints = nullptr;
 };
 
 // `picture`: what the eye sees (RGB / RGBA, any depth). The mask: the
 // selection's format (`mf`), the picture's size. nullopt when cancelled or
-// when the path encloses nothing.
+// when the path encloses nothing (and no figure stroke stands in for it).
 std::optional<pixel::TileMap> isolated(const pixel::TileMap& picture, const path::Path& p, const pixel::Format& mf,
+                                       const Options& o = {}, const std::function<bool()>& cancelled = {},
+                                       const std::function<void(double)>& progress = {});
+// s038: the same from any ROUGH AREA -- a selection (a Lasso round the
+// figure, a Marquee, a Wand's ...) in place of the path: "the figure is in
+// here". Partly selected pixels count as inside from half up. An empty area
+// with a figure stroke: the stroke alone is the hint.
+std::optional<pixel::TileMap> isolated(const pixel::TileMap& picture, const pixel::TileMap& area, const pixel::Format& mf,
                                        const Options& o = {}, const std::function<bool()>& cancelled = {},
                                        const std::function<void(double)>& progress = {});
 

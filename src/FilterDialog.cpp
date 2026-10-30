@@ -223,6 +223,14 @@ void FilterDialog::rebuild() {
             row("filter.radius", "Radius", 1, 100, 0, true, "pixels", &m_f.radius);
             row("filter.threshold", "Threshold", 2, 255, 0, false, "levels", &m_threshold);
             break;
+        case FilterKind::LensBlur:   // s037: the iris, then the specular highlights
+            row("filter.radius", "Radius", 1, 100, 0, true, "pixels", &m_f.radius);
+            row("filter.blades", "Blades", 3, 8, 0, false, "", &m_f.blades);
+            row("filter.curvature", "Blade Curvature", 0, 100, 0, false, "%", &m_f.curvature);
+            row("filter.rotation", "Rotation", 0, 360, 0, false, "°", &m_angle);
+            row("filter.bright", "Highlight Brightness", 0, 100, 0, false, "%", &m_f.bright);
+            row("filter.threshold", "Highlight Threshold", 0, 255, 0, false, "levels", &m_threshold);
+            break;
         case FilterKind::None: break;
     }
 }

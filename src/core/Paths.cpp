@@ -159,6 +159,9 @@ bool isolate(DocJournal& j, Document& d, const Document::Id& id, double band, se
     if (!pic) return false;
     isolate::Options o;
     o.band = band;
+    const auto l = d.get(id);   // s037: its strokes
+    const auto hints = l ? l->hints : nullptr;
+    o.hints = hints.get();
     auto m = isolate::isolated(*pic, *p, d.mask_format(), o);
     if (!m) return false;
     auto c = select::combine(d.selection(), *m, op);

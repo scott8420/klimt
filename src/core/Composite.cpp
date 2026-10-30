@@ -465,7 +465,7 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
         // (all of them when a filter layer could read the masked layer).
         if (a && b && a->kind == Kind::Path && b->kind == Kind::Path) {
             Layer x = *a;
-            x.path = b->path; x.path_select = b->path_select; x.name = b->name; x.locks = b->locks;
+            x.path = b->path; x.hints = b->hints; x.path_select = b->path_select; x.name = b->name; x.locks = b->locks;
             if (x == *b) {   // only the outline / Selection switch / name / locks changed
                 if (!a->path_mask || !a->visible) continue;   // it masks nothing (and still doesn't)
                 bool reads = false;   // a filter layer above it, in its scope or an outer one
@@ -486,7 +486,7 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
             } else if (!a->path_mask && !b->path_mask) {
                 // switches / visibility of a path that masks nothing before or after: nothing shows
                 Layer y = *a;
-                y.path = b->path; y.path_select = b->path_select; y.name = b->name; y.locks = b->locks; y.visible = b->visible;
+                y.path = b->path; y.hints = b->hints; y.path_select = b->path_select; y.name = b->name; y.locks = b->locks; y.visible = b->visible;
                 if (y == *b) continue;
             }
         }
