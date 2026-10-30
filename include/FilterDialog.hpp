@@ -10,12 +10,14 @@
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/dropdown.h>
 #include <gtkmm/label.h>
+#include <gtkmm/stringlist.h>
 #include <gtkmm/togglebutton.h>
 #include <gtkmm/drawingarea.h>
 #include <algorithm>
 #include <gtkmm/window.h>
 #include <sigc++/signal.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -38,6 +40,8 @@ public:
     void set_busy(bool b);   // the preview is being made
     // s039: whether the layer has a mask (Lens Blur's Layer Mask depth map).
     void set_has_mask(bool on) { m_has_mask = on; }
+    // s041 m4: the document's saved channels (id, name) -- Lens Blur's Source lists them.
+    void set_channels(std::vector<std::pair<std::string, std::string>> ch) { m_channels = std::move(ch); }
     // s039 m2: SET FOCAL POINT -- the button armed (the dialog lets the canvas
     // have a click) or not; the Shell answers with the depth there (0 .. 1).
     sigc::signal<void(bool)>& signal_focal_pick() { return m_focal_signal; }
@@ -73,6 +77,11 @@ private:
     void extreme_rows();
     void lens_rows();                                  // s039
     void radial_rows();                                // s040
+    // s041 m3: a labelled dropdown, synced with the filter.
+    struct Choice { Gtk::DropDown* dd; std::function<int()> get; };
+    std::vector<Choice> m_choices;
+    void choice(const char* name, const char* label, std::vector<Glib::ustring> items, std::function<int()> get,
+                std::function<void(int)> put, const char* tip = nullptr);
     Gtk::DropDown*            m_method = nullptr;      // s040: Spin / Zoom
     Gtk::DropDown*            m_quality = nullptr;     // Draft / Good / Best
     Gtk::DrawingArea*         m_centre_box = nullptr;  // s040 m2: the Blur Centre, dragged
@@ -86,6 +95,8 @@ private:
     Gtk::Label*               m_depth_note = nullptr;
     std::vector<Gtk::Widget*> m_depth_only;            // the rows that need a source
     bool                      m_has_mask = false;
+    std::vector<std::pair<std::string, std::string>> m_channels;   // s041 m4
+    Glib::RefPtr<Gtk::StringList> depth_model() const;
     std::vector<Row>     m_rows;
     Gtk::CheckButton*    m_gauss = nullptr;
     Gtk::CheckButton*    m_uniform = nullptr;

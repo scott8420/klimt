@@ -57,7 +57,7 @@ FilterDialog::FilterDialog(Gtk::Window& parent)
     set_child(*box);
 
     m_preview.signal_toggled().connect([this] { m_changed.emit(); });
-    m_live.signal_toggled().connect([this] { m_changed.emit(); });
+    m_live.signal_toggled().connect([this] { if (m_depth) sync(); m_changed.emit(); });   // s041 m4: the channel note follows
     m_cancel_button.signal_clicked().connect([this] { close(); });
     m_ok_button.signal_clicked().connect([this] {
         const core::Filter f = F::normalised(m_f);
@@ -86,6 +86,7 @@ void FilterDialog::ask(const core::Filter& start, const std::string& layer) {
     m_angle = m_f.angle;
     set_title(std::string(F::label(m_f.kind)) + (m_editing ? " (live)" : "") + " -- “" + layer + "”");
     if (kind_changed || m_rows.empty()) rebuild();
+    else if (m_depth) { m_syncing = true; m_depth->set_model(depth_model()); m_syncing = false; }   // s041 m4: this document's channels
     sync();
     m_busy.set_visible(false);
     present();
@@ -160,6 +161,7 @@ void FilterDialog::rebuild() {
     m_depth = nullptr; m_invert = nullptr; m_depth_note = nullptr; m_focal_pick = nullptr;   // s039
     m_depth_only.clear();
     m_method = m_quality = nullptr;   // s040
+    m_choices.clear();                // s041 m3
     m_centre_box = nullptr;
     auto head = Gtk::make_managed<Gtk::Label>();
     head->set_markup("<b>" + Glib::Markup::escape_text(std::string(F::label(m_f.kind))) + "</b>");
@@ -202,6 +204,29 @@ void FilterDialog::rebuild() {
             break;
         case FilterKind::LensBlur: lens_rows(); break;   // s037, s039
         case FilterKind::RadialBlur: radial_rows(); break;   // s040
+        case FilterKind::PolarCoordinates:   // s041 m3
+            choice("filter.polar", "Mode", {"Rectangular to Polar", "Polar to Rectangular"}, [this] { return m_f.axis; },
+                   [this](int v) { m_f.axis = v; }, "Rectangular to Polar: the top edge gathers into the middle, rows become rings");
+            break;
+        case FilterKind::Ripple:
+            row("filter.amount", "Amount", -999, 999, 0, false, "%", &m_f.amount);
+            choice("filter.size", "Size", {"Small", "Medium", "Large"}, [this] { return m_f.quality; }, [this](int v) { m_f.quality = v; });
+            break;
+        case FilterKind::Wave:
+            row("filter.wavelength", "Wavelength", 2, 999, 0, true, "pixels", &m_f.radius);
+            row("filter.amplitude", "Amplitude", 1, 999, 0, true, "pixels", &m_f.amount);
+            row("filter.scale_h", "Horizontal", 0, 100, 0, false, "%", &m_f.scale_h);
+            row("filter.scale_v", "Vertical", 0, 100, 0, false, "%", &m_f.scale_v);
+            choice("filter.wave_type", "Type", {"Sine", "Triangle", "Square"}, [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; });
+            choice("filter.undefined", "Undefined Areas", {"Repeat Edge Pixels", "Wrap Around"}, [this] { return m_f.wrap ? 1 : 0; },
+                   [this](int v) { m_f.wrap = v == 1; }, "What fills in where the picture moved away from its edge");
+            break;
+        case FilterKind::ZigZag:
+            row("filter.amount", "Amount", -100, 100, 0, false, "", &m_f.amount);
+            row("filter.ridges", "Ridges", 1, 20, 0, false, "", &m_f.ridges);
+            choice("filter.zigzag_style", "Style", {"Around Center", "Out From Center", "Pond Ripples"}, [this] { return m_f.axis; },
+                   [this](int v) { m_f.axis = v; });
+            break;
         case FilterKind::Twirl:      // s040 m4: Distort -- in the ellipse fitted to the selection (or the picture)
             row("filter.angle", "Angle", -999, 999, 0, false, "°", &m_angle);
             break;
@@ -249,6 +274,7 @@ void FilterDialog::sync(int keep_slider) {
     if (m_gauss) { m_gauss->set_active(m_f.gaussian); m_uniform->set_active(!m_f.gaussian); }
     if (m_mono) m_mono->set_active(m_f.mono);
     if (m_shape) m_shape->set_selected(m_f.round ? 1u : 0u);   // m3
+    for (const auto& ch : m_choices) ch.dd->set_selected(static_cast<guint>(ch.get()));   // s041 m3
     if (m_method) m_method->set_selected(m_f.kind == FilterKind::Spherize ? static_cast<guint>(m_f.axis) : m_f.zoom ? 1u : 0u);   // s040
     if (m_centre_box) {   // s040 m2: the picture's shape, 240 px on its long side
         const double k = 240.0 / std::max(m_iw, m_ih);
@@ -258,10 +284,25 @@ void FilterDialog::sync(int keep_slider) {
     }
     if (m_quality) m_quality->set_selected(static_cast<guint>(m_f.quality));
     if (m_depth) {   // s039
-        m_depth->set_selected(m_f.depth == core::DepthSource::Transparency ? 1u : m_f.depth == core::DepthSource::LayerMask ? 2u : 0u);
+        guint at = m_f.depth == core::DepthSource::Transparency ? 1u : m_f.depth == core::DepthSource::LayerMask ? 2u : 0u;
+        bool gone = false;   // s041 m4: a channel since deleted
+        if (m_f.depth == core::DepthSource::Channel) {
+            gone = true;
+            for (std::size_t k = 0; k < m_channels.size(); ++k)
+                if (m_channels[k].first == m_f.depth_channel) { at = static_cast<guint>(3 + k); gone = false; }
+        }
+        m_depth->set_selected(at);
         for (auto* w : m_depth_only) w->set_sensitive(m_f.depth != core::DepthSource::None);
         if (m_invert) m_invert->set_active(m_f.invert);
-        if (m_depth_note) m_depth_note->set_visible(m_f.depth == core::DepthSource::LayerMask && !m_has_mask);
+        if (m_depth_note) {
+            std::string note;
+            if (m_f.depth == core::DepthSource::LayerMask && !m_has_mask) note = "The layer has no mask: the blur is even, as None.";
+            else if (m_f.depth == core::DepthSource::Channel && gone) note = "That channel is gone: the blur is even, as None.";
+            else if (m_f.depth == core::DepthSource::Channel && live())
+                note = "A live Lens Blur sees only its layer, not the channels: the blur is even. Untick Live, or use Layer Mask.";
+            m_depth_note->set_text(note);
+            m_depth_note->set_visible(!note.empty());
+        }
     }
     if (m_remove) {   // s034
         m_remove->set_selected(m_f.remove == core::Remove::Lens ? 1u : m_f.remove == core::Remove::Motion ? 2u : 0u);
@@ -412,6 +453,27 @@ void FilterDialog::radial_rows() {
     row("filter.cy", "Centre Y", 0, 100, 1, false, "%", &m_f.cy);
 }
 
+void FilterDialog::choice(const char* name, const char* label, std::vector<Glib::ustring> items, std::function<int()> get,
+                          std::function<void(int)> put, const char* tip) {
+    auto line = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto l = Gtk::make_managed<Gtk::Label>(label);
+    l->set_xalign(0.0f);
+    l->set_hexpand(true);
+    line->append(*l);
+    auto dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(items));
+    dd->set_name(name);
+    if (tip) dd->set_tooltip_text(tip);
+    line->append(*dd);
+    line->set_margin_bottom(4);
+    m_body.append(*line);
+    m_choices.push_back({dd, std::move(get)});
+    dd->property_selected().signal_changed().connect([this, dd, put = std::move(put)] {
+        if (m_syncing) return;
+        put(static_cast<int>(dd->get_selected()));
+        m_changed.emit();
+    });
+}
+
 void FilterDialog::centre_from(double x, double y) {
     if (!m_centre_box) return;
     const double w = std::max(1, m_centre_box->get_width()), h = std::max(1, m_centre_box->get_height());
@@ -419,6 +481,13 @@ void FilterDialog::centre_from(double x, double y) {
     m_f.cy = std::clamp(y / h * 100, 0.0, 100.0);
     sync();
     m_changed.emit();
+}
+
+// s041 m4: None, Transparency, Layer Mask -- then each saved channel by name.
+Glib::RefPtr<Gtk::StringList> FilterDialog::depth_model() const {
+    std::vector<Glib::ustring> items{"None", "Transparency", "Layer Mask"};
+    for (const auto& [id, name] : m_channels) items.push_back("Channel: " + name);
+    return Gtk::StringList::create(items);
 }
 
 void FilterDialog::set_centre_at(double cx, double cy) {
@@ -446,7 +515,7 @@ void FilterDialog::lens_rows() {
     l->set_xalign(0.0f);
     l->set_hexpand(true);
     line->append(*l);
-    m_depth = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"None", "Transparency", "Layer Mask"}));
+    m_depth = Gtk::make_managed<Gtk::DropDown>(depth_model());   // s041 m4: and the saved channels
     m_depth->set_name("filter.depth");
     m_depth->set_tooltip_text("What says how far each pixel is: None -- the same blur everywhere; Transparency -- the layer's "
                               "alpha; Layer Mask -- its mask (white 255, black 0). Shift-click the mask to switch it off "
@@ -485,7 +554,9 @@ void FilterDialog::lens_rows() {
     m_depth->property_selected().signal_changed().connect([this] {
         if (m_syncing) return;
         const auto i = m_depth->get_selected();
-        m_f.depth = i == 1 ? core::DepthSource::Transparency : i == 2 ? core::DepthSource::LayerMask : core::DepthSource::None;
+        m_f.depth = i == 1 ? core::DepthSource::Transparency : i == 2 ? core::DepthSource::LayerMask
+                  : i >= 3 && i - 3 < m_channels.size() ? core::DepthSource::Channel : core::DepthSource::None;
+        m_f.depth_channel = m_f.depth == core::DepthSource::Channel ? m_channels[i - 3].first : std::string();   // s041 m4
         if (m_f.depth == core::DepthSource::None) focal_pick_off();
         sync();
         m_changed.emit();

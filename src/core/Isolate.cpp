@@ -207,6 +207,114 @@ pixel::TileMap laid_map(const std::vector<std::uint8_t>& laid, std::uint8_t v, i
     return pixel::TileMap::from_tiles(ff, W, H, std::move(grid));
 }
 
+// s041 (seen under Xvfb, s040): a stroke that GRAZES the ground. An add
+// stroke laid half on a small blob, half on the ground beside it, made the
+// ground's pixels sure figure -- the ground's colour taught as subject, and
+// a big piece of it came in. Now, per stroke: its colours (k-means) and how
+// common each is in a RING round it. A colour common in the ring (>= 40 %,
+// and at least as common there as under the stroke) that isn't the main
+// thing under the stroke (<= 70 %) is the ground it grazed -- when the
+// stroke also covers a distinct target (>= 20 % of it, rare in the ring).
+// Those pixels are spared: not sure either way, left to the cut. A stroke
+// wholly on one thing (painting over the sky) keeps all of it.
+void spare_grazed(std::vector<std::uint8_t>& laid, const path::Hints& h, const pixel::TileMap& pic, int W, int H) {
+    if (laid.empty()) return;
+    const auto dist2 = [](const Vec& a, const Vec& b) {
+        return (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]);
+    };
+    std::vector<std::pair<std::size_t, std::uint8_t>> spared;
+    for (const auto& s : h.strokes) {
+        if (s.pts.empty()) continue;
+        const std::uint8_t v = s.figure ? 1 : 2;
+        const double r = std::max(0.5, s.radius), ro = 2 * r + 8;
+        double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+        for (const auto& p : s.pts) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
+        const int bx = std::max(0, static_cast<int>(std::floor(x0 - ro))), by = std::max(0, static_cast<int>(std::floor(y0 - ro)));
+        const int ex = std::min(W, static_cast<int>(std::ceil(x1 + ro)) + 1), ey = std::min(H, static_cast<int>(std::ceil(y1 + ro)) + 1);
+        const int BW = ex - bx, BH = ey - by;
+        if (BW <= 0 || BH <= 0) continue;
+        path::Stroke in = s, out = s;
+        for (auto& p : in.pts) { p.x -= bx; p.y -= by; }
+        out.pts = in.pts;
+        in.radius = r;
+        out.radius = ro;
+        path::Hints hi, ho;
+        hi.strokes = {in};
+        ho.strokes = {out};
+        const auto li = strokes_laid(hi, BW, BH), lo = strokes_laid(ho, BW, BH);
+        std::vector<Vec> under, ring;
+        std::vector<std::size_t> under_at;
+        for (int y = 0; y < BH; ++y)
+            for (int x = 0; x < BW; ++x) {
+                const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(BW) + static_cast<std::size_t>(x);
+                if (!lo[i]) continue;
+                const auto px = pic.get(x + bx, y + by);
+                const Vec c{px.c[0], px.c[1], px.c[2]};
+                if (li[i]) { under.push_back(c); under_at.push_back(static_cast<std::size_t>(y + by) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x + bx)); }
+                else ring.push_back(c);
+            }
+        if (under.size() < 12 || ring.size() < 12) continue;
+        // k-means on what lies under the stroke.
+        std::vector<Vec> smp;
+        const std::size_t step = std::max<std::size_t>(1, under.size() / 2000);
+        for (std::size_t i = 0; i < under.size(); i += step) smp.push_back(under[i]);
+        const std::size_t K = std::min<std::size_t>(4, smp.size());
+        std::vector<Vec> ctr(K);
+        for (std::size_t k = 0; k < K; ++k) ctr[k] = smp[k * smp.size() / K];
+        const auto nearest = [&](const Vec& c) {
+            std::size_t best = 0;
+            double e = 1e300;
+            for (std::size_t k = 0; k < K; ++k) { const double d = dist2(c, ctr[k]); if (d < e) { e = d; best = k; } }
+            return best;
+        };
+        for (int round = 0; round < 6; ++round) {
+            std::vector<Vec> sum(K, Vec{});
+            std::vector<int> n(K, 0);
+            for (const auto& c : smp) {
+                const auto k = nearest(c);
+                for (int ch = 0; ch < 3; ++ch) sum[k][static_cast<std::size_t>(ch)] += c[static_cast<std::size_t>(ch)];
+                ++n[k];
+            }
+            for (std::size_t k = 0; k < K; ++k)
+                if (n[k]) for (int ch = 0; ch < 3; ++ch) ctr[k][static_cast<std::size_t>(ch)] = sum[k][static_cast<std::size_t>(ch)] / static_cast<float>(n[k]);
+        }
+        std::vector<double> ss(K, 0), t2(K, 0);
+        std::vector<int> cnt(K, 0);
+        for (const auto& c : smp) { const auto k = nearest(c); ss[k] += dist2(c, ctr[k]); ++cnt[k]; }
+        for (std::size_t k = 0; k < K; ++k) {
+            const double rr = std::max(cnt[k] ? 2.5 * std::sqrt(ss[k] / cnt[k]) : 0.0, 0.06);
+            t2[k] = rr * rr;
+        }
+        // One colour split by its noise into several clusters (a grainy
+        // ground): clusters whose centres are within 0.12 are one GROUP.
+        std::vector<std::size_t> grp(K);
+        for (std::size_t k = 0; k < K; ++k) grp[k] = k;
+        for (std::size_t a = 0; a < K; ++a)
+            for (std::size_t b = a + 1; b < K; ++b)
+                if (cnt[a] && cnt[b] && dist2(ctr[a], ctr[b]) < 0.12 * 0.12) {
+                    const auto from = grp[b], to = grp[a];
+                    for (auto& g : grp) if (g == from) g = to;
+                }
+        std::vector<double> share(K, 0), around(K, 0);   // by group
+        for (std::size_t k = 0; k < K; ++k) share[grp[k]] += static_cast<double>(cnt[k]) / static_cast<double>(smp.size());
+        for (const auto& c : ring) { const auto k = nearest(c); if (dist2(c, ctr[k]) <= t2[k]) around[grp[k]] += 1; }
+        for (auto& a : around) a /= static_cast<double>(ring.size());
+        bool target = false, any_ground = false;
+        std::vector<bool> ground(K, false);
+        for (std::size_t k = 0; k < K; ++k) {
+            if (grp[k] != k) continue;
+            if (share[k] >= 0.2 && around[k] < 0.15 && around[k] <= 0.5 * share[k]) target = true;
+            if (around[k] >= 0.4 && around[k] >= share[k] && share[k] <= 0.7) { ground[k] = true; any_ground = true; }
+        }
+        if (!target || !any_ground) continue;
+        for (std::size_t i = 0; i < under.size(); ++i) {
+            const auto k = nearest(under[i]);
+            if (ground[grp[k]] && dist2(under[i], ctr[k]) <= t2[k]) spared.emplace_back(under_at[i], v);
+        }
+    }
+    for (const auto& [i, v] : spared) if (laid[i] == v) laid[i] = 0;
+}
+
 // One grid: its colours, each cell's role, its labels.
 struct Grid {
     int w = 0, h = 0;
@@ -440,7 +548,8 @@ std::optional<pixel::TileMap> isolated(const pixel::TileMap& picture, const pixe
     // The path's area; grown by the band (beyond it: surely background);
     // a ring beyond that (the background's colours).
     // s037: the strokes, laid down; a figure stroke widens the path's area.
-    const auto laid = o.hints ? strokes_laid(*o.hints, W, H) : std::vector<std::uint8_t>{};
+    auto laid = o.hints ? strokes_laid(*o.hints, W, H) : std::vector<std::uint8_t>{};
+    if (o.hints) spare_grazed(laid, *o.hints, picture, W, H);   // s041: what a stroke only grazed isn't sure
     const auto hint = [&](int x, int y) -> std::uint8_t {
         return laid.empty() ? 0 : laid[static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)];
     };

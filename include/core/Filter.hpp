@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -28,7 +29,8 @@ enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass
                                        Maximum, Minimum, SurfaceBlur,     // m4
                                        LensBlur,                          // s037
                                        RadialBlur,                        // s040
-                                       Twirl, Pinch, Spherize };          // s040 m4: Distort
+                                       Twirl, Pinch, Spherize,            // s040 m4: Distort
+                                       PolarCoordinates, Ripple, Wave, ZigZag };   // s041 m3
 
 // s034: what Smart Sharpen takes away -- the blur it undoes.
 enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
@@ -36,7 +38,10 @@ enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
 // s039: Lens Blur's DEPTH MAP source (Photoshop's): None (the same blur
 // everywhere), the layer's Transparency (its alpha), or its Layer Mask (as
 // painted: white 255, black 0).
-enum class DepthSource : std::uint8_t { None, Transparency, LayerMask };
+// s041 m4: or a saved selection -- an ALPHA CHANNEL (`depth_channel`, its
+// id; white 255) -- for a Lens Blur applied to the pixels (a live one sees
+// only its layer: the blur is even).
+enum class DepthSource : std::uint8_t { None, Transparency, LayerMask, Channel };
 
 struct Filter {
     FilterKind kind = FilterKind::None;
@@ -89,6 +94,7 @@ struct Filter {
     // Its NOISE (s039 m2): `amount` 0 .. 100, `gaussian` / `mono` / `seed` as
     // Add Noise's -- grain put back in the blurred parts.
     DepthSource depth = DepthSource::None;
+    std::string depth_channel;   // s041 m4: the alpha channel's id ("@channel/<n>"), Channel only
     double focal = 0;
     bool invert = false;
     // s040 -- Radial Blur: `amount` 1 .. 100; `zoom` (Zoom: streaks along the
@@ -105,6 +111,17 @@ struct Filter {
     // .. 100 (+ a bulge, - a dent) and `axis` 0 Normal, 1 Horizontal only, 2
     // Vertical only.
     int axis = 0;
+    // s041 m3 -- more DISTORT. Polar Coordinates: `axis` 0 Rectangular to
+    // Polar, 1 Polar to Rectangular (in the selection's bounds). Ripple:
+    // `amount` -999 .. 999 %, `quality` the Size 0 Small, 1 Medium, 2 Large.
+    // Wave (one generator): `radius` the Wavelength 2 .. 999 px, `amount` the
+    // Amplitude 1 .. 999 px, `scale_h` / `scale_v` 0 .. 100 %, `axis` the Type
+    // 0 Sine, 1 Triangle, 2 Square, `wrap` Wrap Around (else Repeat Edge).
+    // ZigZag (in the ellipse): `amount` -100 .. 100, `ridges` 1 .. 20, `axis`
+    // the Style 0 Around Center, 1 Out From Center, 2 Pond Ripples.
+    double ridges = 5;
+    double scale_h = 100, scale_v = 100;
+    bool wrap = false;
     bool operator==(const Filter&) const = default;
 };
 
@@ -146,10 +163,12 @@ std::vector<IrisRow> iris(double radius, int blades, double curvature, double an
 // gives it -- before Invert) is blurred by: 0 at the focal distance, 1 at
 // whichever end is farther from it on that side. For the selftest too.
 double depth_amount(const Filter& f, double d);
-std::string_view depth_key(DepthSource s);        // "none", "transparency", "layer-mask"
+std::string_view depth_key(DepthSource s);        // "none", "transparency", "layer-mask", s041: "channel"
 std::optional<DepthSource> depth_from(std::string_view key);
-// The Layer Mask source wants the layer's mask passed in (`depth` below).
+// The Layer Mask source wants the layer's mask passed in (`depth` below);
+// s041 m4: the Channel source the channel's saved selection.
 bool wants_mask(const Filter& f);
+bool wants_channel(const Filter& f);
 
 // s040: Radial Blur's streak at a pixel `rho` px from the centre -- its
 // length in pixels (Spin: the arc, amount x 0.5 degrees; Zoom: the ray's
@@ -162,6 +181,10 @@ int radial_passes(const Filter& f, double rho);
 // image coordinates) takes its colour from, for an ellipse of centre (ex, ey)
 // and half-axes (rx, ry). False: outside it (unchanged).
 bool warp_source(const Filter& f, double ex, double ey, double rx, double ry, double x, double y, double& sx, double& sy);
+// s041: its result depends on where a pixel IS (not only on its neighbours) --
+// Add Noise, Lens Blur's Noise, Radial Blur, Distort: a live look of it is
+// always made whole, never in part.
+bool placed(const Filter& f);
 
 // The 1-D blur Gaussian Blur, Unsharp Mask and High Pass share, along a line of n samples with
 // stride `stride` floats (edges clamp): sigma < 3 an exact Gaussian kernel,
@@ -182,7 +205,8 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                                        const pixel::TileMap* depth = nullptr);
 // s039: `depth` -- Lens Blur's Layer Mask source: the layer's mask (stored as
 // what it hides, as Document's). nullptr with that source: the blur is even
-// (as None). Transparency reads `src`'s own alpha.
+// (as None). Transparency reads `src`'s own alpha. s041 m4: the Channel
+// source -- the channel's saved selection (stored as what is selected).
 }  // namespace filter
 
 }  // namespace klimt::core

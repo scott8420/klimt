@@ -180,6 +180,7 @@ private:
     void on_modify(core::select::Modify k);      // category: select: Select > Modify > ... (asks; a job) (s011 m4)
     void on_pick(int x, int y, bool background); // category: select: the Eyedropper
     void on_focal_point(int x, int y);            // category: filter: s039 m2 -- Lens Blur's Set Focal Point
+    void filter_dialog_channels();                // category: filter: s041 m4 -- the channels, for Lens Blur's Source
     void update_select_actions();                // category: select: grey Deselect when nothing is
 
     // ── paint (s008 m4) ────────────────────────────────────────────────────

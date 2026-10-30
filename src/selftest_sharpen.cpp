@@ -8,6 +8,7 @@
 #include "core/File.hpp"
 #include "core/Filter.hpp"
 #include "core/Live.hpp"
+#include "core/Selection.hpp"   // s041 m4: a saved channel
 
 #include <algorithm>
 #include <cmath>
@@ -771,6 +772,151 @@ void selftest_sharpen(const Check& check) {
         check("distort: Spherize's mode and amount back from the file",
               back && back->layers.at("L4").filters == d.get("L4")->filters && back->layers.at("L4").filters.back().f.axis == 2, err);
         fs::remove(path);
+    }
+
+    std::cout << "\n-- filters: Distort -- Polar Coordinates, Ripple, Wave, ZigZag (s041 m3) --\n";
+    {
+        const auto pc = F::fresh(FilterKind::PolarCoordinates), rp = F::fresh(FilterKind::Ripple);
+        const auto wv = F::fresh(FilterKind::Wave), zz = F::fresh(FilterKind::ZigZag);
+        check("distort2: defaults (Rect to Polar; Ripple 100 % Medium; Wave 120 px / 35 px, Sine, Repeat Edge; ZigZag 10, 5 ridges, Pond Ripples)",
+              pc.axis == 0 && rp.amount == 100 && rp.quality == 1 && wv.radius == 120 && wv.amount == 35 && wv.axis == 0 && !wv.wrap &&
+              wv.scale_h == 100 && wv.scale_v == 100 && zz.amount == 10 && zz.ridges == 5 && zz.axis == 2 &&
+              F::group(FilterKind::Wave) == "Distort" && F::group(FilterKind::ZigZag) == "Distort", "");
+        {
+            auto a = rp; a.amount = 5000; a.quality = 7;
+            auto b = wv; b.radius = 1; b.amount = 0; b.scale_h = 150; b.axis = 5;
+            auto c = zz; c.ridges = 50; auto d = pc; d.axis = 3;
+            check("distort2: normalised -- Ripple -999..999 and Size 0..2; Wave 2..999 / 1..999 / 0..100 % / Type 0..2; Ridges 1..20; Polar 0..1",
+                  F::normalised(a).amount == 999 && F::normalised(a).quality == 2 && F::normalised(b).radius == 2 && F::normalised(b).amount == 1 &&
+                  F::normalised(b).scale_h == 100 && F::normalised(b).axis == 2 && F::normalised(c).ridges == 20 && F::normalised(d).axis == 1, "");
+            auto g = F::fresh(FilterKind::GaussianBlur); g.ridges = 9; g.wrap = true; g.scale_v = 3;
+            const auto gn = F::normalised(g);
+            check("distort2: their settings go back on another kind", gn.ridges == 5 && !gn.wrap && gn.scale_v == 100, "");
+            check("distort2: placed() -- Distort, Radial, Add Noise depend on where they are; a blur doesn't",
+                  F::placed(wv) && F::placed(F::fresh(FilterKind::RadialBlur)) && F::placed(F::fresh(FilterKind::AddNoise)) &&
+                  !F::placed(F::fresh(FilterKind::GaussianBlur)), "");
+        }
+        // A smooth picture (so bilinear there-and-back is close).
+        const int N = 200;
+        auto smooth_pic = P::TileMap(f32(), N, N);
+        for (int y = 0; y < N; ++y)
+            for (int x = 0; x < N; ++x) {
+                const float v = static_cast<float>(0.5 + 0.3 * std::sin(x * 0.05) * std::cos(y * 0.04));
+                smooth_pic = smooth_pic.fill({x, y, 1, 1}, P::rgba(v, 1 - v, 0.5f, 1));
+            }
+        auto back = pc; back.axis = 1;
+        const auto there = F::filtered(smooth_pic, pc, nullptr);
+        const auto again = there ? F::filtered(*there, back, nullptr) : std::nullopt;
+        double err = 0; int n = 0;
+        for (int y = 40; y < 160; y += 4)   // away from the top edge (the polar middle) and the seam
+            for (int x = 30; x < 170; x += 4) { if (again) err += std::abs(again->get(x, y).c[0] - smooth_pic.get(x, y).c[0]); ++n; }
+        check("distort2: Polar -- Rectangular to Polar, then back, is the picture again (mean error < 1 %)", again && err / n < 0.01, num(err / n));
+        check("distort2: Polar -- Rectangular to Polar changes it", there && !same_in(smooth_pic, *there, {40, 40, 120, 120}, 0.02f), "");
+        auto still = wv; still.scale_h = 0; still.scale_v = 0;
+        const auto ws = F::filtered(smooth_pic, still, nullptr);
+        check("distort2: Wave at 0 % / 0 % moves nothing", ws && same_in(smooth_pic, *ws, {0, 0, N, N}, 1e-5f), "");
+        // Wrap Around: black left half, white right; a horizontal wave -- at x = 0 some rows read the far (white) side.
+        const auto halves = P::TileMap(f32(), N, N).fill({0, 0, N / 2, N}, P::rgba(0, 0, 0, 1)).fill({N / 2, 0, N / 2, N}, P::rgba(1, 1, 1, 1));
+        auto hw = wv; hw.radius = 50; hw.amount = 20; hw.scale_v = 0;
+        auto ww = hw; ww.wrap = true;
+        const auto rep = F::filtered(halves, hw, nullptr), wra = F::filtered(halves, ww, nullptr);
+        double rep_max = 0, wra_max = 0;
+        for (int y = 0; y < N; ++y) { rep_max = std::max<double>(rep_max, rep->get(0, y).c[0]); wra_max = std::max<double>(wra_max, wra->get(0, y).c[0]); }
+        check("distort2: Wave, Repeat Edge -- the left edge stays black; Wrap Around -- the right side comes in there", rep_max < 0.01 && wra_max > 0.9,
+              num(rep_max) + " / " + num(wra_max));
+        auto r0 = rp; r0.amount = 0;
+        const auto rz = F::filtered(smooth_pic, r0, nullptr);
+        check("distort2: Ripple 0 moves nothing", rz && same_in(smooth_pic, *rz, {0, 0, N, N}, 1e-5f), "");
+        double sx = 0, sy = 0, worst = 0;
+        for (int y = 0; y < N; y += 7)
+            for (int x = 0; x < N; x += 7) { F::warp_source(rp, 100, 100, 100, 100, x + 0.5, y + 0.5, sx, sy); worst = std::max(worst, std::hypot(sx - x - 0.5, sy - y - 0.5)); }
+        check("distort2: Ripple 100 % Medium -- a few pixels at most (16 px waves, a quarter of that tall)", worst > 1 && worst <= 4 * std::sqrt(2.0) + 1e-9, num(worst));
+        // ZigZag's styles: Around Center keeps a pixel's distance; Out From Center keeps its angle.
+        auto ar = zz; ar.axis = 0; ar.amount = 60; auto of = zz; of.axis = 1; of.amount = 60;
+        bool keep_d = true, keep_a = true;
+        for (double a = 0.3; a < 6.2; a += 0.7)
+            for (const double d : {0.15, 0.45, 0.75}) {
+                const double x = 100 + d * 100 * std::cos(a), y = 100 + d * 100 * std::sin(a);
+                if (F::warp_source(ar, 100, 100, 100, 100, x, y, sx, sy)) keep_d = keep_d && std::abs(std::hypot(sx - 100, sy - 100) - d * 100) < 1e-6;
+                if (F::warp_source(of, 100, 100, 100, 100, x, y, sx, sy)) keep_a = keep_a && std::abs(std::remainder(std::atan2(sy - 100, sx - 100) - a, 6.283185307)) < 1e-6;
+            }
+        check("distort2: ZigZag Around Center keeps each pixel's distance from the middle", keep_d, "");
+        check("distort2: ZigZag Out From Center keeps each pixel's direction from it", keep_a, "");
+        const P::Rect view{50, 60, 80, 70};
+        check("distort2: the preview's rectangle == the result there (Wave, ZigZag)",
+              same_in(*F::filtered(smooth_pic, ww, nullptr), *F::filtered(smooth_pic, ww, nullptr, false, &view), view) &&
+              same_in(*F::filtered(smooth_pic, zz, nullptr), *F::filtered(smooth_pic, zz, nullptr, false, &view), view), "");
+        // Live and the file.
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        auto lv = wv; lv.axis = 1; lv.wrap = true; lv.scale_h = 40; lv.scale_v = 70; lv.radius = 60;
+        check("distort2: live Wave", L::add_live(j, d, "L4", lv), "");
+        check("distort2: a ZigZag filter layer", !L::add_filter_layer(j, d, zz, "L4").empty(), "");
+        namespace fs = std::filesystem;
+        const auto path = (fs::temp_directory_path() / ("klimt_s041_" + std::to_string(::getpid()) + ".klimt")).string();
+        core::file::Contents c;
+        c.image = d.image();
+        c.layers = d.snapshot();
+        c.next_id = d.next_id();
+        std::string e2;
+        check("distort2: saved", core::file::save_klimt(path, c, e2), e2);
+        const auto bk = core::file::open(path, e2);
+        check("distort2: Wave's Type, Wrap, scales and wavelength back from the file",
+              bk && bk->layers.at("L4").filters == d.get("L4")->filters && bk->layers.at("L4").filters.back().f.wrap &&
+              bk->layers.at("L4").filters.back().f.scale_v == 70, e2);
+        fs::remove(path);
+    }
+
+    std::cout << "\n-- filters: Lens Blur's depth from an alpha channel (s041 m4) --\n";
+    {
+        namespace S = core::select;
+        auto lb = F::fresh(FilterKind::LensBlur);
+        lb.radius = 8;
+        lb.depth = core::DepthSource::Channel;
+        lb.depth_channel = "@channel/0";
+        check("channel depth: the key round-trips", F::depth_from("channel") == core::DepthSource::Channel && F::depth_key(core::DepthSource::Channel) == "channel", "");
+        check("channel depth: normalised keeps the channel's id with the source ...", F::normalised(lb).depth_channel == "@channel/0" && F::wants_channel(lb), "");
+        auto other = lb; other.depth = core::DepthSource::LayerMask;
+        check("channel depth: ... and drops it with another source", F::normalised(other).depth_channel.empty() && !F::wants_channel(other), "");
+        // A channel selecting the left half (white: depth 255) -- focal 0: the left half blurred, the right sharp.
+        auto rnd = P::TileMap(P::Format{}, 160, 120);
+        std::uint32_t seed = 13;
+        for (int y = 0; y < 120; ++y)
+            for (int x = 0; x < 160; ++x) {
+                seed = seed * 1664525u + 1013904223u;
+                const float v = static_cast<float>((seed >> 24) % 256) / 255.f;
+                rnd = rnd.fill({x, y, 1, 1}, P::rgba(v, 0.4f, 1 - v, 1));
+            }
+        const auto chan = S::rect_mask(P::Format{P::Depth::U8, P::Mode::Gray, false}, 160, 120, {0, 0, 80, 120});
+        auto even = lb; even.depth = core::DepthSource::None;
+        const auto blurred = F::filtered(rnd, even, nullptr);
+        const auto out = F::filtered(rnd, lb, nullptr, false, nullptr, {}, {}, &chan);
+        check("channel depth: the channel's white half has the full blur", out && blurred && same_in(*blurred, *out, {0, 0, 70, 120}, 1.5f / 255), "");
+        check("channel depth: its black half stays sharp (the other way from a layer mask)", out && same_in(rnd, *out, {90, 0, 70, 120}), "");
+        // Through the verb: a document with a saved channel.
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        const int W = d.image().width, H = d.image().height;
+        auto pic = P::TileMap(d.get("L4")->pixels->format(), W, H);
+        for (int y = 0; y < H; y += 1)
+            for (int x = 0; x < W; x += 4) { seed = seed * 1664525u + 1013904223u; const float v = static_cast<float>((seed >> 24) % 256) / 255.f; pic = pic.fill({x, y, 4, 1}, P::rgba(v, v, 0.5f, 1)); }
+        check("channel depth: a noisy layer", L::set_pixels_if(j, d, "L4", d.get("L4")->pixels, std::move(pic), "test"), "");
+        const auto id = S::save_channel_mask(j, d, std::make_shared<const P::TileMap>(S::rect_mask(d.mask_format(), W, H, {0, 0, W / 2, H})),
+                                             "Depth", "Save Channel");
+        check("channel depth: a channel saved", !id.empty(), id);
+        const auto before = d.get("L4")->pixels;
+        auto v = lb; v.depth_channel = id;
+        check("channel depth: Lens Blur applied through the channel", L::apply_filter(j, d, "L4", v), "");
+        const auto after = d.get("L4")->pixels;
+        check("channel depth: the channel's half blurred, the other half as it was",
+              !same_in(*before, *after, {8, 8, W / 2 - 24, H - 16}) && same_in(*before, *after, {W / 2 + 16, 8, W / 2 - 24, H - 16}), "");
+        // Live: no channel to see -- even (the layer's mask is never taken for it).
+        const auto live = core::live::run(*before, {{v, true}}, nullptr, {}, nullptr);
+        check("channel depth: live, it sees no channel -- the blur is even everywhere", live && !same_in(*before, *live, {W / 2 + 16, 8, W / 2 - 24, H - 16}), "");
     }
 
     std::cout << "\n-- s034: live, filter layers, the file --\n";

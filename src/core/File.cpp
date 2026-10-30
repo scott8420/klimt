@@ -357,7 +357,9 @@ json live_json(const LiveFilter& lf) {
             {"blades", f.blades}, {"curvature", f.curvature}, {"bright", f.bright},   // s037: Lens Blur
             {"depth", std::string(filter::depth_key(f.depth))}, {"focal", f.focal}, {"invert", f.invert},   // s039
             {"zoom", f.zoom}, {"quality", f.quality}, {"cx", f.cx}, {"cy", f.cy},   // s040: Radial Blur
-            {"axis", f.axis}};   // s040 m4: Spherize
+            {"axis", f.axis},   // s040 m4: Spherize
+            {"depth_channel", f.depth_channel},   // s041 m4
+            {"ridges", f.ridges}, {"scale_h", f.scale_h}, {"scale_v", f.scale_v}, {"wrap", f.wrap}};   // s041 m3
 }
 std::optional<LiveFilter> live_from(const json& j) {
     const std::string key = j.at("kind").get<std::string>();
@@ -398,6 +400,11 @@ std::optional<LiveFilter> live_from(const json& j) {
     lf.f.cx = j.value("cx", 50.0);
     lf.f.cy = j.value("cy", 50.0);
     lf.f.axis = j.value("axis", 0);   // s040 m4
+    lf.f.ridges = j.value("ridges", 5.0);   // s041 m3
+    lf.f.depth_channel = j.value("depth_channel", std::string());   // s041 m4
+    lf.f.scale_h = j.value("scale_h", 100.0);
+    lf.f.scale_v = j.value("scale_v", 100.0);
+    lf.f.wrap = j.value("wrap", false);
     const std::uint32_t seed = lf.f.seed;
     lf.f = filter::normalised(lf.f);
     lf.f.seed = (lf.f.kind == FilterKind::AddNoise || lf.f.kind == FilterKind::LensBlur) ? seed : lf.f.seed;   // s039: Lens Blur's Noise

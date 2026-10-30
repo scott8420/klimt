@@ -89,6 +89,10 @@ const std::vector<Command>& commands() {
             {"Twirl", "Filter", "win.filter-twirl", "", "filter distort swirl whirl spiral rotate", ""},   // s040 m4
             {"Pinch", "Filter", "win.filter-pinch", "", "filter distort squeeze bulge shrink", ""},
             {"Spherize", "Filter", "win.filter-spherize", "", "filter distort sphere bulge fisheye lens dent", ""},
+            {"Polar Coordinates", "Filter", "win.filter-polar-coordinates", "", "filter distort polar rectangular circle tiny planet unwrap", ""},   // s041 m3
+            {"Ripple", "Filter", "win.filter-ripple", "", "filter distort ripple water wobble", ""},
+            {"Wave", "Filter", "win.filter-wave", "", "filter distort wave sine triangle square wrap", ""},
+            {"ZigZag", "Filter", "win.filter-zigzag", "", "filter distort zigzag pond ripples rings water drop", ""},
             {"Median", "Filter", "win.filter-median", "", "filter noise despeckle dust remove smooth", ""},
             // s034
             {"Smart Sharpen", "Filter", "win.filter-smart-sharpen", "", "filter sharpen crisp detail lens deblur focus halo", ""},
@@ -109,6 +113,10 @@ const std::vector<Command>& commands() {
             {"New Filter Layer: Twirl", "Layer", "win.filter-layer-twirl", "", "filter layer live non-destructive distort swirl whirl", ""},   // s040 m4
             {"New Filter Layer: Pinch", "Layer", "win.filter-layer-pinch", "", "filter layer live non-destructive distort squeeze", ""},
             {"New Filter Layer: Spherize", "Layer", "win.filter-layer-spherize", "", "filter layer live non-destructive distort sphere bulge", ""},
+            {"New Filter Layer: Polar Coordinates", "Layer", "win.filter-layer-polar-coordinates", "", "filter layer live non-destructive distort polar", ""},   // s041 m3
+            {"New Filter Layer: Ripple", "Layer", "win.filter-layer-ripple", "", "filter layer live non-destructive distort ripple", ""},
+            {"New Filter Layer: Wave", "Layer", "win.filter-layer-wave", "", "filter layer live non-destructive distort wave", ""},
+            {"New Filter Layer: ZigZag", "Layer", "win.filter-layer-zigzag", "", "filter layer live non-destructive distort zigzag pond", ""},
             {"New Filter Layer: Median", "Layer", "win.filter-layer-median", "", "filter layer live non-destructive despeckle dust", ""},
             {"New Filter Layer: Smart Sharpen", "Layer", "win.filter-layer-smart-sharpen", "", "filter layer live non-destructive sharpen crisp lens deblur", ""},
             {"New Filter Layer: Dust & Scratches", "Layer", "win.filter-layer-dust-scratches", "", "filter layer live non-destructive despeckle dust scratch", ""},

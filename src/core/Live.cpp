@@ -75,10 +75,7 @@ std::shared_ptr<const pixel::TileMap> partly(const pixel::TileMap& src, const pi
         return nullptr;
     if (src.has_outside() || was_src.has_outside() || was.has_outside()) return nullptr;
     for (const auto& f : stack)   // they depend on where they are: Add Noise, s023 a Dissolve blend
-        if (f.f.kind == FilterKind::AddNoise || f.mode == pixel::Blend::Dissolve ||
-            (f.f.kind == FilterKind::LensBlur && f.f.amount > 0) ||   // s039: Lens Blur's Noise
-            f.f.kind == FilterKind::RadialBlur || f.f.kind == FilterKind::Twirl ||   // s040: they depend on where the centre is
-            f.f.kind == FilterKind::Pinch || f.f.kind == FilterKind::Spherize) return nullptr;
+        if (filter::placed(f.f) || f.mode == pixel::Blend::Dissolve) return nullptr;   // s041: Add Noise, Lens's Noise, Radial, Distort
     int reach_px = 0;
     for (const auto& f : stack) reach_px += filter::reach(f.f);
     if (st.any()) reach_px += styles::reach(st);
@@ -131,7 +128,9 @@ std::optional<pixel::TileMap> run(const pixel::TileMap& src, const std::vector<L
             for (std::size_t k = i + 1; k < on.size(); ++k) later += filter::reach(on[k].f);
             r = pixel::Rect{only->x - later, only->y - later, only->w + 2 * later, only->h + 2 * later};
         }
-        auto next = filter::filtered(cur, on[i].f, nullptr, false, r ? &*r : nullptr, cancelled, {}, depth);
+        // s041 m4: the layer's mask only to a Lens Blur reading it (a Channel
+        // one sees no channel here -- even).
+        auto next = filter::filtered(cur, on[i].f, nullptr, false, r ? &*r : nullptr, cancelled, {}, filter::wants_mask(on[i].f) ? depth : nullptr);
         if (!next) return std::nullopt;
         // s023: its blending -- the result faded over what went in.
         if (on[i].opacity < 100 || on[i].mode != pixel::Blend::Normal) {

@@ -674,6 +674,38 @@ void selftest_refine(const Check& check) {
         check("refine brush, noisy + soft edges: then Alt over it -- the blob out, the big one kept",
               b && iou(*b, big) > 0.93 && S::coverage(*b, 330, 150) < 0.5f, b ? num(iou(*b, big)) : "nullopt");
     }
+    // 2d. s041 (seen under Xvfb, s040): an add stroke that GRAZES the ground
+    // beside a small blob of another colour -- the blob in, the ground it
+    // grazed not taught as figure (a big piece of it came in before).
+    {
+        const int BW = 480, BH = 300;
+        const auto pic = figure(BW, BH, 160, 150, 80).paint({0, 0, BW, BH}, [&](int x, int y, const P::Px& px) {
+            return std::hypot(x + 0.5 - 330, y + 0.5 - 150) <= 14 ? P::rgba(0.25f, 0.80f, 0.85f, 1) : px;   // a cyan blob
+        });
+        const auto rough = S::polygon_mask(mff(), BW, BH, {{60, 50}, {270, 50}, {270, 250}, {60, 250}});
+        path::Hints h;
+        h.strokes = {stroke(true, 14, {{314, 150}, {318, 150}})};   // on the blob's left rim: half blob, half ground
+        core::isolate::Options o;
+        o.band = 12;
+        o.hints = &h;
+        const auto a = core::isolate::isolated(pic, rough, mff(), o);
+        double ground = 0; int n = 0;   // the ground round the blob that came in
+        for (int y = 100; y < 200; y += 2)
+            for (int x = 280; x < 380; x += 2) {
+                if (std::hypot(x + 0.5 - 330, y + 0.5 - 150) <= 16) continue;
+                ground += a ? S::coverage(*a, x, y) : 1; ++n;
+            }
+        check("refine brush: a stroke grazing the ground beside a blob -- the blob in",
+              a && S::coverage(*a, 330, 150) > 0.5f && S::coverage(*a, 338, 150) > 0.5f && S::coverage(*a, 160, 150) > 0.5f, "");
+        check("refine brush: ... the ground it grazed stays out (under 5 % of round the blob)", a && ground / n < 0.05, num(ground / n));
+        // A stroke wholly over the ground keeps it (a deliberate stroke).
+        path::Hints g;
+        g.strokes = {stroke(true, 14, {{420, 80}, {440, 80}})};
+        o.hints = &g;
+        const auto b = core::isolate::isolated(pic, rough, mff(), o);
+        check("refine brush: a stroke wholly on the ground -- that ground still comes in (nothing spared)",
+              b && S::coverage(*b, 430, 80) > 0.5f, "");
+    }
     // 3. The brush from nothing: one figure stroke across the figure, no rough area.
     {
         const auto pic = figure(W, H, 160, 150, 70);

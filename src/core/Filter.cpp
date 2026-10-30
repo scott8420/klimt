@@ -36,9 +36,16 @@ constexpr Info kInfo[] = {
     {FilterKind::Twirl,        "twirl",         "Twirl",         "Distort"}, // s040 m4
     {FilterKind::Pinch,        "pinch",         "Pinch",         "Distort"},
     {FilterKind::Spherize,     "spherize",      "Spherize",      "Distort"},
+    {FilterKind::PolarCoordinates, "polar-coordinates", "Polar Coordinates", "Distort"},   // s041 m3
+    {FilterKind::Ripple,       "ripple",        "Ripple",        "Distort"},
+    {FilterKind::Wave,         "wave",          "Wave",          "Distort"},
+    {FilterKind::ZigZag,       "zigzag",        "ZigZag",        "Distort"},
 };
 // s040 m4: Distort -- a map from where each pixel takes its colour.
-bool warps(FilterKind k) { return k == FilterKind::Twirl || k == FilterKind::Pinch || k == FilterKind::Spherize; }
+bool warps(FilterKind k) {
+    return k == FilterKind::Twirl || k == FilterKind::Pinch || k == FilterKind::Spherize || k == FilterKind::PolarCoordinates ||
+           k == FilterKind::Ripple || k == FilterKind::Wave || k == FilterKind::ZigZag;   // s041 m3
+}
 const Info* info(FilterKind k) {
     for (const auto& i : kInfo)
         if (i.k == k) return &i;
@@ -977,9 +984,65 @@ int radial_passes(const Filter& f, double rho) {
 bool warp_source(const Filter& f, double ex, double ey, double rx, double ry, double x, double y, double& sx, double& sy) {
     constexpr double kPi = 3.14159265358979323846;
     if (rx <= 0 || ry <= 0) return false;
+    // s041 m3: the ones over the whole rectangle (ex +- rx, ey +- ry).
+    if (f.kind == FilterKind::PolarCoordinates) {
+        const double w = 2 * rx, h = 2 * ry, L = ex - rx, T = ey - ry;
+        if (f.axis == 0) {   // Rectangular to Polar: the top edge gathers to the middle, the rows become rings
+            const double dx = (x - ex) / rx, dy = (y - ey) / ry;
+            double th = std::atan2(dx, -dy);   // 0 straight up, clockwise
+            if (th < 0) th += 2 * kPi;
+            sx = L + th / (2 * kPi) * w;
+            sy = T + std::hypot(dx, dy) * h;
+        } else {             // Polar to Rectangular: back
+            const double th = (x - L) / w * 2 * kPi, rho = (y - T) / h;
+            sx = ex + rho * rx * std::sin(th);
+            sy = ey - rho * ry * std::cos(th);
+        }
+        return true;
+    }
+    if (f.kind == FilterKind::Ripple || f.kind == FilterKind::Wave) {
+        double dx = 0, dy = 0;
+        if (f.kind == FilterKind::Ripple) {   // small waves both ways, a second component off the first so it isn't regular
+            static constexpr double lam[3] = {8, 16, 32};
+            const double L = lam[std::clamp(f.quality, 0, 2)], a = f.amount / 100 * L / 4;
+            const auto w = [&](double t) { return (std::sin(2 * kPi * t / L) + 0.5 * std::sin(2 * kPi * t / (L * 1.618) + 1.3)) / 1.5; };
+            dx = a * w(y);
+            dy = a * w(x + 0.37 * L);
+        } else {
+            const double L = std::max(2.0, f.radius), A = f.amount;
+            const auto shape = [&](double t) {   // one period over t in [0, 1)
+                t -= std::floor(t);
+                if (f.axis == 1) return 4 * std::abs(t - 0.5) - 1;   // triangle
+                if (f.axis == 2) return t < 0.5 ? 1.0 : -1.0;         // square
+                return std::sin(2 * kPi * t);
+            };
+            dx = A * f.scale_h / 100 * shape((y - (ey - ry)) / L);
+            dy = A * f.scale_v / 100 * shape((x - (ex - rx)) / L);
+        }
+        sx = x + dx;
+        sy = y + dy;
+        if (f.wrap) {   // Wrap Around: what leaves one side comes in the other
+            const double L = ex - rx, T = ey - ry, w = 2 * rx, h = 2 * ry;
+            sx = L + (sx - L) - std::floor((sx - L) / w) * w;
+            sy = T + (sy - T) - std::floor((sy - T) / h) * h;
+        }
+        return true;
+    }
     const double nx = (x - ex) / rx, ny = (y - ey) / ry;
     const double d = std::hypot(nx, ny);
     if (d >= 1) return false;
+    if (f.kind == FilterKind::ZigZag) {   // s041 m3: ridges round the middle, fading to the rim
+        const double k = f.amount / 100, R = std::max(1.0, f.ridges);
+        const double wave = std::sin(2 * kPi * R * d) * (1 - d);
+        double th = std::atan2(ny, nx), ds = d;
+        if (f.axis == 0) th -= k * 0.6 * wave;                       // Around Center: the rings turn to and fro
+        else if (f.axis == 1) ds = d + k * 0.08 * wave;              // Out From Center: they move in and out
+        else { ds = d + k * 0.12 * wave; th -= k * 0.15 * wave; }    // Pond Ripples: mostly in and out, a little turn
+        ds = std::clamp(ds, 0.0, 1.0);
+        sx = ex + ds * std::cos(th) * rx;
+        sy = ey + ds * std::sin(th) * ry;
+        return true;
+    }
     double mx = nx, my = ny;
     // Spherize's radial map: d -> where it reads (k > 0: the middle read from
     // nearer the middle -- magnified; k < 0: from further out -- shrunk).
@@ -1026,6 +1089,11 @@ bool warp_source(const Filter& f, double ex, double ey, double rx, double ry, do
     return true;
 }
 
+bool placed(const Filter& in) {
+    const Filter f = normalised(in);
+    return f.kind == FilterKind::AddNoise || (f.kind == FilterKind::LensBlur && f.amount > 0) || f.kind == FilterKind::RadialBlur || warps(f.kind);
+}
+
 double depth_amount(const Filter& f, double d) {
     d = std::clamp(d, 0.0, 1.0);
     if (f.invert) d = 1 - d;
@@ -1035,21 +1103,25 @@ double depth_amount(const Filter& f, double d) {
     return 0;
 }
 std::string_view depth_key(DepthSource s) {
-    return s == DepthSource::Transparency ? "transparency" : s == DepthSource::LayerMask ? "layer-mask" : "none";
+    return s == DepthSource::Transparency ? "transparency" : s == DepthSource::LayerMask ? "layer-mask"
+         : s == DepthSource::Channel ? "channel" : "none";
 }
 std::optional<DepthSource> depth_from(std::string_view k) {
     if (k == "none") return DepthSource::None;
     if (k == "transparency") return DepthSource::Transparency;
     if (k == "layer-mask") return DepthSource::LayerMask;
+    if (k == "channel") return DepthSource::Channel;   // s041 m4
     return std::nullopt;
 }
 bool wants_mask(const Filter& f) { return f.kind == FilterKind::LensBlur && f.depth == DepthSource::LayerMask; }
+bool wants_channel(const Filter& f) { return f.kind == FilterKind::LensBlur && f.depth == DepthSource::Channel && !f.depth_channel.empty(); }
 
 const std::vector<FilterKind>& kinds() {
     // Alphabetical within each submenu, as Photoshop's.
     static const std::vector<FilterKind> v{FilterKind::BoxBlur, FilterKind::GaussianBlur, FilterKind::LensBlur, FilterKind::MotionBlur,
                                            FilterKind::RadialBlur, FilterKind::SurfaceBlur,   // s040
-                                           FilterKind::Pinch, FilterKind::Spherize, FilterKind::Twirl,   // s040 m4: Distort
+                                           FilterKind::Pinch, FilterKind::PolarCoordinates, FilterKind::Ripple, FilterKind::Spherize,   // s040 m4,
+                                           FilterKind::Twirl, FilterKind::Wave, FilterKind::ZigZag,                                    // s041 m3: Distort
                                            FilterKind::AddNoise, FilterKind::DustScratches, FilterKind::Median, FilterKind::ReduceNoise,
                                            FilterKind::SmartSharpen, FilterKind::UnsharpMask, FilterKind::HighPass,
                                            FilterKind::Maximum, FilterKind::Minimum};
@@ -1090,6 +1162,10 @@ Filter fresh(FilterKind k) {
         case FilterKind::Twirl:        f.angle = 50; break;    // s040 m4: Photoshop's
         case FilterKind::Pinch:        f.amount = 50; break;
         case FilterKind::Spherize:     f.amount = 100; break;
+        case FilterKind::PolarCoordinates: break;              // s041 m3: Rectangular to Polar
+        case FilterKind::Ripple:       f.amount = 100; break;  // Medium
+        case FilterKind::Wave:         f.radius = 120; f.amount = 35; break;   // Sine, Repeat Edge, 100 % / 100 %
+        case FilterKind::ZigZag:       f.amount = 10; f.ridges = 5; f.axis = 2; break;   // Pond Ripples
         case FilterKind::None: break;
     }
     return f;
@@ -1110,6 +1186,8 @@ Filter normalised(const Filter& in) {
         case FilterKind::LensBlur:      f.radius = std::round(std::clamp(f.radius, 1.0, 100.0)); break;   // s037
         case FilterKind::RadialBlur:    f.radius = 1; break;   // s040: no radius
         case FilterKind::Twirl: case FilterKind::Pinch: case FilterKind::Spherize: f.radius = 1; break;   // s040 m4
+        case FilterKind::PolarCoordinates: case FilterKind::Ripple: case FilterKind::ZigZag: f.radius = 1; break;   // s041 m3
+        case FilterKind::Wave: f.radius = std::round(std::clamp(f.radius, 2.0, 999.0)); break;   // its Wavelength
         default:                     f.radius = std::round(std::clamp(f.radius, 0.1, 250.0) * 10) / 10; break;
     }
     const bool streak = f.kind == FilterKind::MotionBlur || (f.kind == FilterKind::SmartSharpen && f.remove == Remove::Motion);
@@ -1121,7 +1199,10 @@ Filter normalised(const Filter& in) {
     else if (f.kind == FilterKind::ReduceNoise) f.amount = std::round(std::clamp(f.amount, 0.0, 10.0));
     else if (f.kind == FilterKind::LensBlur) f.amount = std::round(std::clamp(f.amount, 0.0, 100.0));   // s039: its Noise
     else if (f.kind == FilterKind::RadialBlur) f.amount = std::round(std::clamp(f.amount, 1.0, 100.0));   // s040
-    else if (f.kind == FilterKind::Pinch || f.kind == FilterKind::Spherize) f.amount = std::round(std::clamp(f.amount, -100.0, 100.0));   // s040 m4
+    else if (f.kind == FilterKind::Pinch || f.kind == FilterKind::Spherize || f.kind == FilterKind::ZigZag)
+        f.amount = std::round(std::clamp(f.amount, -100.0, 100.0));   // s040 m4, s041 m3
+    else if (f.kind == FilterKind::Ripple) f.amount = std::round(std::clamp(f.amount, -999.0, 999.0));   // s041 m3
+    else if (f.kind == FilterKind::Wave) f.amount = std::round(std::clamp(f.amount, 1.0, 999.0));
     else f.amount = 0;
     if (f.kind == FilterKind::SurfaceBlur) f.threshold = std::max(f.threshold, 2);   // m4
     else if (f.kind != FilterKind::UnsharpMask && f.kind != FilterKind::DustScratches && f.kind != FilterKind::LensBlur) f.threshold = 0;
@@ -1147,18 +1228,27 @@ Filter normalised(const Filter& in) {
         f.curvature = pct(f.curvature);
         f.bright = pct(f.bright);
         // s039: the depth map
-        if (f.depth != DepthSource::Transparency && f.depth != DepthSource::LayerMask) f.depth = DepthSource::None;
+        if (f.depth != DepthSource::Transparency && f.depth != DepthSource::LayerMask && f.depth != DepthSource::Channel) f.depth = DepthSource::None;
+        if (f.depth != DepthSource::Channel) f.depth_channel.clear();   // s041 m4
         f.focal = std::round(std::clamp(f.focal, 0.0, 255.0));
     } else {
         f.blades = blank.blades; f.curvature = blank.curvature; f.bright = blank.bright;
-        f.depth = blank.depth; f.focal = blank.focal; f.invert = blank.invert;
+        f.depth = blank.depth; f.focal = blank.focal; f.invert = blank.invert; f.depth_channel.clear();
     }
     if (f.kind == FilterKind::RadialBlur) {   // s040
         f.quality = std::clamp(f.quality, 0, 2);
         f.cx = std::round(std::clamp(f.cx, 0.0, 100.0) * 10) / 10;
         f.cy = std::round(std::clamp(f.cy, 0.0, 100.0) * 10) / 10;
-    } else { f.zoom = blank.zoom; f.quality = blank.quality; f.cx = blank.cx; f.cy = blank.cy; }
-    f.axis = f.kind == FilterKind::Spherize ? std::clamp(f.axis, 0, 2) : 0;   // s040 m4
+    } else { f.zoom = blank.zoom; f.cx = blank.cx; f.cy = blank.cy; }   // (quality: below -- Ripple's Size too)
+    f.axis = (f.kind == FilterKind::Spherize || f.kind == FilterKind::Wave || f.kind == FilterKind::ZigZag) ? std::clamp(f.axis, 0, 2)
+           : f.kind == FilterKind::PolarCoordinates ? std::clamp(f.axis, 0, 1) : 0;   // s040 m4, s041 m3
+    if (f.kind == FilterKind::Ripple) f.quality = std::clamp(f.quality, 0, 2);       // s041 m3: its Size
+    else if (f.kind != FilterKind::RadialBlur) f.quality = blank.quality;
+    f.ridges = f.kind == FilterKind::ZigZag ? std::round(std::clamp(f.ridges, 1.0, 20.0)) : blank.ridges;
+    if (f.kind == FilterKind::Wave) {
+        f.scale_h = std::round(std::clamp(f.scale_h, 0.0, 100.0));
+        f.scale_v = std::round(std::clamp(f.scale_v, 0.0, 100.0));
+    } else { f.scale_h = blank.scale_h; f.scale_v = blank.scale_v; f.wrap = blank.wrap; }
     if (f.kind != FilterKind::AddNoise && f.kind != FilterKind::LensBlur) { f.gaussian = f.mono = false; f.seed = 1; }   // s039: Lens Blur's Noise has them
     if (f.kind == FilterKind::AddNoise) f.radius = 0.1;
     return f;
@@ -1179,6 +1269,7 @@ int reach(const Filter& in) {
         case FilterKind::LensBlur:      return static_cast<int>(std::ceil(f.radius)) + 1;   // s037: the iris and its part pixels
         case FilterKind::RadialBlur:    return 1 << 16;   // s040: a streak may cross the picture -- it reads all of it
         case FilterKind::Twirl: case FilterKind::Pinch: case FilterKind::Spherize: return 1 << 16;   // s040 m4: the whole ellipse
+        case FilterKind::PolarCoordinates: case FilterKind::Ripple: case FilterKind::Wave: case FilterKind::ZigZag: return 1 << 16;   // s041 m3
         case FilterKind::SmartSharpen: {   // s034: the kernel's reach, and the tones'
             int r = f.remove == Remove::Gaussian ? plan_of(f.radius).reach
                   : f.remove == Remove::Lens     ? static_cast<int>(std::floor(f.radius + 0.5))
@@ -1226,7 +1317,8 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
     const int bins = fmt.depth == pixel::Depth::U8 ? 256 : 1024;
     // s039: Lens Blur's depth map -- the layer's alpha, or the mask passed in.
     const bool by_depth = f.kind == FilterKind::LensBlur &&
-                          (f.depth == DepthSource::Transparency || (f.depth == DepthSource::LayerMask && depth));
+                          (f.depth == DepthSource::Transparency ||
+                           ((f.depth == DepthSource::LayerMask || f.depth == DepthSource::Channel) && depth));   // s041 m4
     const std::vector<LensLevel> levels = by_depth ? lens_levels(f) : std::vector<LensLevel>{};
 
     const int cols = src.cols(), rows = src.rows();
@@ -1345,6 +1437,7 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                             for (int x = b.x; x < b.x + b.w; ++x) {
                                 double d = 1;   // no alpha: opaque everywhere
                                 if (f.depth == DepthSource::LayerMask) d = 1.0 - select::coverage(*depth, x, y);
+                                else if (f.depth == DepthSource::Channel) d = select::coverage(*depth, x, y);   // s041 m4: white 255
                                 else if (has_a) d = buf[(static_cast<std::size_t>(y - R.y) * static_cast<std::size_t>(R.w) + static_cast<std::size_t>(x - R.x)) * static_cast<std::size_t>(C) + static_cast<std::size_t>(ai)];
                                 amt[static_cast<std::size_t>(y - b.y) * static_cast<std::size_t>(b.w) + static_cast<std::size_t>(x - b.x)] =
                                     static_cast<float>(depth_amount(f, d));

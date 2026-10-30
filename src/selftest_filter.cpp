@@ -88,7 +88,7 @@ void selftest_filter(const Check& check) {
         check("normalised: clamped to the ranges", n.radius == 250 && n.amount == 1 && n.threshold == 255, num(n.radius));
         check("fresh: Photoshop's defaults", F::fresh(FilterKind::UnsharpMask).amount == 100 && F::fresh(FilterKind::HighPass).radius == 10 &&
                                              F::fresh(FilterKind::GaussianBlur).radius == 2, "");
-        check("kinds / keys / labels", F::kinds().size() == 18 && F::key(FilterKind::HighPass) == "high-pass" &&
+        check("kinds / keys / labels", F::kinds().size() == 22 && F::key(FilterKind::HighPass) == "high-pass" &&
                                        F::label(FilterKind::AddNoise) == "Add Noise", "");
     }
 

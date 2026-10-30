@@ -57,7 +57,9 @@ bool apply_filter(DocJournal& j, Document& d, const Id& id, const Filter& f) {
     const auto n = filter::normalised(f);
     if (filter::identity(n)) return false;
     auto out = filter::filtered(*l->pixels, n, d.selection(), (l->locks & lock::Alpha) != 0, nullptr, {}, {},
-                                filter::wants_mask(n) ? l->mask.get() : nullptr);   // s039: the depth map
+                                filter::wants_mask(n) ? l->mask.get()
+                                : filter::wants_channel(n) && d.channels().count(n.depth_channel) ? d.channels().at(n.depth_channel).mask.get()
+                                : nullptr);   // s039: the depth map; s041 m4: or a channel
     if (!out) return false;
     return set_pixels_if(j, d, id, l->pixels, std::move(*out), std::string(filter::label(n.kind)));
 }

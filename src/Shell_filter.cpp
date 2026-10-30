@@ -60,7 +60,9 @@ void Shell::filter_run(const core::Filter& f) {
     const auto sel = m_doc.selection_ptr();
     const bool keep_alpha = (cur->locks & core::lock::Alpha) != 0;
     const std::string label(F::label(f.kind));
-    const auto depth = F::wants_mask(f) ? cur->mask : nullptr;   // s039: Lens Blur's depth map
+    // s039: Lens Blur's depth map -- the layer's mask; s041 m4: or a channel.
+    const auto depth = F::wants_mask(f) ? cur->mask
+                     : F::wants_channel(f) && m_doc.channels().count(f.depth_channel) ? m_doc.channels().at(f.depth_channel).mask : nullptr;
     m_filter_landing = start_job(label, [this, target, before, sel, f, keep_alpha, label, depth](core::Jobs::Token& t) -> core::Jobs::Landing {
         auto out = F::filtered(*before, f, sel.get(), keep_alpha, nullptr, [&t] { return t.cancelled(); },
                                [&t](double p) { t.progress(p); }, depth.get());
@@ -113,14 +115,16 @@ void Shell::filter_preview_soon() {
         else if (live) stack.push_back({f, true});
         const int later = core::live::reach(*l);
         const auto depth = l->mask;   // s039: Lens Blur's depth map (Layer Mask)
-        m_filter_job = start_job("Preview", [this, src, sel, keep_alpha, f, view, target, stack, editing, live, later, depth](core::Jobs::Token& t) -> core::Jobs::Landing {
+        // s041 m4: a channel as the depth -- the pixels' preview only (a live one sees none).
+        const auto chan = F::wants_channel(f) && m_doc.channels().count(f.depth_channel) ? m_doc.channels().at(f.depth_channel).mask : nullptr;
+        m_filter_job = start_job("Preview", [this, src, sel, keep_alpha, f, view, target, stack, editing, live, later, depth, chan](core::Jobs::Token& t) -> core::Jobs::Landing {
             const auto stop = [&t] { return t.cancelled(); };
             std::optional<pixel::TileMap> out;
             if (editing || live) out = core::live::run(*src, stack, &view, stop, depth.get());
             else {   // the pixels changed, then the stack over them
                 const pixel::Rect wide{view.x - later, view.y - later, view.w + 2 * later, view.h + 2 * later};
                 auto base = F::filtered(*src, f, sel.get(), keep_alpha, &wide, stop, [&t](double p) { t.progress(p); },
-                                        F::wants_mask(f) ? depth.get() : nullptr);
+                                        F::wants_mask(f) ? depth.get() : chan.get());
                 if (base) out = core::live::run(*base, stack, &view, stop, depth.get());
             }
             if (!out || t.cancelled()) return [] {};
@@ -137,6 +141,14 @@ void Shell::filter_preview_soon() {
         });
         return false;
     }, 120);
+}
+
+// s041 m4: the saved channels, for Lens Blur's Source.
+void Shell::filter_dialog_channels() {
+    std::vector<std::pair<std::string, std::string>> ch;
+    for (const auto& id : m_doc.channel_order())
+        if (m_doc.channels().count(id)) ch.emplace_back(id, m_doc.channels().at(id).name);
+    m_filter_dialog->set_channels(std::move(ch));
 }
 
 // s039 m2: SET FOCAL POINT -- the depth map's value at (x, y) becomes the
@@ -156,6 +168,13 @@ void Shell::on_focal_point(int x, int y) {
     if (f.depth == core::DepthSource::LayerMask) {
         if (!l->mask) { toast("Set Focal Point: the layer has no mask"); m_filter_dialog->focal_pick_off(); return; }
         d = 1.0 - core::select::coverage(*l->mask, x, y);
+    } else if (f.depth == core::DepthSource::Channel) {   // s041 m4: the channel there (white 255)
+        if (!F::wants_channel(f) || !m_doc.channels().count(f.depth_channel) || !m_doc.channels().at(f.depth_channel).mask) {
+            toast("Set Focal Point: that channel is gone");
+            m_filter_dialog->focal_pick_off();
+            return;
+        }
+        d = core::select::coverage(*m_doc.channels().at(f.depth_channel).mask, x, y);
     } else if (f.depth == core::DepthSource::Transparency) {
         if (l->pixels && l->pixels->format().alpha) d = l->pixels->get(x, y).c[static_cast<std::size_t>(l->pixels->format().colour_channels())];
     } else { m_filter_dialog->focal_pick_off(); return; }
@@ -184,6 +203,7 @@ void Shell::on_filter(core::FilterKind k) {
     m_filter_dialog->set_live(m_filter_live, false);
     m_filter_dialog->set_has_mask(m_doc.get(m_filter_target)->mask != nullptr);   // s039
     m_filter_dialog->set_image_size(m_doc.image().width, m_doc.image().height);    // s040 m2
+    filter_dialog_channels();                                                       // s041 m4
     m_filter_dialog->ask(start, m_doc.get(m_filter_target)->name);
     filter_preview_soon();
 }
@@ -198,6 +218,7 @@ void Shell::on_live_edit(const core::Document::Id& id, std::size_t i) {
     m_filter_dialog->set_live(true, true);
     m_filter_dialog->set_has_mask(l->mask != nullptr);   // s039
     m_filter_dialog->set_image_size(m_doc.image().width, m_doc.image().height);   // s040 m2
+    filter_dialog_channels();                                                      // s041 m4
     m_filter_dialog->ask(l->filters[i].f, l->name);
     filter_preview_soon();
 }

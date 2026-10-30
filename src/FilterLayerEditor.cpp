@@ -23,8 +23,6 @@ void FilterLayerEditor::set(const core::Filter& f) {
     m_f = f;
     m_threshold = f.threshold;
     m_angle = f.angle;
-    m_quality = f.quality;   // s040
-    m_axis = f.axis;
     if (f.kind != m_built) rebuild();
     sync();
 }
@@ -32,8 +30,6 @@ void FilterLayerEditor::set(const core::Filter& f) {
 void FilterLayerEditor::emit() {
     m_f.threshold = static_cast<int>(std::lround(m_threshold));
     m_f.angle = static_cast<int>(std::lround(m_angle));
-    m_f.quality = static_cast<int>(std::lround(m_quality));   // s040
-    m_f.axis = static_cast<int>(std::lround(m_axis));
     m_changed.emit(m_f);
 }
 
@@ -95,6 +91,26 @@ void FilterLayerEditor::row(const char* name, const char* label, double lo, doub
     });
 }
 
+// s041 m2: a label and a dropdown on a line; a choice is ONE step.
+void FilterLayerEditor::choice(const char* name, const char* label, std::vector<Glib::ustring> items, std::function<int()> get,
+                               std::function<void(int)> put) {
+    auto line = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto l = Gtk::make_managed<Gtk::Label>(label);
+    l->set_xalign(0.0f);
+    l->set_hexpand(true);
+    line->append(*l);
+    auto dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(items));
+    dd->set_name(name);
+    line->append(*dd);
+    m_body.append(*line);
+    m_choices.push_back({dd, std::move(get)});
+    dd->property_selected().signal_changed().connect([this, dd, put = std::move(put)] {
+        if (m_syncing) return;
+        put(static_cast<int>(dd->get_selected()));
+        emit();
+    });
+}
+
 void FilterLayerEditor::rebuild() {
     while (auto* c = m_body.get_first_child()) m_body.remove(*c);
     m_rows.clear();
@@ -102,7 +118,8 @@ void FilterLayerEditor::rebuild() {
     m_shape = nullptr;
     m_motion_only.clear();
     m_into = nullptr;
-    m_gauss = m_mono = m_zoom = nullptr;
+    m_gauss = m_mono = nullptr;
+    m_choices.clear();   // s041 m2
     m_depth = nullptr; m_invert = nullptr; m_depth_only.clear();   // s039
     m_built = m_f.kind;
     auto head = Gtk::make_managed<Gtk::Label>();
@@ -154,16 +171,35 @@ void FilterLayerEditor::rebuild() {
             break;
         case FilterKind::RadialBlur: {   // s040
             row("filter_layer.amount", "Amount", 1, 100, 0, false, "", &m_f.amount);
-            m_zoom = Gtk::make_managed<Gtk::CheckButton>("Zoom");
-            m_zoom->set_name("filter_layer.zoom");
-            m_zoom->set_tooltip_text("On: streaks along the rays from the centre; off: Spin, arcs round it");
-            m_zoom->signal_toggled().connect([this] { if (!m_syncing) { m_f.zoom = m_zoom->get_active(); emit(); } });
-            m_body.append(*m_zoom);
-            row("filter_layer.quality", "Quality", 0, 2, 0, false, "", &m_quality);
+            choice("filter_layer.method", "Method", {"Spin", "Zoom"}, [this] { return m_f.zoom ? 1 : 0; }, [this](int v) { m_f.zoom = v == 1; });   // s041 m2
+            choice("filter_layer.quality", "Quality", {"Draft", "Good", "Best"}, [this] { return m_f.quality; }, [this](int v) { m_f.quality = v; });
             row("filter_layer.cx", "Centre X", 0, 100, 1, false, "%", &m_f.cx);
             row("filter_layer.cy", "Centre Y", 0, 100, 1, false, "%", &m_f.cy);
             break;
         }
+        case FilterKind::PolarCoordinates:   // s041 m3
+            choice("filter_layer.polar", "Mode", {"Rectangular to Polar", "Polar to Rectangular"}, [this] { return m_f.axis; },
+                   [this](int v) { m_f.axis = v; });
+            break;
+        case FilterKind::Ripple:
+            row("filter_layer.amount", "Amount", -999, 999, 0, false, "%", &m_f.amount);
+            choice("filter_layer.size", "Size", {"Small", "Medium", "Large"}, [this] { return m_f.quality; }, [this](int v) { m_f.quality = v; });
+            break;
+        case FilterKind::Wave:
+            row("filter_layer.wavelength", "Wavelength", 2, 999, 0, true, "px", &m_f.radius);
+            row("filter_layer.amplitude", "Amplitude", 1, 999, 0, true, "px", &m_f.amount);
+            row("filter_layer.scale_h", "Horizontal", 0, 100, 0, false, "%", &m_f.scale_h);
+            row("filter_layer.scale_v", "Vertical", 0, 100, 0, false, "%", &m_f.scale_v);
+            choice("filter_layer.wave_type", "Type", {"Sine", "Triangle", "Square"}, [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; });
+            choice("filter_layer.undefined", "Undefined Areas", {"Repeat Edge Pixels", "Wrap Around"}, [this] { return m_f.wrap ? 1 : 0; },
+                   [this](int v) { m_f.wrap = v == 1; });
+            break;
+        case FilterKind::ZigZag:
+            row("filter_layer.amount", "Amount", -100, 100, 0, false, "", &m_f.amount);
+            row("filter_layer.ridges", "Ridges", 1, 20, 0, false, "", &m_f.ridges);
+            choice("filter_layer.zigzag_style", "Style", {"Around Center", "Out From Center", "Pond Ripples"}, [this] { return m_f.axis; },
+                   [this](int v) { m_f.axis = v; });
+            break;
         case FilterKind::Twirl:   // s040 m4
             row("filter_layer.angle", "Angle", -999, 999, 0, false, "°", &m_angle);
             break;
@@ -172,7 +208,8 @@ void FilterLayerEditor::rebuild() {
             break;
         case FilterKind::Spherize:
             row("filter_layer.amount", "Amount", -100, 100, 0, false, "%", &m_f.amount);
-            row("filter_layer.axis", "Mode (0 normal, 1 across, 2 down)", 0, 2, 0, false, "", &m_axis);
+            choice("filter_layer.axis", "Mode", {"Normal", "Horizontal only", "Vertical only"}, [this] { return m_f.axis; },
+                   [this](int v) { m_f.axis = v; });   // s041 m2
             break;
         case FilterKind::LensBlur: {   // s037: the iris, then the specular highlights
             // s039: the depth map -- the transparency of what is below (a
@@ -240,7 +277,7 @@ void FilterLayerEditor::sync(int keep) {
         }
     }
     if (m_gauss) m_gauss->set_active(m_f.gaussian);
-    if (m_zoom) m_zoom->set_active(m_f.zoom);   // s040
+    for (const auto& ch : m_choices) ch.dd->set_selected(static_cast<guint>(ch.get()));   // s041 m2
     if (m_mono) m_mono->set_active(m_f.mono);
     if (m_shape) m_shape->set_selected(m_f.round ? 1u : 0u);   // m3
     if (m_depth) {   // s039
