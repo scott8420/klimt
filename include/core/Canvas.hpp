@@ -81,6 +81,10 @@ struct Reshape {
     std::map<Id, MapPtr>         pixels;
     MapPtr                       mask;     // nullptr: nothing selected after
     std::map<Id, MapPtr>         masks;    // s012: each layer mask, reshaped like its layer
+    // s035: where a point of the old picture lands -- every path layer's
+    // outline goes through it (an affine map takes a Bezier exactly). Unset:
+    // the paths stay as they are.
+    std::function<path::P(path::P)> path_map;
 };
 // Crop to `r` (image pixels; may reach past the canvas -- that adds canvas).
 // s010: what falls outside is KEPT beyond the new image unless delete_cropped.

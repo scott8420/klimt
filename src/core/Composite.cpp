@@ -223,6 +223,7 @@ struct Walker {
                 continue;
             }
             if (l.kind == Kind::Filter) continue;   // s030: drawn as it looks (live::effective), else nothing
+            if (l.kind == Kind::Path) continue;     // s035: a path layer draws nothing (its mask: live::effective)
             // s010 m3: one opaque colour at full strength, Normal, unclipped:
             // it simply IS what's below from here up.
             if (l.blend == pixel::Blend::Normal && !l.clipped && l.opacity >= 100 && l.fill >= 100 && l.pixels &&
@@ -445,6 +446,13 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
         return false;
     };
     const bool filters = has_filter(before) || has_filter(after);
+    // s035: a path layer masks its neighbour below -- any change to one (or
+    // to the layers next to it) redraws everything.
+    const auto masking = [](const Layers& ls) {
+        for (const auto& [id, l] : ls) if (l.kind == Kind::Path && l.path_mask) return true;
+        return false;
+    };
+    const bool path_masks = masking(before) || masking(after);
     std::vector<Document::Id> ids;
     for (const auto& [id, l] : before) ids.push_back(id);
     for (const auto& [id, l] : after) if (!before.count(id)) ids.push_back(id);
@@ -452,6 +460,43 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
         const Layer* a = find(before, id);
         const Layer* b = find(after, id);
         if (a && b && *a == *b) continue;
+        // s035: a path layer's outline / switches -- nothing to redraw when it
+        // masks nothing; else the tiles under the old and the new outline
+        // (all of them when a filter layer could read the masked layer).
+        if (a && b && a->kind == Kind::Path && b->kind == Kind::Path) {
+            Layer x = *a;
+            x.path = b->path; x.path_select = b->path_select; x.name = b->name; x.locks = b->locks;
+            if (x == *b) {   // only the outline / Selection switch / name / locks changed
+                if (!a->path_mask || !a->visible) continue;   // it masks nothing (and still doesn't)
+                bool reads = false;   // a filter layer above it, in its scope or an outer one
+                for (const auto& [fid, f] : after)
+                    if (f.kind == Kind::Filter && (f.parent != b->parent || f.pos > b->pos)) reads = true;
+                if (!reads) {
+                    for (const auto* pp : {a->path.get(), b->path.get()}) {
+                        if (!pp || pp->empty()) continue;
+                        const auto bx = path::box(*pp);
+                        const int c0 = std::max(0, static_cast<int>(std::floor(bx.x0 - 2)) / kTile), c1 = std::min(t.cols - 1, static_cast<int>(std::ceil(bx.x1 + 2)) / kTile);
+                        const int r0 = std::max(0, static_cast<int>(std::floor(bx.y0 - 2)) / kTile), r1 = std::min(t.rows - 1, static_cast<int>(std::ceil(bx.y1 + 2)) / kTile);
+                        for (int r = r0; r <= r1; ++r)
+                            for (int c = c0; c <= c1; ++c) t.add(c, r);
+                    }
+                    continue;
+                }
+            } else if (!a->path_mask && !b->path_mask) {
+                // switches / visibility of a path that masks nothing before or after: nothing shows
+                Layer y = *a;
+                y.path = b->path; y.path_select = b->path_select; y.name = b->name; y.locks = b->locks; y.visible = b->visible;
+                if (y == *b) continue;
+            }
+        }
+        if ((a && a->kind == Kind::Path && !a->path_mask && !b) || (b && b->kind == Kind::Path && !b->path_mask && !a)) continue;   // a path layer that masks nothing came or went
+        // s035: with a path masking its neighbour, a change in the stack's
+        // shape (a layer in, out or moved) or to a path layer may move the
+        // mask: everything. Other changes: their own tiles, as ever.
+        if (path_masks && (!a || !b || a->kind == Kind::Path || b->kind == Kind::Path || a->pos != b->pos || a->parent != b->parent)) {
+            t.add_all();
+            return t;
+        }
         if (filters) {   // s030 -- unless only a name or a lock changed
             if (a && b) {
                 Layer x = *a;

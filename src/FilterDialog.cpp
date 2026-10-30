@@ -3,6 +3,8 @@
 
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/headerbar.h>
+#include <gtkmm/expander.h>
+#include <gtkmm/stringlist.h>
 #include <glibmm/markup.h>
 
 #include <algorithm>
@@ -115,7 +117,8 @@ void FilterDialog::row(const char* name, const char* label, double lo, double hi
     u->set_xalign(0.0f);
     u->add_css_class("dim-label");
     top->append(*u);
-    m_body.append(*top);
+    Gtk::Box& into = m_into ? *m_into : static_cast<Gtk::Box&>(m_body);
+    into.append(*top);
     auto s = Gtk::make_managed<Gtk::Scale>(Gtk::Orientation::HORIZONTAL);
     s->set_name(std::string(name) + ".slider");
     s->set_range(0, 1000);   // a position; log or linear onto lo..hi
@@ -123,7 +126,7 @@ void FilterDialog::row(const char* name, const char* label, double lo, double hi
     s->set_draw_value(false);
     s->set_hexpand(true);
     s->set_margin_bottom(4);
-    m_body.append(*s);
+    into.append(*s);
     const std::size_t i = m_rows.size();
     m_rows.push_back({s, n, lo, hi, log, field});
     s->signal_value_changed().connect([this, i] {
@@ -147,6 +150,10 @@ void FilterDialog::row(const char* name, const char* label, double lo, double hi
 void FilterDialog::rebuild() {
     while (auto* c = m_body.get_first_child()) m_body.remove(*c);
     m_rows.clear();
+    m_remove = nullptr;
+    m_shape = nullptr;
+    m_motion_only.clear();
+    m_into = nullptr;
     m_gauss = m_uniform = m_mono = nullptr;
     auto head = Gtk::make_managed<Gtk::Label>();
     head->set_markup("<b>" + Glib::Markup::escape_text(std::string(F::label(m_f.kind))) + "</b>");
@@ -204,6 +211,18 @@ void FilterDialog::rebuild() {
             });
             break;
         }
+        case FilterKind::SmartSharpen: smart_rows(); break;   // s034
+        case FilterKind::DustScratches:
+            row("filter.radius", "Radius", 1, 100, 0, true, "pixels", &m_f.radius);
+            row("filter.threshold", "Threshold", 0, 255, 0, false, "levels", &m_threshold);
+            break;
+        case FilterKind::ReduceNoise: reduce_rows(); break;
+        case FilterKind::Maximum:
+        case FilterKind::Minimum: extreme_rows(); break;   // m3
+        case FilterKind::SurfaceBlur:   // m4
+            row("filter.radius", "Radius", 1, 100, 0, true, "pixels", &m_f.radius);
+            row("filter.threshold", "Threshold", 2, 255, 0, false, "levels", &m_threshold);
+            break;
         case FilterKind::None: break;
     }
 }
@@ -226,7 +245,84 @@ void FilterDialog::sync(int keep_slider) {
     }
     if (m_gauss) { m_gauss->set_active(m_f.gaussian); m_uniform->set_active(!m_f.gaussian); }
     if (m_mono) m_mono->set_active(m_f.mono);
+    if (m_shape) m_shape->set_selected(m_f.round ? 1u : 0u);   // m3
+    if (m_remove) {   // s034
+        m_remove->set_selected(m_f.remove == core::Remove::Lens ? 1u : m_f.remove == core::Remove::Motion ? 2u : 0u);
+        for (auto* w : m_motion_only) w->set_visible(m_f.remove == core::Remove::Motion);
+    }
     m_syncing = false;
+}
+
+// s034: Smart Sharpen -- Amount, Radius, Reduce Noise, Remove (Motion: its
+// Angle), then Shadows and Highlights folded away (Photoshop's layout).
+void FilterDialog::smart_rows() {
+    row("filter.amount", "Amount", 1, 500, 0, false, "%", &m_f.amount);
+    row("filter.radius", "Radius", 0.1, 64, 1, true, "pixels", &m_f.radius);
+    row("filter.noise", "Reduce Noise", 0, 100, 0, false, "%", &m_f.noise);
+    auto line = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto l = Gtk::make_managed<Gtk::Label>("Remove");
+    l->set_xalign(0.0f);
+    l->set_hexpand(true);
+    line->append(*l);
+    m_remove = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Gaussian Blur", "Lens Blur", "Motion Blur"}));
+    m_remove->set_name("filter.remove");
+    m_remove->set_tooltip_text("The blur to take away: Gaussian (as Unsharp Mask), Lens (a soft focus -- finer edges, fewer halos), "
+                               "Motion (a streak at the angle)");
+    line->append(*m_remove);
+    line->set_margin_bottom(4);
+    m_body.append(*line);
+    row("filter.angle", "Angle", -90, 90, 0, false, "°", &m_angle);
+    m_motion_only = {m_rows.back().s, m_rows.back().n->get_parent()};
+    m_remove->property_selected().signal_changed().connect([this] {
+        if (m_syncing) return;
+        const auto i = m_remove->get_selected();
+        m_f.remove = i == 1 ? core::Remove::Lens : i == 2 ? core::Remove::Motion : core::Remove::Gaussian;
+        for (auto* w : m_motion_only) w->set_visible(m_f.remove == core::Remove::Motion);
+        m_changed.emit();
+    });
+    for (const bool dark : {true, false}) {
+        auto* ex = Gtk::make_managed<Gtk::Expander>(dark ? "Shadows" : "Highlights");
+        ex->set_name(dark ? "filter.shadows" : "filter.highlights");
+        ex->set_tooltip_text(dark ? "Less sharpening in the dark areas" : "Less sharpening in the light areas");
+        auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+        box->set_margin_start(12);
+        box->set_margin_top(4);
+        ex->set_child(*box);
+        m_body.append(*ex);
+        m_into = box;
+        row(dark ? "filter.shadow_fade" : "filter.light_fade", "Fade Amount", 0, 100, 0, false, "%", dark ? &m_f.shadow_fade : &m_f.light_fade);
+        row(dark ? "filter.shadow_tonal" : "filter.light_tonal", "Tonal Width", 0, 100, 0, false, "%", dark ? &m_f.shadow_tonal : &m_f.light_tonal);
+        row(dark ? "filter.shadow_radius" : "filter.light_radius", "Radius", 1, 100, 0, true, "pixels", dark ? &m_f.shadow_radius : &m_f.light_radius);
+        m_into = nullptr;
+    }
+}
+
+// s034: Reduce Noise -- Strength, Preserve Details, Reduce Colour Noise, Sharpen Details.
+void FilterDialog::reduce_rows() {
+    row("filter.strength", "Strength", 0, 10, 0, false, "", &m_f.amount);
+    row("filter.preserve", "Preserve Details", 0, 100, 0, false, "%", &m_f.preserve);
+    row("filter.colour", "Reduce Colour Noise", 0, 100, 0, false, "%", &m_f.colour);
+    row("filter.sharpen", "Sharpen Details", 0, 100, 0, false, "%", &m_f.sharpen);
+}
+
+// s034 m3: Maximum / Minimum -- Radius, Preserve Squareness / Roundness.
+void FilterDialog::extreme_rows() {
+    row("filter.radius", "Radius", 1, 500, 0, true, "pixels", &m_f.radius);
+    auto line = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto l = Gtk::make_managed<Gtk::Label>("Preserve");
+    l->set_xalign(0.0f);
+    l->set_hexpand(true);
+    line->append(*l);
+    m_shape = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Squareness", "Roundness"}));
+    m_shape->set_name("filter.preserve_shape");
+    m_shape->set_tooltip_text("Squareness: corners stay square (fast). Roundness: grows and shrinks round, as a brush would");
+    line->append(*m_shape);
+    m_body.append(*line);
+    m_shape->property_selected().signal_changed().connect([this] {
+        if (m_syncing) return;
+        m_f.round = m_shape->get_selected() == 1;
+        m_changed.emit();
+    });
 }
 
 }  // namespace klimt

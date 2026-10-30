@@ -376,6 +376,12 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     sel->append("Edit in Quick Mask Mode", "win.quick-mask");   // s016
     sel->append("Color Range…", "win.select-range");          // s024
     sel->append("Save Selection", "win.select-save");          // s016: to the Channels tab
+    {   // s035: paths
+        auto ps = Gio::Menu::create();
+        ps->append("Load Path as Selection", "win.path-selection");
+        ps->append("Make Path from Selection", "win.path-make-work");
+        sel->append_section(ps);
+    }
     auto mod = Gio::Menu::create();   // s011 m4
     mod->append("Border…", "win.select-border");
     mod->append("Smooth…", "win.select-smooth");
@@ -429,6 +435,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     guides->append("Lock / Unlock Guides", "win.guides-lock");
     guides->append("Snap On / Off", "win.guides-snap");
     guides->append("Clear Guides", "win.guides-clear");
+    guides->append("Show / Hide Path Outline", "win.path-outline");   // s035
     view->append_section(guides);
     auto sub = Gio::Menu::create();
     sub->append_submenu("Image", image);

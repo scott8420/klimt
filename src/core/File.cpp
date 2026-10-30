@@ -287,12 +287,48 @@ Styles styles_from(const json& o) {
     return s;
 }
 
+// s035: a path -- its subpaths, each anchor [x, y, in x, in y, out x, out y, smooth].
+json path_json(const path::Path& p) {
+    json subs = json::array();
+    for (const auto& sb : p.subs) {
+        json nodes = json::array();
+        for (const auto& n : sb.nodes) nodes.push_back({n.at.x, n.at.y, n.in.x, n.in.y, n.out.x, n.out.y, n.smooth ? 1 : 0});
+        subs.push_back({{"closed", sb.closed}, {"nodes", std::move(nodes)}});
+    }
+    return subs;
+}
+path::Path path_from(const json& subs) {
+    path::Path p;
+    if (!subs.is_array()) return p;
+    for (const auto& js : subs) {
+        if (!js.is_object() || !js.contains("nodes") || !js["nodes"].is_array()) continue;
+        path::Sub sb;
+        sb.closed = js.value("closed", false);
+        for (const auto& n : js["nodes"]) {
+            if (!n.is_array() || n.size() < 6) continue;
+            bool ok = true;
+            for (std::size_t i = 0; i < 6; ++i) ok = ok && n[i].is_number();
+            if (!ok) continue;
+            path::Node node{{n[0].get<double>(), n[1].get<double>()}, {n[2].get<double>(), n[3].get<double>()},
+                            {n[4].get<double>(), n[5].get<double>()}, n.size() > 6 && n[6].is_number() && n[6].get<int>() != 0};
+            sb.nodes.push_back(node);
+        }
+        if (!sb.nodes.empty()) p.subs.push_back(std::move(sb));
+    }
+    return p;
+}
+
 // s018: a live filter -- the stable key and every setting.
 json live_json(const LiveFilter& lf) {
     const Filter& f = lf.f;
     return {{"kind", std::string(filter::key(f.kind))}, {"on", lf.on}, {"radius", f.radius}, {"angle", f.angle},
             {"amount", f.amount}, {"threshold", f.threshold}, {"gaussian", f.gaussian}, {"mono", f.mono}, {"seed", f.seed},
-            {"opacity", lf.opacity}, {"mode", std::string(blend_key(lf.mode))}};   // s023
+            {"opacity", lf.opacity}, {"mode", std::string(blend_key(lf.mode))},   // s023
+            // s034: Smart Sharpen, Reduce Noise
+            {"remove", std::string(filter::remove_key(f.remove))}, {"noise", f.noise},
+            {"shadow_fade", f.shadow_fade}, {"shadow_tonal", f.shadow_tonal}, {"shadow_radius", f.shadow_radius},
+            {"light_fade", f.light_fade}, {"light_tonal", f.light_tonal}, {"light_radius", f.light_radius},
+            {"preserve", f.preserve}, {"colour", f.colour}, {"sharpen", f.sharpen}, {"round", f.round}};
 }
 std::optional<LiveFilter> live_from(const json& j) {
     const std::string key = j.at("kind").get<std::string>();
@@ -309,6 +345,19 @@ std::optional<LiveFilter> live_from(const json& j) {
     lf.f.gaussian = j.value("gaussian", false);
     lf.f.mono = j.value("mono", false);
     lf.f.seed = j.value("seed", 1u);
+    const Filter blank;   // s034: absent in older files -- the defaults
+    if (const auto r = filter::remove_from(j.value("remove", std::string("gaussian")))) lf.f.remove = *r;
+    lf.f.noise = j.value("noise", blank.noise);
+    lf.f.shadow_fade = j.value("shadow_fade", blank.shadow_fade);
+    lf.f.shadow_tonal = j.value("shadow_tonal", blank.shadow_tonal);
+    lf.f.shadow_radius = j.value("shadow_radius", blank.shadow_radius);
+    lf.f.light_fade = j.value("light_fade", blank.light_fade);
+    lf.f.light_tonal = j.value("light_tonal", blank.light_tonal);
+    lf.f.light_radius = j.value("light_radius", blank.light_radius);
+    lf.f.preserve = j.value("preserve", blank.preserve);
+    lf.f.colour = j.value("colour", blank.colour);
+    lf.f.sharpen = j.value("sharpen", blank.sharpen);
+    lf.f.round = j.value("round", false);
     const std::uint32_t seed = lf.f.seed;
     lf.f = filter::normalised(lf.f);
     lf.f.seed = lf.f.kind == FilterKind::AddNoise ? seed : lf.f.seed;
@@ -386,6 +435,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
     if (ji < 0 || !read_entry(z, ji, raw, kMaxJson)) { error = "a damaged Klimt file (no document.json)"; return std::nullopt; }
     json doc = json::parse(raw.begin(), raw.end(), nullptr, false);
     if (doc.is_discarded() || !doc.is_object()) { error = "a damaged Klimt file (document.json)"; return std::nullopt; }
+    std::vector<std::pair<std::string, path::Path>> old_paths;   // s035: early builds' image paths
 
     Contents c;
     c.kind = formats::Kind::Klimt;
@@ -407,6 +457,13 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             for (const auto& g : im["guides"]) {
                 if (!g.is_object() || !g.contains("at") || !g["at"].is_number()) continue;
                 c.image.guides.push_back({g.value("vertical", true), g["at"].get<double>()});
+            }
+        // s035 (early s035 builds): paths kept on the image -- they open as path layers.
+        if (im.contains("work_path")) old_paths.push_back({"Work Path", path_from(im["work_path"])});
+        if (im.contains("paths") && im["paths"].is_array())
+            for (const auto& jp : im["paths"]) {
+                if (!jp.is_object() || !jp.contains("subs")) continue;
+                old_paths.push_back({jp.value("name", std::string("Path")), path_from(jp["subs"])});
             }
         if (c.image.width <= 0 || c.image.height <= 0 || c.image.width > formats::kMaxSide ||
             c.image.height > formats::kMaxSide ||
@@ -498,6 +555,12 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             if (kind == "pixel") L.kind = Kind::Pixel;
             else if (kind == "group") L.kind = Kind::Group;
             else if (kind == "filter") L.kind = Kind::Filter;   // s030: its filter in "filters"
+            else if (kind == "path") {   // s035
+                L.kind = Kind::Path;
+                L.path = std::make_shared<const path::Path>(path_from(l.value("path", json::array())));
+                L.path_mask = l.value("path_mask", false);
+                L.path_select = l.value("path_select", false);
+            }
             else if (kind == "adjustment") {   // s013
                 L.kind = Kind::Adjustment;
                 const auto a = adjust_from(l.at("adjust"));
@@ -579,6 +642,19 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
         return std::nullopt;
     }
     if (c.layers.empty()) { error = "a Klimt file with no layers"; return std::nullopt; }
+    {   // s035: early-s035 image paths become path layers at the top
+        double top = 0;
+        for (const auto& [id, L] : c.layers) if (L.parent.empty()) top = std::max(top, L.pos);
+        for (const auto& [name, pth] : old_paths) {
+            if (pth.empty()) continue;
+            Layer L;
+            L.kind = Kind::Path;
+            L.name = name;
+            L.pos = ++top;
+            L.path = std::make_shared<const path::Path>(pth);
+            c.layers["L" + std::to_string(c.next_id++)] = std::move(L);
+        }
+    }
     if (const auto bad = check_tree(c); !bad.empty()) { error = "a damaged Klimt file (" + bad + ")"; return std::nullopt; }
     p.at(1);
     return c;
@@ -666,6 +742,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         for (const auto& g : c.image.guides) gs.push_back({{"vertical", g.vertical}, {"at", g.at}});
         doc["image"]["guides"] = std::move(gs);
     }
+
     if (c.image.origin_x != 0 || c.image.origin_y != 0) {   // s031
         doc["image"]["origin_x"] = c.image.origin_x;
         doc["image"]["origin_y"] = c.image.origin_y;
@@ -712,12 +789,17 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         return true;
     };
     for (const auto& [id, L] : c.layers) {
-        json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : L.kind == Kind::Adjustment ? "adjustment" : L.kind == Kind::Filter ? "filter" : "pixel"}, {"name", L.name},
+        json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : L.kind == Kind::Adjustment ? "adjustment" : L.kind == Kind::Filter ? "filter" : L.kind == Kind::Path ? "path" : "pixel"}, {"name", L.name},
                   {"parent", L.parent}, {"pos", L.pos}, {"visible", L.visible}, {"locks", L.locks},
                   {"opacity", L.opacity}, {"fill", L.fill}, {"blend", std::string(blend_key(L.blend))},
                   {"clipped", L.clipped}};
         if (L.pixels && L.kind == Kind::Pixel && !write_map(l, *L.pixels, "tiles", "outside")) return false;
         if (L.kind == Kind::Adjustment) l["adjust"] = adjust_json(L.adjust);   // s013
+        if (L.kind == Kind::Path && L.path) {   // s035
+            l["path"] = path_json(*L.path);
+            l["path_mask"] = L.path_mask;
+            l["path_select"] = L.path_select;
+        }
         if (L.kind == Kind::Filter) {   // s030: its one filter
             json fs = json::array();
             for (const auto& lf : L.filters) fs.push_back(live_json(lf));

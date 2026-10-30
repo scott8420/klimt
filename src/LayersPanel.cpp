@@ -173,7 +173,7 @@ LayersPanel::LayersPanel(core::Document& doc, core::DocJournal& journal)
         fx->set_name("layers.filter");
         fx->set_icon_name("klimt-filter-layer-symbolic");
         fx->set_menu_model(model);
-        fx->set_tooltip_text("New filter layer -- a filter over everything below, kept live: Blur, Sharpen, Noise, High Pass");
+        fx->set_tooltip_text("New filter layer -- a filter over everything below, kept live: Blur, Sharpen (Smart Sharpen), Noise (Reduce Noise, Dust & Scratches), High Pass");
         fx->add_css_class("flat");
         bar->append(*fx);
     }
@@ -207,6 +207,12 @@ std::vector<LayersPanel::Id> LayersPanel::in_walk_order(const std::vector<Id>& i
     for (const auto& id : m_doc.walk())
         if (std::find(ids.begin(), ids.end(), id) != ids.end()) out.push_back(id);
     return out;
+}
+
+void LayersPanel::set_outlines_off(const std::set<Id>& off) {
+    if (off == m_outlines_off) return;
+    m_outlines_off = off;
+    queue_repaint();
 }
 
 void LayersPanel::select(const std::vector<Id>& ids, bool keys) {
@@ -318,7 +324,11 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
     const bool flt = l.kind == core::Kind::Filter;   // s030
     const bool adj = l.kind == core::Kind::Adjustment || flt;   // s013 (a filter layer: alike -- no pixels, a mask)
     const Id target = mask_target();
-    kind->set_from_icon_name(group ? "folder-symbolic" : flt ? "klimt-filter-layer-symbolic" : adj ? "klimt-adjustment-symbolic" : "image-x-generic-symbolic");
+    const bool pth = l.kind == core::Kind::Path;   // s035
+    kind->set_from_icon_name(group ? "folder-symbolic" : pth ? "klimt-tool-pen-symbolic" : flt ? "klimt-filter-layer-symbolic"
+                             : adj ? "klimt-adjustment-symbolic" : "image-x-generic-symbolic");
+    if (pth) kind->set_tooltip_text("A path layer -- the Pen (P) edits it; in Properties: mask what's below it in its group, "
+                                    "be the selection, Isolate what it goes round");
     if (flt && !l.filters.empty())
         kind->set_tooltip_text(std::string(core::filter::label(l.filters[0].f.kind)) + " -- a filter layer: "
                                "edit it in Properties; painting goes to its mask");
@@ -331,7 +341,21 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
         back->signal_pressed().connect([this, id](int, double, double) { set_mask_target({}); select({id}, false); });
         kind->add_controller(back);
     }
-    box->append(*kind);
+    if (pth) {   // s035: the node icon -- a button: the outline on the canvas, on / off
+        auto nb = Gtk::make_managed<Gtk::Button>();
+        nb->set_name("layers.path_outline");
+        nb->set_child(*kind);
+        nb->add_css_class("flat");
+        nb->set_focus_on_click(false);
+        const bool off = m_outlines_off.count(id) > 0;
+        if (off) kind->set_opacity(0.3);
+        nb->set_tooltip_text(off ? "The outline is hidden (the mask still works) -- click to show it  (Ctrl+Shift+H)"
+                                 : "Hide the outline and its points -- see the effect alone; the mask stays  (Ctrl+Shift+H)");
+        nb->signal_clicked().connect([this, id] { m_outline_toggle.emit(id); });
+        box->append(*nb);
+    } else {
+        box->append(*kind);
+    }
     // s012: the mask chip.
     if (l.mask) {
         auto chip = Gtk::make_managed<Gtk::Button>();
@@ -396,6 +420,10 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
 
     // What differs from a plain layer: blend, opacity, fill.
     std::string info;
+    if (l.kind == core::Kind::Path) {   // s035: its switches
+        if (l.path_mask) info += "mask ↓";
+        if (l.path_select) info += std::string(info.empty() ? "" : " · ") + "selection";
+    }
     if (l.blend != core::Blend::Normal && l.blend != core::Blend::PassThrough)
         info += std::string(core::blend_label(l.blend));
     if (l.opacity < 100) info += (info.empty() ? "" : " · ") + std::to_string(l.opacity) + "%";

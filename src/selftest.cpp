@@ -112,6 +112,9 @@ void selftest_brush(const std::function<void(const std::string&, bool, const std
 void selftest_dynamics(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s028
 void selftest_tooldefaults(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s029
 void selftest_filterlayers(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s030
+void selftest_sharpen(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s034
+void selftest_paths(const std::function<void(const std::string&, bool, const std::string&)>& check);     // s035
+void selftest_isolate(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s035 m7
 void selftest_rulers(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s031
 void selftest_styles(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_fade(const std::function<void(const std::string&, bool, const std::string&)>& check);
@@ -916,8 +919,19 @@ int main() {
         check("tools: a key finds its tool, either case",
               core::tool_for_key('m') && core::tool_for_key('M') && core::tool_for_key('M')->id == "select" &&
               !core::tool_for_key('q'));
-        check("tools: the scope wall -- no shape or pen tool",
-              !core::find_tool("shape") && !core::find_tool("pen") && !core::find_tool("rectangle"));
+        check("tools: the scope wall -- no shape tool",
+              !core::find_tool("shape") && !core::find_tool("rectangle") && !core::find_tool("ellipse"));
+        // s035: the Pen is allowed through the wall as a PATH tool -- paths for
+        // selections and masks (REQUIREMENTS) -- never as art: its note
+        // speaks of the selection, and no command strokes or fills a path.
+        {
+            const auto* pen = core::find_tool("pen");
+            bool art = false;
+            for (const auto& c : core::commands())
+                art = art || c.action.find("stroke-path") != std::string::npos || c.action.find("fill-path") != std::string::npos;
+            check("tools: the scope wall -- the Pen makes paths for selections, never art",
+                  pen && pen->note.find("selection") != std::string::npos && !art);
+        }
         // Every icon is a file in resources/ AND listed in the gresource bundle.
         const std::string root = KLIMT_SOURCE_DIR;
         std::ifstream xml(root + "/resources/klimt.gresource.xml");
@@ -1238,6 +1252,9 @@ int main() {
     selftest_dynamics([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_tooldefaults([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_filterlayers([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_sharpen([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_paths([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_isolate([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_rulers([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_styles([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_tabs([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });

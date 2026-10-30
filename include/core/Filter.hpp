@@ -23,7 +23,12 @@
 
 namespace klimt::core {
 
-enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass, AddNoise, BoxBlur, MotionBlur, Median };
+enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass, AddNoise, BoxBlur, MotionBlur, Median,
+                                       SmartSharpen, DustScratches, ReduceNoise,   // s034
+                                       Maximum, Minimum, SurfaceBlur };   // m4
+
+// s034: what Smart Sharpen takes away -- the blur it undoes.
+enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
 
 struct Filter {
     FilterKind kind = FilterKind::None;
@@ -45,6 +50,23 @@ struct Filter {
     bool gaussian = false;
     bool mono = false;
     std::uint32_t seed = 1;
+    // s034 -- Smart Sharpen: Remove (the blur undone; Motion takes `angle`),
+    // Reduce Noise 0 .. 100 % (fine detail below the noise isn't sharpened),
+    // and Fade Amount / Tonal Width 0 .. 100 % and Radius 1 .. 100 px for the
+    // shadows and the highlights (less sharpening in the darks / lights).
+    // `radius` 0.1 .. 64, `amount` 1 .. 500 %.
+    Remove remove = Remove::Gaussian;
+    double noise = 0;
+    double shadow_fade = 0, shadow_tonal = 50, shadow_radius = 1;
+    double light_fade = 0, light_tonal = 50, light_radius = 1;
+    // s034 -- Reduce Noise: `amount` is the Strength 0 .. 10; Preserve
+    // Details, Reduce Colour Noise, Sharpen Details 0 .. 100 %.
+    // Dust & Scratches: `radius` 1 .. 100, `threshold` 0 .. 255.
+    // m4 -- Surface Blur: `radius` 1 .. 100, `threshold` 2 .. 255 levels.
+    double preserve = 0, colour = 0, sharpen = 0;
+    // s034 m3 -- Maximum / Minimum: `radius` 1 .. 500; Preserve Roundness (a
+    // disc) or, off, Squareness (a square -- the fast one).
+    bool round = false;
     bool operator==(const Filter&) const = default;
 };
 
@@ -66,6 +88,8 @@ const std::vector<FilterKind>& kinds();       // the menu's order
 std::string_view label(FilterKind k);         // "Gaussian Blur"
 std::string_view key(FilterKind k);           // "gaussian-blur" (action names)
 std::string_view group(FilterKind k);         // the submenu: "Blur", "Noise", "Sharpen", "Other"
+std::string_view remove_key(Remove r);        // s034: "gaussian", "lens", "motion"
+std::optional<Remove> remove_from(std::string_view key);
 Filter fresh(FilterKind k);                   // Photoshop's defaults
 Filter normalised(const Filter& f);           // clamped to the ranges above
 bool identity(const Filter& f);               // changes nothing

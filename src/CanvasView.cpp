@@ -129,6 +129,15 @@ CanvasView::CanvasView() {
                 xf_press(x, y);
                 return;
             }
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "pen" && m_iw > 0) {   // s035: the Pen
+                const auto st = drag->get_current_event_state();
+                m_press_x = x;
+                m_press_y = y;
+                pen_press(x, y, (st & Gdk::ModifierType::CONTROL_MASK) != Gdk::ModifierType{},
+                          (st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{},
+                          (st & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{});
+                return;
+            }
             if (!m_panning && button == GDK_BUTTON_PRIMARY && ((m_tool == "crop" && m_variant == 1) || m_tool == "gradient") && m_iw > 0) {
                 m_line = true;   // s011: Straighten; s012: the Gradient
                 m_line_gradient = m_tool == "gradient";
@@ -229,6 +238,10 @@ CanvasView::CanvasView() {
             oy = static_cast<int>(std::lround(iy));
         };
         drag->signal_drag_update().connect([this, drag, offset](double dx, double dy) {
+            if (m_pen_drag) {   // s035
+                pen_drag(m_press_x + dx, m_press_y + dy, (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{});
+                return;
+            }
             if (m_xf.on && m_xf.mode != Xf::Mode::None) {
                 const auto st = drag->get_current_event_state();
                 xf_drag(m_press_x + dx, m_press_y + dy, (st & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{},
@@ -334,6 +347,7 @@ CanvasView::CanvasView() {
             queue_draw();
         });
         drag->signal_drag_end().connect([this, offset, drag](double dx, double dy) {
+            if (m_pen_drag) { pen_release(); return; }   // s035
             if (m_guide_drag >= 0) {   // s032: its new place told (off the picture: removed)
                 const int g = m_guide_drag;
                 m_guide_drag = -1;
@@ -396,10 +410,15 @@ CanvasView::CanvasView() {
 
     // The pointer, for zooming about it.
     auto motion = Gtk::EventControllerMotion::create();
-    motion->signal_motion().connect([this](double x, double y) {
+    motion->signal_motion().connect([this, motion](double x, double y) {
         m_px = x;
         m_py = y;
-        if (painting()) queue_draw();   // the brush outline follows the pointer
+        if (m_tool == "pen" && !m_pen_drag) {   // s035: the modifiers as they are now (the keys may have gone to another widget)
+            const auto st = motion->get_current_event_state();
+            const bool c = (st & Gdk::ModifierType::CONTROL_MASK) != Gdk::ModifierType{}, a = (st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+            if (c != m_pen_ctrl || a != m_pen_alt) { m_pen_ctrl = c; m_pen_alt = a; pen_modifiers(); }
+        }
+        if (painting() || (m_tool == "pen" && m_pen_sub >= 0)) queue_draw();   // the brush outline / the Pen's rubber band follows the pointer
         if (m_on_pointer) m_on_pointer(x, y);   // s031: the rulers' marks
         if (m_tool == "move" && !m_space && !m_panning && m_guide_drag < 0) {   // s032: over a guide
             const int g = guide_near(x, y);
@@ -430,11 +449,19 @@ CanvasView::CanvasView() {
     // Space held: the hand, for as long as it's down.
     auto keys = Gtk::EventControllerKey::create();
     keys->signal_key_pressed().connect([this](guint k, guint, Gdk::ModifierType) {
+        // s035 (Scott): the Pen's cursor follows Ctrl / Alt held.
+        if (k == GDK_KEY_Control_L || k == GDK_KEY_Control_R || k == GDK_KEY_Alt_L || k == GDK_KEY_Alt_R) {
+            if (k == GDK_KEY_Control_L || k == GDK_KEY_Control_R) m_pen_ctrl = true; else m_pen_alt = true;
+            if (m_tool == "pen") pen_modifiers();
+            return false;
+        }
         if (k != GDK_KEY_space) return false;
         if (!m_space) { m_space = true; update_cursor(); }
         return true;
     }, false);
     keys->signal_key_released().connect([this](guint k, guint, Gdk::ModifierType) {
+        if (k == GDK_KEY_Control_L || k == GDK_KEY_Control_R) { m_pen_ctrl = false; if (m_tool == "pen") pen_modifiers(); }
+        if (k == GDK_KEY_Alt_L || k == GDK_KEY_Alt_R) { m_pen_alt = false; if (m_tool == "pen") pen_modifiers(); }
         if (k == GDK_KEY_space) { m_space = false; update_cursor(); }
     });
     add_controller(keys);
@@ -629,12 +656,23 @@ void CanvasView::tell_zoom() {
     if (m_on_zoom) Glib::signal_idle().connect_once([this, z] { if (m_on_zoom) m_on_zoom(z); });
 }
 
+void CanvasView::pen_modifiers() {
+    update_cursor();
+    // Held modifiers only bend Draw; in Select / Convert the strip shows the mode itself.
+    const int shown = m_variant != 0 ? m_variant : m_pen_ctrl ? 1 : m_pen_alt ? 2 : 0;
+    if (shown == m_pen_shown) return;
+    m_pen_shown = shown;
+    m_pen_mode_signal.emit(shown);
+}
+
 void CanvasView::update_cursor() {
     if (m_panning) set_cursor("grabbing");
     else if (m_space || m_tool == "hand") set_cursor("grab");
     else if (m_tool == "zoom") set_cursor("zoom-in");
     else if (m_tool == "move") set_cursor("move");
-    else if (m_tool == "crop" || m_tool == "gradient") set_cursor("crosshair");
+    else if (m_tool == "pen" && (m_variant == 1 || (m_variant == 0 && m_pen_ctrl))) set_cursor("default");    // s035: Select (or Ctrl held): the arrow
+    else if (m_tool == "pen" && (m_variant == 2 || (m_variant == 0 && m_pen_alt))) set_cursor("pointer");     // Convert (or Alt held): the hand
+    else if (m_tool == "crop" || m_tool == "gradient" || m_tool == "pen") set_cursor("crosshair");
     else if (selecting() || m_tool == "eyedropper" || painting()) set_cursor("crosshair");
     else set_cursor("");
 }
@@ -1100,6 +1138,7 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
             cr->paint();
             cr->restore();
         }
+    draw_path(cr);   // s035 -- under the ants, so a path loaded as the selection still shows its ants
     draw_ants(cr, w, h);
     draw_rubber(cr);
     if (m_zoom_box && m_zoom_box_shown) {   // s030: the Zoom tool's box (while dragging)

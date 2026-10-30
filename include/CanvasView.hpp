@@ -69,6 +69,8 @@ public:
     pixel::Rect visible() const;
     void set_tool(const std::string& id, int variant = 0) {
         if (id != "crop") m_crop = false;   // s009: the box belongs to the Crop tool
+        if (id != "pen") m_pen_sub = -1;     // s035: another tool ends the Pen's subpath
+        m_pen_shown = -1;
         m_tool = id; m_variant = variant; update_cursor(); queue_draw();
     }
 
@@ -174,7 +176,53 @@ public:
     // picture's edges / centre within a few screen px.
     void set_snap(bool on) { m_snap = on; }
 
+    // s035: PATHS. The active path drawn over the picture (when `show`); with
+    // the Pen tool its anchors and handles too, and the Pen's gestures edit
+    // it here, each finished gesture told as the whole new path and a step
+    // name (the Shell lands it through core::paths::set). docs/paths.md.
+    //   click: a corner anchor; drag: a smooth one (Alt while dragging: only
+    //   the leaving handle); Shift: 45-degree steps from the last anchor;
+    //   click the subpath's first anchor: close it. Not drawing: a click on a
+    //   segment adds an anchor, on an anchor deletes it, on an open end
+    //   carries on from it. Ctrl: drag anchors and handles. Alt: click an
+    //   anchor -- corner <-> smooth; drag one -- pull new handles; drag a
+    //   handle -- move it alone (the point becomes a corner).
+    void set_path(const core::path::Path& p, bool show);
+    sigc::signal<void(const core::path::Path&, const std::string&)>& signal_path_edit() { return m_path_edit; }
+    bool pen_drawing() const;          // a subpath is being drawn
+    void pen_finish();                 // Enter / Escape: it ends (stays open)
+    bool pen_backspace();              // the last (or the picked) anchor out; false: nothing to remove
+    // s035 m5: the strip's Corner / Smooth -- the picked anchor; false: none picked.
+    bool pen_set_smooth(bool smooth);
+    // s035: the Pen's mode in effect changed -- Ctrl / Alt held or let go (0
+    // Draw, 1 Select, 2 Convert); the strip lights it.
+    sigc::signal<void(int)>& signal_pen_mode() { return m_pen_mode_signal; }
+
 private:
+    // s035: the Pen (CanvasView_pen.cpp).
+    enum class PenMode { None, NewAnchor, Close, Point, Handle, Pull };
+    void pen_press(double sx, double sy, bool ctrl, bool alt, bool shift);
+    void pen_drag(double sx, double sy, bool alt);
+    void pen_release();
+    void draw_path(const Cairo::RefPtr<Cairo::Context>& cr);
+    void pen_emit(const std::string& label);
+    core::path::Path m_path;
+    bool             m_show_path = false;
+    int              m_pen_sub = -1;                   // the subpath being drawn
+    int              m_sel_sub = -1, m_sel_node = -1;  // the anchor last touched (its handles show)
+    bool             m_pen_drag = false, m_pen_moved = false;
+    PenMode          m_pen_mode = PenMode::None;
+    core::path::Hit  m_pen_hit;
+    core::path::P    m_pen_from;
+    core::path::Path m_pen_before;
+    std::string      m_pen_label;
+    bool             m_pen_broke = false;
+    bool             m_pen_ctrl = false, m_pen_alt = false;   // held: the cursor shows Select / Convert
+    int              m_pen_shown = -1;                         // the mode last told
+    sigc::signal<void(int)> m_pen_mode_signal;
+    void pen_modifiers();                                      // the cursor and the strip follow Ctrl / Alt              // Alt was pressed during this drag: the handles' lengths part for good
+    sigc::signal<void(const core::path::Path&, const std::string&)> m_path_edit;
+
     void draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     void layout(int w, int h);                          // fit: the zoom for this size
     void zoom_at(double z, double sx, double sy);        // keep the image point under (sx, sy)

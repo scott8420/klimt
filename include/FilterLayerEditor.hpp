@@ -7,6 +7,7 @@
 
 #include <gtkmm/box.h>
 #include <gtkmm/checkbutton.h>
+#include <gtkmm/dropdown.h>
 #include <gtkmm/scale.h>
 #include <gtkmm/spinbutton.h>
 #include <sigc++/signal.h>
@@ -32,6 +33,14 @@ private:
     struct Row { Gtk::Scale* s; Gtk::SpinButton* n; double lo, hi; bool log; double* field; };
     core::Filter m_f;
     double m_threshold = 0, m_angle = 0;
+    // s034: Smart Sharpen's Remove, the rows only Motion has, the box rows go into (an expander's).
+    Gtk::DropDown*            m_remove = nullptr;
+    Gtk::DropDown*            m_shape = nullptr;   // m3: Maximum / Minimum's Preserve
+    std::vector<Gtk::Widget*> m_motion_only;
+    Gtk::Box*                 m_into = nullptr;
+    void smart_rows();
+    void reduce_rows();
+    void extreme_rows();
     std::vector<Row> m_rows;
     Gtk::CheckButton* m_gauss = nullptr;
     Gtk::CheckButton* m_mono = nullptr;

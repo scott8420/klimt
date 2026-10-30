@@ -25,6 +25,12 @@ constexpr Info kInfo[] = {
     {FilterKind::BoxBlur,      "box-blur",      "Box Blur",      "Blur"},     // m3
     {FilterKind::MotionBlur,   "motion-blur",   "Motion Blur",   "Blur"},
     {FilterKind::Median,       "median",        "Median",        "Noise"},
+    {FilterKind::SmartSharpen, "smart-sharpen", "Smart Sharpen", "Sharpen"},   // s034
+    {FilterKind::DustScratches,"dust-scratches","Dust & Scratches", "Noise"},
+    {FilterKind::ReduceNoise,  "reduce-noise",  "Reduce Noise",  "Noise"},
+    {FilterKind::Maximum,      "maximum",       "Maximum",       "Other"},   // s034 m3
+    {FilterKind::Minimum,      "minimum",       "Minimum",       "Other"},
+    {FilterKind::SurfaceBlur,  "surface-blur",  "Surface Blur",  "Blur"},    // s034 m4
 };
 const Info* info(FilterKind k) {
     for (const auto& i : kInfo)
@@ -37,8 +43,16 @@ bool reads(FilterKind k) { return k != FilterKind::None && k != FilterKind::AddN
 // Its result IS the worked buffer (a blur, the median) -- not a difference
 // from it (Unsharp Mask, High Pass).
 bool replaces(FilterKind k) {
-    return k == FilterKind::GaussianBlur || k == FilterKind::BoxBlur || k == FilterKind::MotionBlur || k == FilterKind::Median;
+    return k == FilterKind::GaussianBlur || k == FilterKind::BoxBlur || k == FilterKind::MotionBlur || k == FilterKind::Median ||
+           k == FilterKind::Maximum || k == FilterKind::Minimum || k == FilterKind::SurfaceBlur;
 }
+// Their worked buffer is a mean / rank of the neighbours -- colour may land above alpha (clamped).
+bool ranked(FilterKind k) {
+    return k == FilterKind::Median || k == FilterKind::Maximum || k == FilterKind::Minimum || k == FilterKind::SurfaceBlur;
+}
+// s034: works its own result from the band's buffer (straight colour into
+// `out`, alpha kept) -- Smart Sharpen, Dust & Scratches, Reduce Noise.
+bool custom(FilterKind k) { return k == FilterKind::SmartSharpen || k == FilterKind::DustScratches || k == FilterKind::ReduceNoise; }
 // The Gaussian under Gaussian Blur, Unsharp Mask and High Pass.
 bool gaussian(FilterKind k) { return k == FilterKind::GaussianBlur || k == FilterKind::UnsharpMask || k == FilterKind::HighPass; }
 
@@ -242,6 +256,357 @@ void median(const std::vector<float>& buf, std::vector<float>& out, int W, int H
     }
 }
 
+// ---- s034: Smart Sharpen, Dust & Scratches, Reduce Noise -------------------
+
+float luma_of(const float* p, int cc) { return cc >= 3 ? 0.299f * p[0] + 0.587f * p[1] + 0.114f * p[2] : p[0]; }
+
+// Lens: the mean over a DISC of `radius` (+ half a pixel) around each of the
+// band's own pixels (`b`), from row prefix sums: a pixel costs 2r + 1 rows.
+// Edges clamp, as the other blurs.
+void disc(const std::vector<float>& buf, std::vector<float>& out, int W, int H, int C, const Rect& b, double radius,
+          const std::function<bool()>& stop) {
+    const double rr = radius + 0.5;
+    const int r = static_cast<int>(std::floor(rr));
+    std::vector<int> span(static_cast<std::size_t>(2 * r + 1));
+    double count = 0;
+    for (int dy = -r; dy <= r; ++dy) {
+        const int w = static_cast<int>(std::floor(std::sqrt(std::max(0.0, rr * rr - dy * dy))));
+        span[static_cast<std::size_t>(dy + r)] = w;
+        count += 2 * w + 1;
+    }
+    const auto row_n = static_cast<std::size_t>(W + 1) * static_cast<std::size_t>(C);
+    // Only the rows the own pixels read.
+    const int y0 = std::max(0, b.y - r), y1 = std::min(H - 1, b.y + b.h - 1 + r);
+    std::vector<double> pre(static_cast<std::size_t>(y1 - y0 + 1) * row_n, 0.0);
+    for (int y = y0; y <= y1; ++y) {
+        double* P = pre.data() + static_cast<std::size_t>(y - y0) * row_n;
+        const float* in = buf.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(W) * static_cast<std::size_t>(C);
+        for (int x = 0; x < W; ++x)
+            for (int c = 0; c < C; ++c)
+                P[static_cast<std::size_t>(x + 1) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)] =
+                    P[static_cast<std::size_t>(x) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)] + in[static_cast<std::size_t>(x) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)];
+    }
+    const double inv = 1.0 / count;
+    std::array<double, pixel::kMaxChannels> acc{};
+    for (int y = b.y; y < b.y + b.h; ++y) {
+        if ((y & 15) == 0 && stop && stop()) return;
+        for (int x = b.x; x < b.x + b.w; ++x) {
+            acc.fill(0.0);
+            for (int dy = -r; dy <= r; ++dy) {
+                const int yy = std::clamp(y + dy, 0, H - 1);
+                const double* P = pre.data() + static_cast<std::size_t>(yy - y0) * row_n;
+                const float* in = buf.data() + static_cast<std::size_t>(yy) * static_cast<std::size_t>(W) * static_cast<std::size_t>(C);
+                const int w = span[static_cast<std::size_t>(dy + r)];
+                const int x0 = x - w, x1 = x + w;
+                const int a = std::max(x0, 0), z = std::min(x1, W - 1);
+                const int lo = std::max(0, -x0), hi = std::max(0, x1 - (W - 1));   // samples beyond each edge
+                for (int c = 0; c < C; ++c) {
+                    double v = P[static_cast<std::size_t>(z + 1) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)] -
+                               P[static_cast<std::size_t>(a) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)];
+                    if (lo) v += lo * static_cast<double>(in[static_cast<std::size_t>(c)]);
+                    if (hi) v += hi * static_cast<double>(in[static_cast<std::size_t>(W - 1) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)]);
+                    acc[static_cast<std::size_t>(c)] += v;
+                }
+            }
+            float* o = out.data() + (static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)) * static_cast<std::size_t>(C);
+            for (int c = 0; c < C; ++c) o[c] = static_cast<float>(acc[static_cast<std::size_t>(c)] * inv);
+        }
+    }
+}
+
+int motion_distance(const Filter& f) { return std::max(1, static_cast<int>(std::lround(f.radius * 2))); }
+
+// The luminance and alpha of `buf` (premultiplied), as 2 planes, blurred by
+// sigma: the tone the shadows / highlights fade reads.
+std::vector<float> tone(const std::vector<float>& buf, int W, int H, int C, int cc, bool has_a, double sigma,
+                        const std::function<bool()>& stop) {
+    std::vector<float> t(static_cast<std::size_t>(W) * static_cast<std::size_t>(H) * 2);
+    for (std::size_t i = 0, n = static_cast<std::size_t>(W) * static_cast<std::size_t>(H); i < n; ++i) {
+        const float* p = buf.data() + i * static_cast<std::size_t>(C);
+        t[2 * i] = luma_of(p, cc);
+        t[2 * i + 1] = has_a ? p[cc] : 1.f;
+    }
+    blur_buffer(t, W, H, 2, plan_of(sigma), stop);
+    return t;
+}
+
+float smooth(float x) { x = std::clamp(x, 0.f, 1.f); return x * x * (3 - 2 * x); }
+
+// Smart Sharpen: v + amount * (v - K v) with K the blur it removes (Gaussian,
+// a lens's disc, a motion streak); the difference cored where it is no bigger
+// than the noise (Reduce Noise), and less of it in the shadows / highlights.
+void smart(const std::vector<float>& buf, std::vector<float>& out, int W, int H, int C, int cc, bool has_a, const Rect& b,
+           const Filter& f, const std::function<bool()>& stop) {
+    std::vector<float> k;
+    if (f.remove == Remove::Gaussian) {
+        k = buf;
+        blur_buffer(k, W, H, C, plan_of(f.radius), stop);
+    } else {
+        k.assign(buf.size(), 0.f);
+        if (f.remove == Remove::Lens) disc(buf, k, W, H, C, b, f.radius, stop);
+        else motion(buf, k, W, H, C, b, motion_distance(f), f.angle, stop);
+    }
+    if (stop && stop()) return;
+    std::vector<float> ts, tl;
+    if (f.shadow_fade > 0) ts = tone(buf, W, H, C, cc, has_a, f.shadow_radius, stop);
+    if (f.light_fade > 0) tl = tone(buf, W, H, C, cc, has_a, f.light_radius, stop);
+    if (stop && stop()) return;
+    const float amt = static_cast<float>(f.amount / 100);
+    const float t = static_cast<float>(f.noise / 100 * 0.06), t2 = t * t;
+    const auto level = [](const std::vector<float>& tp, std::size_t i) { return tp[2 * i + 1] > 1e-6f ? tp[2 * i] / tp[2 * i + 1] : 0.f; };
+    std::array<float, pixel::kMaxChannels> d{};
+    for (int y = b.y; y < b.y + b.h; ++y)
+        for (int x = b.x; x < b.x + b.w; ++x) {
+            const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x);
+            const float* p = buf.data() + i * static_cast<std::size_t>(C);
+            const float* q = k.data() + i * static_cast<std::size_t>(C);
+            float* o = out.data() + i * static_cast<std::size_t>(C);
+            const float a = has_a ? p[cc] : 1.f, ka = has_a ? q[cc] : 1.f;
+            if (a <= 1e-6f) continue;
+            for (int c = 0; c < cc; ++c) {
+                const float s = p[c] / a;
+                o[c] = s;
+                d[static_cast<std::size_t>(c)] = s - (ka > 1e-6f ? q[c] / ka : s);
+            }
+            float g = amt;
+            if (t2 > 0) {
+                const float m = luma_of(d.data(), cc), m2 = m * m;
+                g *= m2 / (m2 + t2);
+            }
+            if (!ts.empty()) {
+                const float tw = static_cast<float>(f.shadow_tonal / 100);
+                const float w = tw > 0 ? smooth(1 - level(ts, i) / tw) : 0.f;
+                g *= 1 - static_cast<float>(f.shadow_fade / 100) * w;
+            }
+            if (!tl.empty()) {
+                const float tw = static_cast<float>(f.light_tonal / 100);
+                const float w = tw > 0 ? smooth(1 - (1 - level(tl, i)) / tw) : 0.f;
+                g *= 1 - static_cast<float>(f.light_fade / 100) * w;
+            }
+            for (int c = 0; c < cc; ++c) o[c] += g * d[static_cast<std::size_t>(c)];
+        }
+}
+
+// Dust & Scratches: the median of the square, where a pixel differs from it
+// by more than the threshold (0: everywhere -- the Median).
+void dust(const std::vector<float>& buf, std::vector<float>& out, int W, int H, int C, int cc, bool has_a, const Rect& b,
+          const Filter& f, int bins, bool clamp01, const std::function<bool()>& stop) {
+    std::vector<float> m(buf.size());
+    median(buf, m, W, H, C, b, static_cast<int>(f.radius), bins, stop);
+    if (stop && stop()) return;
+    const float th = static_cast<float>(f.threshold) / 255.f;
+    for (int y = b.y; y < b.y + b.h; ++y)
+        for (int x = b.x; x < b.x + b.w; ++x) {
+            const std::size_t i = (static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)) * static_cast<std::size_t>(C);
+            const float a = has_a ? buf[i + static_cast<std::size_t>(cc)] : 1.f;
+            const float ma = has_a ? m[i + static_cast<std::size_t>(cc)] : 1.f;
+            if (a <= 1e-6f) continue;
+            for (int c = 0; c < cc; ++c) {
+                const float s = buf[i + static_cast<std::size_t>(c)] / a;
+                float v = ma > 1e-6f ? m[i + static_cast<std::size_t>(c)] / ma : s;
+                if (clamp01) v = std::min(v, 1.f);
+                out[i + static_cast<std::size_t>(c)] = std::abs(s - v) > th ? v : s;
+            }
+        }
+}
+
+// Reduce Noise: luminance through a guided filter (He et al.: edge-keeping,
+// box sums only) -- Strength the noise it takes for flat, Preserve Details
+// lowering that; colour noise: the chroma blurred; Sharpen Details: an
+// unsharp mask on the cleaned luminance. All premultiplied, back to straight
+// at the end.
+int rn_box(const Filter& f) { return 2 + static_cast<int>(std::lround(f.amount / 3)); }
+double rn_chroma(const Filter& f) { return f.colour / 100 * 8; }
+
+void reduce(const std::vector<float>& buf, std::vector<float>& out, int W, int H, int C, int cc, bool has_a, const Rect& b,
+            const Filter& f, const std::function<bool()>& stop) {
+    const auto N = static_cast<std::size_t>(W) * static_cast<std::size_t>(H);
+    const auto Cz = static_cast<std::size_t>(C);
+    std::vector<float> Y(N), ch;
+    const bool colour = cc >= 3;
+    if (colour) ch.resize(N * 2);
+    for (std::size_t i = 0; i < N; ++i) {
+        const float* p = buf.data() + i * Cz;
+        Y[i] = luma_of(p, cc);
+        if (colour) { ch[2 * i] = (p[2] - Y[i]) * 0.564f; ch[2 * i + 1] = (p[0] - Y[i]) * 0.713f; }
+    }
+    const double sig = f.amount / 10 * 0.12 * (1 - 0.75 * f.preserve / 100);
+    if (sig > 0) {
+        const float eps = static_cast<float>(sig * sig);
+        const Plan box = box_plan(rn_box(f));
+        std::vector<float> mi = Y, mii(N);
+        for (std::size_t i = 0; i < N; ++i) mii[i] = Y[i] * Y[i];
+        blur_buffer(mi, W, H, 1, box, stop);
+        blur_buffer(mii, W, H, 1, box, stop);
+        if (stop && stop()) return;
+        std::vector<float> A(N), B(N);
+        for (std::size_t i = 0; i < N; ++i) {
+            const float var = std::max(0.f, mii[i] - mi[i] * mi[i]);
+            A[i] = var / (var + eps);
+            B[i] = mi[i] - A[i] * mi[i];
+        }
+        blur_buffer(A, W, H, 1, box, stop);
+        blur_buffer(B, W, H, 1, box, stop);
+        if (stop && stop()) return;
+        for (std::size_t i = 0; i < N; ++i) Y[i] = A[i] * Y[i] + B[i];
+    }
+    if (f.sharpen > 0) {
+        std::vector<float> g = Y;
+        blur_buffer(g, W, H, 1, plan_of(1.0), stop);
+        const float s = static_cast<float>(f.sharpen / 100 * 1.5);
+        for (std::size_t i = 0; i < N; ++i) Y[i] += s * (Y[i] - g[i]);
+    }
+    if (colour && rn_chroma(f) > 0) blur_buffer(ch, W, H, 2, plan_of(rn_chroma(f)), stop);
+    if (stop && stop()) return;
+    for (int y = b.y; y < b.y + b.h; ++y)
+        for (int x = b.x; x < b.x + b.w; ++x) {
+            const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x);
+            const float a = has_a ? buf[i * Cz + static_cast<std::size_t>(cc)] : 1.f;
+            if (a <= 1e-6f) continue;
+            float* o = out.data() + i * Cz;
+            const float l = Y[i] / a;
+            if (!colour) { o[0] = l; continue; }
+            const float cb = ch[2 * i] / a, cr = ch[2 * i + 1] / a;
+            // The exact inverse of the forward transform (all at 0: no change).
+            o[0] = l + cr / 0.713f;
+            o[2] = l + cb / 0.564f;
+            o[1] = (l - 0.299f * o[0] - 0.114f * o[2]) / 0.587f;
+        }
+}
+
+// ---- s034 m3: Maximum / Minimum ---------------------------------------------
+
+// The largest (smallest) of each window of 2r + 1 along a line of n samples
+// (stride `si` in, `so` out; edges clamp) -- van Herk / Gil-Werman: blocks of
+// the window's length, a running extreme forward and back in each, so a
+// sample costs three comparisons whatever r.
+void extreme_line(const float* in, int si, float* out, int so, int n, int r, bool mx, std::vector<float>& e,
+                  std::vector<float>& g, std::vector<float>& h) {
+    const int k = 2 * r + 1, m = n + 2 * r;
+    e.resize(static_cast<std::size_t>(m));
+    g.resize(static_cast<std::size_t>(m));
+    h.resize(static_cast<std::size_t>(m));
+    for (int i = 0; i < m; ++i) e[static_cast<std::size_t>(i)] = in[static_cast<std::size_t>(std::clamp(i - r, 0, n - 1)) * static_cast<std::size_t>(si)];
+    const auto pick = [mx](float a, float b) { return mx ? std::max(a, b) : std::min(a, b); };
+    for (int i = 0; i < m; ++i)
+        g[static_cast<std::size_t>(i)] = (i % k == 0) ? e[static_cast<std::size_t>(i)] : pick(g[static_cast<std::size_t>(i - 1)], e[static_cast<std::size_t>(i)]);
+    for (int i = m - 1; i >= 0; --i)
+        h[static_cast<std::size_t>(i)] = (i == m - 1 || (i + 1) % k == 0) ? e[static_cast<std::size_t>(i)] : pick(h[static_cast<std::size_t>(i + 1)], e[static_cast<std::size_t>(i)]);
+    // The window of out[i] is e[i .. i + k - 1].
+    for (int i = 0; i < n; ++i)
+        out[static_cast<std::size_t>(i) * static_cast<std::size_t>(so)] = pick(h[static_cast<std::size_t>(i)], g[static_cast<std::size_t>(i + k - 1)]);
+}
+
+// Maximum / Minimum of each channel over a square (separable: rows, then
+// columns) or a disc (each row of the disc a window of its own half width,
+// so a pixel costs 2r + 1 windows). Only the band's own pixels are written.
+void extreme(const std::vector<float>& buf, std::vector<float>& out, int W, int H, int C, const Rect& b, int r, bool round, bool mx,
+             const std::function<bool()>& stop) {
+    std::vector<float> e, g, h;
+    const auto Cz = static_cast<std::size_t>(C);
+    const auto ix = [&](int x, int y) { return (static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)) * Cz; };
+    if (!round) {
+        // Rows (only those the own pixels' columns read), then the own columns.
+        std::vector<float> rows(buf.size());
+        const int y0 = std::max(0, b.y - r), y1 = std::min(H - 1, b.y + b.h - 1 + r);
+        for (int y = y0; y <= y1; ++y) {
+            if ((y & 31) == 0 && stop && stop()) return;
+            for (int c = 0; c < C; ++c) extreme_line(buf.data() + ix(0, y) + c, C, rows.data() + ix(0, y) + c, C, W, r, mx, e, g, h);
+        }
+        std::vector<float> col(static_cast<std::size_t>(H));
+        for (int x = b.x; x < b.x + b.w; ++x) {
+            if ((x & 31) == 0 && stop && stop()) return;
+            for (int c = 0; c < C; ++c) {
+                extreme_line(rows.data() + ix(x, 0) + c, W * C, col.data(), 1, H, r, mx, e, g, h);
+                for (int y = b.y; y < b.y + b.h; ++y) out[ix(x, y) + static_cast<std::size_t>(c)] = col[static_cast<std::size_t>(y)];
+            }
+        }
+        return;
+    }
+    const double rr = r + 0.5;
+    std::vector<float> line(static_cast<std::size_t>(W));
+    for (int y = b.y; y < b.y + b.h; ++y) {
+        if (stop && stop()) return;
+        float* o = out.data() + ix(0, y);
+        bool first = true;
+        for (int dy = -r; dy <= r; ++dy) {
+            const int w = static_cast<int>(std::floor(std::sqrt(std::max(0.0, rr * rr - dy * dy))));
+            const int yy = std::clamp(y + dy, 0, H - 1);
+            for (int c = 0; c < C; ++c) {
+                extreme_line(buf.data() + ix(0, yy) + c, C, line.data(), 1, W, w, mx, e, g, h);
+                for (int x = b.x; x < b.x + b.w; ++x) {
+                    float& v = o[static_cast<std::size_t>(x) * Cz + static_cast<std::size_t>(c)];
+                    const float n = line[static_cast<std::size_t>(x)];
+                    v = first ? n : (mx ? std::max(v, n) : std::min(v, n));
+                }
+            }
+            first = false;
+        }
+    }
+}
+
+// ---- s034 m4: Surface Blur ----------------------------------------------------
+
+// Each channel's mean over the (2r + 1)^2 square, each neighbour weighted by
+// how close it is to the pixel: 1 - |difference| / (2.5 x threshold), none
+// beyond (Photoshop's Surface Blur). Flat areas smooth, edges -- differences
+// past the threshold -- don't mix. The same sliding histogram as the Median:
+// a step costs two columns plus the bins within reach of the pixel's value.
+void surface(const std::vector<float>& buf, std::vector<float>& out, int W, int H, int C, const Rect& b, int r, int threshold,
+             int bins, const std::function<bool()>& stop) {
+    const auto top = static_cast<float>(bins - 1);
+    std::vector<std::uint16_t> q(buf.size());
+    for (std::size_t i = 0; i < buf.size(); ++i)
+        q[i] = static_cast<std::uint16_t>(std::clamp(static_cast<int>(buf[i] * top + 0.5f), 0, bins - 1));
+    const auto Q = [&](int x, int y, int c) {
+        return q[(static_cast<std::size_t>(std::clamp(y, 0, H - 1)) * static_cast<std::size_t>(W) + static_cast<std::size_t>(std::clamp(x, 0, W - 1))) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)];
+    };
+    // The weights by distance in bins.
+    const double reach_bins = 2.5 * threshold / 255.0 * (bins - 1);
+    const int span = std::max(1, static_cast<int>(std::ceil(reach_bins)) - 1);
+    std::vector<float> wt(static_cast<std::size_t>(span + 1));
+    for (int d = 0; d <= span; ++d) wt[static_cast<std::size_t>(d)] = static_cast<float>(std::max(0.0, 1 - d / reach_bins));
+    // A channel the same everywhere in the buffer (alpha on an opaque photo)
+    // comes out as it went in.
+    std::vector<bool> flat(static_cast<std::size_t>(C), true);
+    for (std::size_t i = static_cast<std::size_t>(C); i < q.size(); ++i)
+        if (q[i] != q[i % static_cast<std::size_t>(C)]) flat[i % static_cast<std::size_t>(C)] = false;
+    std::vector<int> h(static_cast<std::size_t>(bins));
+    for (int y = b.y; y < b.y + b.h; ++y) {
+        if ((y & 7) == 0 && stop && stop()) return;
+        for (int c = 0; c < C; ++c) {
+            if (flat[static_cast<std::size_t>(c)]) {
+                for (int x = b.x; x < b.x + b.w; ++x)
+                    out[(static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)] =
+                        buf[static_cast<std::size_t>(c)];
+                continue;
+            }
+            std::fill(h.begin(), h.end(), 0);
+            for (int j = -r; j <= r; ++j)
+                for (int i = -r; i <= r; ++i) ++h[Q(b.x + i, y + j, c)];
+            for (int x = b.x;; ) {
+                const int v = Q(x, y, c);
+                const int lo = std::max(0, v - span), hi = std::min(bins - 1, v + span);
+                double sum = 0, den = 0;
+                for (int k = lo; k <= hi; ++k) {
+                    const int n = h[static_cast<std::size_t>(k)];
+                    if (!n) continue;
+                    const double w = n * static_cast<double>(wt[static_cast<std::size_t>(std::abs(k - v))]);
+                    sum += w * k;
+                    den += w;
+                }
+                out[(static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)) * static_cast<std::size_t>(C) + static_cast<std::size_t>(c)] =
+                    static_cast<float>(den > 0 ? sum / den / top : v / top);
+                if (++x >= b.x + b.w) break;
+                for (int j = -r; j <= r; ++j) {
+                    --h[Q(x - r - 1, y + j, c)];
+                    ++h[Q(x + r, y + j, c)];
+                }
+            }
+        }
+    }
+}
+
 // The noise: a hash of where, which channel and the seed -- so a tile's noise
 // doesn't depend on the order tiles are made in (the preview == the result).
 std::uint32_t mix(std::uint32_t x) {
@@ -268,13 +633,23 @@ float noise(const Filter& f, int x, int y, int c) {
 
 const std::vector<FilterKind>& kinds() {
     // Alphabetical within each submenu, as Photoshop's.
-    static const std::vector<FilterKind> v{FilterKind::BoxBlur, FilterKind::GaussianBlur, FilterKind::MotionBlur,
-                                           FilterKind::AddNoise, FilterKind::Median, FilterKind::UnsharpMask, FilterKind::HighPass};
+    static const std::vector<FilterKind> v{FilterKind::BoxBlur, FilterKind::GaussianBlur, FilterKind::MotionBlur, FilterKind::SurfaceBlur,
+                                           FilterKind::AddNoise, FilterKind::DustScratches, FilterKind::Median, FilterKind::ReduceNoise,
+                                           FilterKind::SmartSharpen, FilterKind::UnsharpMask, FilterKind::HighPass,
+                                           FilterKind::Maximum, FilterKind::Minimum};
     return v;
 }
 std::string_view label(FilterKind k) { const auto* i = info(k); return i ? i->label : "Filter"; }
 std::string_view key(FilterKind k)   { const auto* i = info(k); return i ? i->key : "none"; }
 std::string_view group(FilterKind k) { const auto* i = info(k); return i ? i->group : ""; }
+
+std::string_view remove_key(Remove r) { return r == Remove::Lens ? "lens" : r == Remove::Motion ? "motion" : "gaussian"; }
+std::optional<Remove> remove_from(std::string_view k) {
+    if (k == "gaussian") return Remove::Gaussian;
+    if (k == "lens") return Remove::Lens;
+    if (k == "motion") return Remove::Motion;
+    return std::nullopt;
+}
 
 Filter fresh(FilterKind k) {
     Filter f;
@@ -287,6 +662,13 @@ Filter fresh(FilterKind k) {
         case FilterKind::BoxBlur:      f.radius = 10; break;
         case FilterKind::MotionBlur:   f.radius = 10; break;
         case FilterKind::Median:       f.radius = 1; break;
+        // s034: Photoshop CC's defaults.
+        case FilterKind::SmartSharpen: f.radius = 1; f.amount = 200; f.noise = 10; f.remove = Remove::Lens; break;
+        case FilterKind::DustScratches: f.radius = 1; break;
+        case FilterKind::ReduceNoise:  f.amount = 6; f.preserve = 60; f.colour = 45; f.sharpen = 25; break;
+        case FilterKind::Maximum:
+        case FilterKind::Minimum:      f.radius = 1; break;   // m3: Preserve Squareness
+        case FilterKind::SurfaceBlur:  f.radius = 5; f.threshold = 15; break;   // m4
         case FilterKind::None: break;
     }
     return f;
@@ -297,15 +679,41 @@ Filter normalised(const Filter& in) {
     switch (f.kind) {
         case FilterKind::BoxBlur:    f.radius = std::round(std::clamp(f.radius, 1.0, 250.0)); break;
         case FilterKind::MotionBlur: f.radius = std::round(std::clamp(f.radius, 1.0, 500.0)); break;
-        case FilterKind::Median:     f.radius = std::round(std::clamp(f.radius, 1.0, 100.0)); break;
+        case FilterKind::Median:
+        case FilterKind::DustScratches: f.radius = std::round(std::clamp(f.radius, 1.0, 100.0)); break;
+        case FilterKind::SmartSharpen:  f.radius = std::round(std::clamp(f.radius, 0.1, 64.0) * 10) / 10; break;
+        case FilterKind::ReduceNoise:   f.radius = 0.1; break;
+        case FilterKind::Maximum:
+        case FilterKind::Minimum:       f.radius = std::round(std::clamp(f.radius, 1.0, 500.0)); break;   // m3
+        case FilterKind::SurfaceBlur:   f.radius = std::round(std::clamp(f.radius, 1.0, 100.0)); break;   // m4
         default:                     f.radius = std::round(std::clamp(f.radius, 0.1, 250.0) * 10) / 10; break;
     }
-    f.angle = f.kind == FilterKind::MotionBlur ? std::clamp(f.angle, -90, 90) : 0;
+    const bool streak = f.kind == FilterKind::MotionBlur || (f.kind == FilterKind::SmartSharpen && f.remove == Remove::Motion);
+    f.angle = streak ? std::clamp(f.angle, -90, 90) : 0;
     f.threshold = std::clamp(f.threshold, 0, 255);
-    if (f.kind == FilterKind::UnsharpMask) f.amount = std::round(std::clamp(f.amount, 1.0, 500.0));
+    if (f.kind == FilterKind::UnsharpMask || f.kind == FilterKind::SmartSharpen) f.amount = std::round(std::clamp(f.amount, 1.0, 500.0));
     else if (f.kind == FilterKind::AddNoise) f.amount = std::round(std::clamp(f.amount, 0.1, 400.0) * 10) / 10;
+    else if (f.kind == FilterKind::ReduceNoise) f.amount = std::round(std::clamp(f.amount, 0.0, 10.0));
     else f.amount = 0;
-    if (f.kind != FilterKind::UnsharpMask) f.threshold = 0;
+    if (f.kind == FilterKind::SurfaceBlur) f.threshold = std::max(f.threshold, 2);   // m4
+    else if (f.kind != FilterKind::UnsharpMask && f.kind != FilterKind::DustScratches) f.threshold = 0;
+    const Filter blank;   // s034: the settings other kinds don't have go back to their defaults
+    const auto pct = [](double v) { return std::round(std::clamp(v, 0.0, 100.0)); };
+    if (f.kind == FilterKind::SmartSharpen) {
+        if (f.remove != Remove::Lens && f.remove != Remove::Motion) f.remove = Remove::Gaussian;
+        f.noise = pct(f.noise);
+        f.shadow_fade = pct(f.shadow_fade); f.shadow_tonal = pct(f.shadow_tonal);
+        f.shadow_radius = std::round(std::clamp(f.shadow_radius, 1.0, 100.0));
+        f.light_fade = pct(f.light_fade); f.light_tonal = pct(f.light_tonal);
+        f.light_radius = std::round(std::clamp(f.light_radius, 1.0, 100.0));
+    } else {
+        f.remove = blank.remove; f.noise = blank.noise;
+        f.shadow_fade = blank.shadow_fade; f.shadow_tonal = blank.shadow_tonal; f.shadow_radius = blank.shadow_radius;
+        f.light_fade = blank.light_fade; f.light_tonal = blank.light_tonal; f.light_radius = blank.light_radius;
+    }
+    if (f.kind == FilterKind::ReduceNoise) { f.preserve = pct(f.preserve); f.colour = pct(f.colour); f.sharpen = pct(f.sharpen); }
+    else f.preserve = f.colour = f.sharpen = 0;
+    if (f.kind != FilterKind::Maximum && f.kind != FilterKind::Minimum) f.round = false;   // m3
     if (f.kind != FilterKind::AddNoise) { f.gaussian = f.mono = false; f.seed = 1; }
     if (f.kind == FilterKind::AddNoise) f.radius = 0.1;
     return f;
@@ -319,6 +727,23 @@ int reach(const Filter& in) {
         case FilterKind::BoxBlur:
         case FilterKind::Median:     return static_cast<int>(f.radius);
         case FilterKind::MotionBlur: return static_cast<int>(f.radius) / 2 + 2;
+        case FilterKind::DustScratches:
+        case FilterKind::Maximum:
+        case FilterKind::Minimum:
+        case FilterKind::SurfaceBlur:   return static_cast<int>(f.radius);
+        case FilterKind::SmartSharpen: {   // s034: the kernel's reach, and the tones'
+            int r = f.remove == Remove::Gaussian ? plan_of(f.radius).reach
+                  : f.remove == Remove::Lens     ? static_cast<int>(std::floor(f.radius + 0.5))
+                                                 : motion_distance(f) / 2 + 2;
+            if (f.shadow_fade > 0) r = std::max(r, plan_of(f.shadow_radius).reach);
+            if (f.light_fade > 0) r = std::max(r, plan_of(f.light_radius).reach);
+            return r;
+        }
+        case FilterKind::ReduceNoise: {
+            int r = 2 * rn_box(f) + (f.sharpen > 0 ? 3 : 0);
+            if (rn_chroma(f) > 0) r = std::max(r, plan_of(rn_chroma(f)).reach);
+            return r;
+        }
         default:                     return gaussian(f.kind) ? plan_of(f.radius).reach : 0;
     }
 }
@@ -388,10 +813,21 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                         std::copy(from, from + static_cast<std::size_t>(cell.w) * static_cast<std::size_t>(C), to);
                     }
                 }
-            if (f.kind == FilterKind::MotionBlur || f.kind == FilterKind::Median) {
+            if (custom(f.kind)) {   // s034
                 std::vector<float> out(buf.size());
                 const Rect own{b.x - R.x, b.y - R.y, b.w, b.h};
-                if (f.kind == FilterKind::MotionBlur) motion(buf, out, R.w, R.h, C, own, static_cast<int>(f.radius), f.angle, stop);
+                if (f.kind == FilterKind::SmartSharpen) smart(buf, out, R.w, R.h, C, cc, has_a, own, f, stop);
+                else if (f.kind == FilterKind::DustScratches) dust(buf, out, R.w, R.h, C, cc, has_a, own, f, bins, clamp01, stop);
+                else reduce(buf, out, R.w, R.h, C, cc, has_a, own, f, stop);
+                buf.swap(out);
+            } else if (f.kind == FilterKind::MotionBlur || ranked(f.kind)) {
+                std::vector<float> out(buf.size());
+                const Rect own{b.x - R.x, b.y - R.y, b.w, b.h};
+                if (f.kind == FilterKind::SurfaceBlur)   // m4
+                    surface(buf, out, R.w, R.h, C, own, static_cast<int>(f.radius), f.threshold, bins, stop);
+                else if (f.kind == FilterKind::Maximum || f.kind == FilterKind::Minimum)   // m3
+                    extreme(buf, out, R.w, R.h, C, own, static_cast<int>(f.radius), f.round, f.kind == FilterKind::Maximum, stop);
+                else if (f.kind == FilterKind::MotionBlur) motion(buf, out, R.w, R.h, C, own, static_cast<int>(f.radius), f.angle, stop);
                 else median(buf, out, R.w, R.h, C, own, static_cast<int>(f.radius), bins, stop);
                 buf.swap(out);
             } else {
@@ -411,7 +847,12 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                     const Px o = old ? w.get(x - col * kTile, y - row * kTile) : pixel::transparent();
                     Px n = o;
                     const float oa = has_a ? o.c[static_cast<std::size_t>(ai)] : 1.f;
-                    if (reads(f.kind)) {
+                    if (custom(f.kind)) {   // s034: straight colour, alpha kept
+                        if (oa <= 0.f) continue;
+                        const float* bp = buf.data() + (static_cast<std::size_t>(y - R.y) * static_cast<std::size_t>(R.w) + static_cast<std::size_t>(x - R.x)) * static_cast<std::size_t>(C);
+                        for (int c = 0; c < cc; ++c)
+                            n.c[static_cast<std::size_t>(c)] = clamp01 ? std::clamp(bp[c], 0.f, 1.f) : std::max(bp[c], 0.f);
+                    } else if (reads(f.kind)) {
                         const float* bp = buf.data() + (static_cast<std::size_t>(y - R.y) * static_cast<std::size_t>(R.w) + static_cast<std::size_t>(x - R.x)) * static_cast<std::size_t>(C);
                         const float ba = has_a ? bp[ai] : 1.f;
                         if (replaces(f.kind)) {
@@ -423,7 +864,7 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                             for (int c = 0; c < cc; ++c) {
                                 const float v = ba > 1e-6f ? bp[c] / ba : 0.f;
                                 // The median of each channel apart may put colour above alpha.
-                                n.c[static_cast<std::size_t>(c)] = (clamp01 && f.kind == FilterKind::Median) ? std::min(v, 1.f) : v;
+                                n.c[static_cast<std::size_t>(c)] = (clamp01 && ranked(f.kind)) ? std::min(v, 1.f) : v;
                             }
                         } else {
                             if (oa <= 0.f) continue;
@@ -461,7 +902,7 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
     std::size_t per_band = 0;
     if (reads(f.kind))
         per_band = static_cast<std::size_t>(std::min(IW, r.w + 2 * pad)) * static_cast<std::size_t>(std::min(IH, kTile + 2 * pad)) *
-                   static_cast<std::size_t>(C) * sizeof(float) * 2;
+                   static_cast<std::size_t>(C) * sizeof(float) * (custom(f.kind) ? 6 : 2);   // s034: their planes
     constexpr std::size_t kBudget = std::size_t{768} << 20;
     unsigned n = std::max(1u, std::thread::hardware_concurrency());
     if (per_band) n = static_cast<unsigned>(std::clamp<std::size_t>(kBudget / per_band, 1, n));

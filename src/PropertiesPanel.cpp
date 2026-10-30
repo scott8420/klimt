@@ -1,5 +1,7 @@
 #include "PropertiesPanel.hpp"
+#include "Log.hpp"
 #include "core/Live.hpp"   // s018
+#include "core/Paths.hpp"  // s035: what a path masks
 #include <gtkmm/button.h>
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/gestureclick.h>
@@ -144,6 +146,92 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
     });
     m_filter.signal_end().connect([this] { L::filter_layer_end(m_journal); });
     m_fields.append(m_filter);
+    // s035: a path layer.
+    {
+        m_path_box.set_name("properties.path");
+        m_path_box.set_visible(false);
+        auto head = Gtk::make_managed<Gtk::Label>();
+        head->set_markup("<b>Path</b>");
+        head->set_xalign(0.0f);
+        m_path_box.append(*head);
+        m_path_info.set_xalign(0.0f);
+        m_path_info.add_css_class("dim-label");
+        m_path_box.append(m_path_info);
+        m_path_mask.set_name("properties.path.mask");
+        m_path_mask.set_tooltip_text("Everything below it in its group shows only inside the path -- live: edit the path, the mask follows");
+        m_path_select.set_name("properties.path.select");
+        m_path_select.set_tooltip_text("The selection is the path's area, and follows every edit of it");
+        m_path_box.append(m_path_mask);
+        m_path_target.set_xalign(0.0f);
+        m_path_target.set_margin_start(28);
+        m_path_target.add_css_class("dim-label");
+        m_path_target.add_css_class("caption");
+        m_path_target.set_wrap(true);
+        m_path_box.append(m_path_target);
+        m_path_box.append(m_path_select);
+        m_path_show.set_name("properties.path.show");
+        m_path_show.set_active(true);
+        m_path_show.set_tooltip_text("Hide the outline and its points to see the effect alone -- the mask still works  "
+                                     "(Ctrl+Shift+H; the Pen shows it again)");
+        m_path_show.signal_toggled().connect([this] { if (!m_painting) m_path_outline.emit(m_path_show.get_active()); });
+        m_path_box.append(m_path_show);
+        const auto switched = [this] {
+            if (m_painting || m_path_id.empty()) return;
+            L::set_path_switches(m_journal, m_doc, m_path_id, m_path_mask.get_active(), m_path_select.get_active());
+            if (auto lg = log::get(log::Area::Shell)) {   // s035: what it masks, for when the eyes and the trace differ
+                const auto t = core::paths::masked_by(m_doc.snapshot(), m_path_id);
+                std::string ids;
+                for (const auto& x : t) ids += (ids.empty() ? "" : " ") + x;
+                lg->info("path {}: mask {} (masks {}), selection {}", m_path_id, m_path_mask.get_active(), t.empty() ? "nothing" : ids,
+                         m_path_select.get_active());
+            }
+        };
+        m_path_mask.signal_toggled().connect(switched);
+        m_path_select.signal_toggled().connect(switched);
+        auto load = Gtk::make_managed<Gtk::Button>("Load as Selection");
+        load->set_name("properties.path.load");
+        load->set_tooltip_text("The path's area as the selection, once (Ctrl+Enter)");
+        load->signal_clicked().connect([this] { if (!m_path_id.empty()) m_path_load.emit(m_path_id); });
+        m_path_box.append(*load);
+        // Isolate: the path as a hint -- the figure it goes round.
+        auto iso_head = Gtk::make_managed<Gtk::Label>();
+        iso_head->set_markup("<b>Isolate</b>");
+        iso_head->set_xalign(0.0f);
+        iso_head->set_margin_top(6);
+        m_path_box.append(*iso_head);
+        auto note = Gtk::make_managed<Gtk::Label>("Look here: the figure the path goes round, found in the picture -- "
+                                                  "its real edge, cleaner than the path.");
+        note->set_wrap(true);
+        note->set_xalign(0.0f);
+        note->add_css_class("dim-label");
+        note->add_css_class("caption");
+        m_path_box.append(*note);
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        auto bl = Gtk::make_managed<Gtk::Label>("Edge within");
+        bl->set_xalign(0.0f);
+        bl->set_hexpand(true);
+        row->append(*bl);
+        m_band.set_name("properties.path.band");
+        m_band.set_range(2, 64);
+        m_band.set_increments(1, 4);
+        m_band.set_digits(0);
+        m_band.set_value(12);
+        m_band.set_width_chars(4);
+        m_band.set_tooltip_text("How far your path may cut INTO the figure, in pixels (outside, it may be as loose as you like)");
+        row->append(m_band);
+        auto px = Gtk::make_managed<Gtk::Label>("px");
+        px->add_css_class("dim-label");
+        row->append(*px);
+        m_path_box.append(*row);
+        auto iso = Gtk::make_managed<Gtk::Button>("Isolate the Figure");
+        iso->set_name("properties.path.isolate");
+        iso->add_css_class("suggested-action");
+        iso->set_tooltip_text("Select what the path goes round, by its colours and edges -- outside the band is background, "
+                              "inside it the figure, the band decided from the picture");
+        iso->signal_clicked().connect([this] { if (!m_path_id.empty()) m_path_isolate.emit(m_path_id, m_band.get_value()); });
+        m_path_box.append(*iso);
+        m_fields.append(m_path_box);
+    }
 
     // s019: the layer's styles -- live; a slider drag is ONE step, presses fold.
     m_styles.set_visible(false);
@@ -184,6 +272,13 @@ void PropertiesPanel::show(const std::vector<Id>& selection) {
     paint();
 }
 
+void PropertiesPanel::set_path_outline(bool shown) {
+    const bool was = m_painting;
+    m_painting = true;
+    m_path_show.set_active(shown);
+    m_painting = was;
+}
+
 void PropertiesPanel::paint() {
     m_painting = true;
     const auto l = primary().empty() ? std::nullopt : m_doc.get(primary());
@@ -198,6 +293,7 @@ void PropertiesPanel::paint() {
     std::string sub = l->kind == core::Kind::Group ? "group of " + std::to_string(m_doc.panel(primary()).size())
                     : l->kind == core::Kind::Adjustment ? std::string("adjustment layer")
                     : l->kind == core::Kind::Filter ? std::string("filter layer")   // s030
+                    : l->kind == core::Kind::Path ? std::string("path layer")       // s035
                     : std::string("pixel layer");
     if (m_sel.size() > 1) sub += " · +" + std::to_string(m_sel.size() - 1) + " more";
     m_subtitle.set_text(sub);
@@ -228,7 +324,32 @@ void PropertiesPanel::paint() {
         m_filter.set_sensitive(!m_doc.locked_all(primary()));
         if (!m_journal.in_gesture()) m_filter.set(l->filters[0].f);
     }
-    m_later.set_visible(!adj && !flt);
+    // s035: one path layer picked: its switches and actions.
+    const bool pth = l->kind == core::Kind::Path && m_sel.size() == 1 && l->path;
+    m_path_box.set_visible(pth);
+    m_path_id = pth ? primary() : Id{};
+    if (pth) {
+        m_path_box.set_sensitive(!m_doc.locked_all(primary()));
+        m_path_mask.set_active(l->path_mask);
+        {   // what the Mask switch masks (Scott: "a path in a group does not allow the mask to present")
+            const auto layers = m_doc.snapshot();
+            const auto t = core::paths::masked_by(layers, primary());
+            const auto group = l->parent.empty() ? std::string("the document") : "“" + layers.at(l->parent).name + "”";
+            std::string what = t.size() == 1 ? "“" + layers.at(t[0]).name + "”"
+                             : "everything below it in " + group + " (" + std::to_string(t.size()) + " layers)";
+            m_path_target.set_text(t.empty() ? "Masks nothing -- there is no layer below it in " + group
+                                             : "Masks " + what + (l->path_mask ? "" : " (when on)"));
+        }
+        m_path_select.set_active(l->path_select);
+        std::size_t open = 0;
+        for (const auto& s : l->path->subs) open += s.closed ? 0 : 1;
+        m_path_info.set_text(std::to_string(l->path->anchors()) + " anchors, " + std::to_string(l->path->subs.size()) + " subpath" +
+                             (l->path->subs.size() == 1 ? "" : "s") + (open ? " (" + std::to_string(open) + " open -- they close for the mask)" : ""));
+    }
+    m_blend.set_sensitive(editable && l->kind != core::Kind::Path);   // a path layer draws nothing: no blend / opacity / fill
+    m_opacity.set_sensitive(editable && l->kind != core::Kind::Path);
+    m_fill.set_sensitive(editable && l->kind != core::Kind::Path);
+    m_later.set_visible(!adj && !flt && !pth);
     paint_live(*l);   // s018
     // s019: one pixel layer picked: its styles.
     const bool styled = (l->kind == core::Kind::Pixel || l->kind == core::Kind::Group) && m_sel.size() == 1;   // s024: groups too
@@ -302,6 +423,11 @@ void PropertiesPanel::paint_live(const core::Layer& l) {
         char num[32];
         if (lf.f.kind == core::FilterKind::AddNoise) std::snprintf(num, sizeof num, "  %.1f %%", lf.f.amount);
         else if (lf.f.kind == core::FilterKind::MotionBlur) std::snprintf(num, sizeof num, "  %d°, %.0f px", lf.f.angle, lf.f.radius);
+        else if (lf.f.kind == core::FilterKind::SmartSharpen) std::snprintf(num, sizeof num, "  %.0f %%, %.1f px", lf.f.amount, lf.f.radius);   // s034
+        else if (lf.f.kind == core::FilterKind::ReduceNoise) std::snprintf(num, sizeof num, "  %.0f", lf.f.amount);
+        else if (lf.f.kind == core::FilterKind::DustScratches || lf.f.kind == core::FilterKind::SurfaceBlur) std::snprintf(num, sizeof num, "  %.0f px, %d", lf.f.radius, lf.f.threshold);
+        else if (lf.f.kind == core::FilterKind::Maximum || lf.f.kind == core::FilterKind::Minimum)
+            std::snprintf(num, sizeof num, "  %.0f px%s", lf.f.radius, lf.f.round ? ", round" : "");
         else std::snprintf(num, sizeof num, "  %.1f px", lf.f.radius);
         auto name = Gtk::make_managed<Gtk::Label>(what + num);
         name->set_xalign(0.0f);

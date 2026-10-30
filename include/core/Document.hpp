@@ -25,6 +25,7 @@
 // never run out of room between two neighbours.
 #include "core/Adjust.hpp"
 #include "core/Filter.hpp"
+#include "core/Path.hpp"     // s035
 #include "core/Styles.hpp"   // s019
 #include "core/Undo.hpp"
 #include "pixel/Blend.hpp"
@@ -55,7 +56,7 @@ std::string_view     blend_key(Blend b);
 std::string_view     blend_label(Blend b);
 std::optional<Blend> blend_from_key(std::string_view key);
 
-enum class Kind : std::uint8_t { Pixel, Group, Adjustment, Filter };   // s013: Adjustment; s030: Filter; Text later
+enum class Kind : std::uint8_t { Pixel, Group, Adjustment, Filter, Path };   // s013: Adjustment; s030: Filter; s035: Path; Text later
 
 // Photoshop's four locks, as bits. Only All bites in the tree today: it
 // refuses opacity, fill, blend and clip on the layer and on everything inside
@@ -110,6 +111,14 @@ struct Layer {
     std::shared_ptr<const pixel::TileMap> filter_mask;
     // s019: LAYER STYLES (core/Styles.hpp) -- pixel layers only; drawn live.
     Styles        styles;
+    // s035: a PATH LAYER's outline (Kind::Path; docs/paths.md) -- shared and
+    // compared by pointer like the pixels. It draws nothing itself. Two
+    // switches: `path_mask` -- the layer just below it shows only inside the
+    // path (live, through live::effective); `path_select` -- the selection IS
+    // the path's area, following each edit.
+    std::shared_ptr<const path::Path> path;
+    bool          path_mask = false;
+    bool          path_select = false;
     bool operator==(const Layer&) const = default;
 };
 
@@ -423,6 +432,16 @@ void load_fixture(Document& d);
 void load_selection(Document& d, const pixel::Rect& r);
 // s030: a filter layer "L6" at the top (a verb's setup; tests).
 void load_filter_layer(Document& d, FilterKind k);
+// s035: PATH LAYERS (docs/paths.md). A new one, "Path 1" ..., just above
+// `above` (as add_layer), holding `p` -- ONE step. Its outline: refused on
+// any other kind; with path_select on, the selection follows in the same
+// step. Its switches: Mask (the layer below shows only inside), Selection
+// (the selection is the path's area -- switched on, it takes it at once).
+Id   add_path_layer(DocJournal& j, Document& d, const path::Path& p, const Id& above = {}, const std::string& label = "New Path");
+bool set_path_layer(DocJournal& j, Document& d, const Id& id, const path::Path& p, const std::string& label);
+bool set_path_switches(DocJournal& j, Document& d, const Id& id, bool mask, bool select);
+// A path layer "L6" holding `p` at the top, LOADED (a verb's setup; tests).
+void load_path_layer(Document& d, const path::Path& p, bool mask = false, bool select = false);
 // s032: these guides on the picture (a verb's setup; tests).
 void load_guides(Document& d, const std::vector<Guide>& g);
 // s012: a layer mask (a verb's setup; tests).

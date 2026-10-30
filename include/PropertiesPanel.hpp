@@ -18,6 +18,8 @@
 #include <gtkmm/dropdown.h>
 #include <gtkmm/spinbutton.h>
 #include <gtkmm/togglebutton.h>
+#include <gtkmm/checkbutton.h>
+#include <gtkmm/label.h>
 
 #include <string>
 #include <vector>
@@ -42,6 +44,13 @@ public:
     // stack's "Paint Mask" toggle; it lets go when another layer is picked.
     const Id& filter_mask_target() const { return m_fmask_target; }
     sigc::signal<void(bool)>& signal_filter_mask_paint() { return m_fmask_signal; }
+    // s035: a PATH LAYER's actions the Shell runs -- Load as Selection; Isolate
+    // (the figure the path goes round; `band`: how far off its edge the path may be).
+    sigc::signal<void(const Id&)>& signal_path_load() { return m_path_load; }
+    sigc::signal<void(const Id&, double)>& signal_path_isolate() { return m_path_isolate; }
+    // s035: the path's outline on the canvas (a view setting, not the document's).
+    void set_path_outline(bool shown);
+    sigc::signal<void(bool)>& signal_path_outline() { return m_path_outline; }
 
 private:
     void paint();
@@ -80,6 +89,18 @@ private:
     Id                    m_live_id;
     bool                  m_live_had_mask = false;
     sigc::signal<void(const Id&, std::size_t)> m_live_edit;
+    // s035: a path layer -- its switches, its outline's size, Load, Isolate.
+    Gtk::Box              m_path_box{Gtk::Orientation::VERTICAL, 6};
+    Gtk::CheckButton      m_path_mask{"Mask what's below"};
+    Gtk::CheckButton      m_path_select{"Be the selection"};
+    Gtk::Label            m_path_info;
+    Gtk::Label            m_path_target;    // what its Mask masks
+    Gtk::CheckButton      m_path_show{"Show the outline"};
+    sigc::signal<void(bool)> m_path_outline;
+    Gtk::SpinButton       m_band;
+    Id                    m_path_id;
+    sigc::signal<void(const Id&)> m_path_load;
+    sigc::signal<void(const Id&, double)> m_path_isolate;
     Id                    m_fmask_target;
     sigc::signal<void(bool)> m_fmask_signal;
 };

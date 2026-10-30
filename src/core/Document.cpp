@@ -1,4 +1,5 @@
 #include "core/Document.hpp"
+#include "core/Paths.hpp"   // s035: the verb table
 #include "core/Fade.hpp"   // s020: the verb table's fade
 #include "core/Transfer.hpp"   // s022: the verb table's paste
 #include "core/ColourRange.hpp"   // s024
@@ -288,6 +289,8 @@ std::string Document::check() const {
             return id + ": an adjustment where there is no adjustment layer, or none where there is";
         if (l.kind == Kind::Filter && (l.filters.size() != 1 || l.filters[0].f.kind == FilterKind::None))   // s030
             return id + ": a filter layer without exactly one filter";
+        if ((l.kind == Kind::Path) != (l.path != nullptr))   // s035
+            return id + ": a path where there is no path layer, or none where there is";
         if (l.kind == Kind::Adjustment && !adjust::refusal(l.adjust).empty())
             return id + ": an adjustment out of range (" + adjust::refusal(l.adjust) + ")";
         if (l.pixels) {
@@ -451,6 +454,59 @@ Id add_adjustment(DocJournal& j, Document& d, AdjustKind k, const Id& above) {
     }, "New Adjustment Layer");
 }
 
+// s035: PATH LAYERS.
+namespace {
+// The selection a path layer's outline makes (nullopt: none -- an empty path).
+std::optional<Layer> selection_of(const Document& d, const path::Path& p) {
+    if (p.empty()) return std::nullopt;
+    auto m = paths::coverage(p, d.mask_format(), d.image().width, d.image().height);
+    if (select::empty(m)) return std::nullopt;
+    Layer v;
+    v.name = "Selection";
+    v.pixels = std::make_shared<const pixel::TileMap>(std::move(m));
+    return v;
+}
+}  // namespace
+
+Id add_path_layer(DocJournal& j, Document& d, const path::Path& p, const Id& above, const std::string& label) {
+    int n = 1;
+    for (const auto& [id, l] : d.snapshot())
+        if (l.kind == Kind::Path && l.name.rfind("Path ", 0) == 0) {
+            const std::string tail = l.name.substr(5);
+            if (!tail.empty() && tail.size() < 6 && std::all_of(tail.begin(), tail.end(), [](char c) { return c >= '0' && c <= '9'; }))
+                n = std::max(n, std::stoi(tail) + 1);
+        }
+    const std::string name = "Path " + std::to_string(n);
+    const Id made = add_kind(j, d, Kind::Path, name, above, [&](Layer& l) {
+        l.path = std::make_shared<const path::Path>(p);
+    }, label);
+    return made;
+}
+
+bool set_path_layer(DocJournal& j, Document& d, const Id& id, const path::Path& p, const std::string& label) {
+    auto l = d.get(id);
+    if (!l || l->kind != Kind::Path || d.locked_all(id)) return false;
+    if (l->path && *l->path == p) return false;
+    l->path = std::make_shared<const path::Path>(p);
+    if (!l->path_select) return j.run(label, {id}, [&] { d.put(id, *l); });
+    const auto sel = selection_of(d, p);   // the selection follows, in the same step
+    return j.run(label, {id, kSelectionId}, [&] { d.put(id, *l); d.put(kSelectionId, sel); });
+}
+
+bool set_path_switches(DocJournal& j, Document& d, const Id& id, bool mask, bool select) {
+    auto l = d.get(id);
+    if (!l || l->kind != Kind::Path || d.locked_all(id)) return false;
+    if (l->path_mask == mask && l->path_select == select) return false;
+    const bool takes = select && !l->path_select;   // switched on: the selection becomes the path's area now
+    std::string label = mask != l->path_mask ? (mask ? "Path as Mask" : "Path Mask Off")
+                                             : (select ? "Path as Selection" : "Path Selection Off");
+    l->path_mask = mask;
+    l->path_select = select;
+    if (!takes) return j.run(label + " “" + l->name + "”", {id}, [&] { d.put(id, *l); });
+    const auto sel = selection_of(d, l->path ? *l->path : path::Path{});
+    return j.run(label + " “" + l->name + "”", {id, kSelectionId}, [&] { d.put(id, *l); d.put(kSelectionId, sel); });
+}
+
 // s030: a filter layer, with its mask, as one step.
 Id add_filter_layer(DocJournal& j, Document& d, const Filter& f_in, const Id& above) {
     const Filter f = filter::normalised(f_in);
@@ -517,6 +573,7 @@ std::string not_pixels(const Document& d, const Id& id) {
     if (l->kind == Kind::Group) return q + " is a group -- pick a layer in it";
     if (l->kind == Kind::Adjustment) return q + " is an adjustment layer -- it has no pixels";
     if (l->kind == Kind::Filter) return q + " is a filter layer -- it has no pixels";   // s030
+    if (l->kind == Kind::Path) return q + " is a path layer -- edit it with the Pen (P); it has no pixels";   // s035
     return {};
 }
 
@@ -1026,6 +1083,18 @@ void load_guides(Document& d, const std::vector<Guide>& g) {   // s032
     d.set_image(im);
 }
 
+void load_path_layer(Document& d, const path::Path& p, bool mask, bool select) {   // s035
+    Document::Loading load(d);
+    Layer l;
+    l.kind = Kind::Path;
+    l.name = "Path 1";
+    l.pos = 4;
+    l.path = std::make_shared<const path::Path>(p);
+    l.path_mask = mask;
+    l.path_select = select;
+    d.put("L6", l);
+}
+
 void load_filter_layer(Document& d, FilterKind k) {   // s030
     Document::Loading load(d);
     Layer l;
@@ -1304,6 +1373,24 @@ const std::vector<Verb>& verbs() {
              [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
         // s031: the rulers' zero point.
         {"ruler_origin", [](DocJournal& j, Document& d) { canvas::set_ruler_origin(j, d, 100, 50); }},
+        // s035: path layers.
+        {"path_layer_new",  [](DocJournal& j, Document& d) { add_path_layer(j, d, paths::rect_path(40, 30, 200, 160), "L4"); }},
+        {"path_layer_set",  [](DocJournal& j, Document& d) { set_path_layer(j, d, "L6", paths::ellipse_path(120, 100, 60, 40), "Move Anchor Point"); },
+             [](Document& d) { load_path_layer(d, paths::rect_path(40, 30, 200, 160)); }},
+        {"path_layer_set_selecting", [](DocJournal& j, Document& d) { set_path_layer(j, d, "L6", paths::ellipse_path(120, 100, 60, 40), "Add Anchor Point"); },
+             [](Document& d) { load_path_layer(d, paths::rect_path(40, 30, 200, 160), false, true); }},
+        {"path_as_mask",    [](DocJournal& j, Document& d) { set_path_switches(j, d, "L6", true, false); },
+             [](Document& d) { load_path_layer(d, paths::ellipse_path(120, 100, 60, 40)); }},
+        {"path_as_selection", [](DocJournal& j, Document& d) { set_path_switches(j, d, "L6", false, true); },
+             [](Document& d) { load_path_layer(d, paths::ellipse_path(120, 100, 60, 40)); }},
+        {"path_selection",  [](DocJournal& j, Document& d) { paths::to_selection(j, d, "L6", select::Op::Add, 2); },
+             [](Document& d) { load_path_layer(d, paths::ellipse_path(100, 100, 50, 40)); load_selection(d, {300, 200, 50, 50}); }},
+        {"path_make",       [](DocJournal& j, Document& d) { paths::from_selection(j, d, 2.0, "L4"); },
+             [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        {"path_isolate",    [](DocJournal& j, Document& d) { paths::isolate(j, d, "L6", 8); },
+             [](Document& d) { load_path_layer(d, paths::rect_path(90, 90, 310, 260)); }},
+        {"crop_paths",      [](DocJournal& j, Document& d) { canvas::crop(j, d, {50, 40, 400, 300}, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_path_layer(d, paths::ellipse_path(100, 100, 50, 40), true); }},
         // s032: guides.
         {"add_guide",    [](DocJournal& j, Document& d) { canvas::add_guide(j, d, {true, 150.4}); }},
         {"move_guide",   [](DocJournal& j, Document& d) { canvas::move_guide(j, d, 0, 120); },

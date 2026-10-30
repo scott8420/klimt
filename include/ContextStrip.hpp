@@ -23,6 +23,12 @@ public:
     ContextStrip();
     void show_tool(const core::ToolSpec& tool);
     int variant(const std::string& tool_id) const;   // 0 if never chosen
+    // s035: a key chose the variant (the Pen's P / A / Shift+P): the strip's
+    // buttons follow, and the variant is told as if clicked.
+    void set_variant(const std::string& tool_id, int v);
+    // s035 (Scott): Ctrl / Alt held with the Pen -- the button of the mode in
+    // effect lights for as long; the chosen variant stays as it was.
+    void show_variant(const std::string& tool_id, int v);
     // s008 m3: the Magic Wand's options (view state, remembered).
     struct Wand { int tolerance = 32; bool contiguous = true; bool all_layers = false; };
     const Wand& wand() const { return m_wand; }
@@ -86,8 +92,13 @@ public:
     static std::string tip_label(const BrushOpts& o);   // "Round 45% · jitter"
     // s008: told when the user picks a variant (tool id, index).
     sigc::signal<void(const std::string&, int)>& signal_variant() { return m_variant_signal; }
+    // s035 m5: the Pen's Corner / Smooth buttons (true: Smooth).
+    sigc::signal<void(bool)>& signal_pen_point() { return m_pen_point; }
 
 private:
+    sigc::signal<void(bool)> m_pen_point;
+    std::vector<Gtk::ToggleButton*> m_variant_buttons;   // the shown tool's (managed by the strip)
+    bool m_quiet = false;                                 // lighting a button, not choosing
     std::map<std::string, int> m_variant;
     Wand m_wand;
     bool m_crop_delete = false;

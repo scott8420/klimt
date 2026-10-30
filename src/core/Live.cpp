@@ -2,6 +2,7 @@
 #include "core/Live.hpp"
 #include "core/StylesRender.hpp"   // s019
 #include "core/Fade.hpp"           // s023: a live filter's blending
+#include "core/Paths.hpp"          // s035: path layers as masks
 
 #include <algorithm>
 #include <atomic>
@@ -177,6 +178,7 @@ bool any(const Layers& ls) {
     for (const auto& [id, l] : ls) {
         if (active(l)) return true;
         if (l.kind == Kind::Filter) return true;   // s030
+        if (l.kind == Kind::Path && l.path_mask && l.visible) return true;   // s035: a path masking its neighbour
         if (l.kind == Kind::Group && l.styles.any()) return true;   // s024
     }
     return false;
@@ -443,9 +445,71 @@ std::shared_ptr<const pixel::TileMap> filter_look(const Image& im, const Layers&
     }
     return fut.get();
 }
+// s035: PATH LAYERS AS MASKS. A path layer with its Mask switch on (and
+// visible) hides what lies outside its outline on the sibling just below it:
+// that layer's mask becomes max(its own hide, 1 - the path's coverage). The
+// coverage is made once per outline (by pointer) and image size, and cached.
+std::shared_ptr<const pixel::TileMap> path_cover(const std::shared_ptr<const path::Path>& p, const pixel::Format& mf, int w, int h) {
+    struct Entry { std::shared_ptr<const path::Path> p; int w, h; pixel::Format f; std::shared_ptr<const pixel::TileMap> m; };
+    static std::mutex mu;
+    static std::vector<Entry> cache;
+    std::lock_guard lock(mu);
+    for (const auto& e : cache)
+        if (e.p == p && e.w == w && e.h == h && e.f == mf) return e.m;
+    auto m = std::make_shared<const pixel::TileMap>(paths::coverage(*p, mf, w, h));
+    cache.insert(cache.begin(), {p, w, h, mf, m});
+    if (cache.size() > 8) cache.pop_back();
+    return m;
+}
+
+std::shared_ptr<const pixel::TileMap> path_hide(const std::shared_ptr<const path::Path>& p, const std::shared_ptr<const pixel::TileMap>& own,
+                                                const pixel::Format& mf, int w, int h) {
+    struct Entry { std::shared_ptr<const path::Path> p; std::shared_ptr<const pixel::TileMap> own; int w, h; pixel::Format f;
+                   std::shared_ptr<const pixel::TileMap> hide; };
+    static std::mutex mu;
+    static std::vector<Entry> cache;
+    {
+        std::lock_guard lock(mu);
+        for (const auto& e : cache)
+            if (e.p == p && e.own == own && e.w == w && e.h == h && e.f == mf) return e.hide;
+    }
+    const auto cover = path_cover(p, mf, w, h);
+    pixel::TileMap hide = select::inverted(cover.get(), mf, w, h);
+    if (own) hide = select::combine(&hide, *own, select::Op::Add);
+    auto made = std::make_shared<const pixel::TileMap>(std::move(hide));
+    std::lock_guard lock(mu);
+    for (const auto& e : cache)   // another tile made it meanwhile: share that one
+        if (e.p == p && e.own == own && e.w == w && e.h == h && e.f == mf) return e.hide;
+    cache.insert(cache.begin(), {p, own, w, h, mf, made});
+    if (cache.size() > 8) cache.pop_back();
+    return made;
+}
+
+Layers path_masked(const Layers& ls, const Image* im) {
+    if (!im || im->width <= 0) return ls;
+    bool any = false;
+    for (const auto& [id, l] : ls) any = any || (l.kind == Kind::Path && l.path_mask && l.visible && l.path);
+    if (!any) return ls;
+    Layers out = ls;
+    const pixel::Format mf{im->format.depth, pixel::Mode::Gray, false};
+    for (const auto& [id, l] : ls) {
+        if (l.kind != Kind::Path || !l.path_mask || !l.visible || !l.path) continue;
+        // The sibling just below: the highest place under this one.
+        // Every layer below it in its group (Scott: "run the whole group").
+        for (const auto& below : paths::masked_by(ls, id)) {
+            Layer& t = out.at(below);
+            // hide = max(own hide (when on), 1 - coverage) -- made ONCE per
+            // outline and own mask, not per tile (s035, Scott: "sluggishness").
+            t.mask = path_hide(l.path, t.mask && t.mask_on ? t.mask : nullptr, mf, im->width, im->height);
+            t.mask_on = true;
+        }
+    }
+    return out;
+}
 }  // namespace
 
-Layers effective(const Layers& ls, const Image* im) {
+Layers effective(const Layers& ls_in, const Image* im) {
+    const Layers ls = path_masked(ls_in, im);   // s035: first, so every other look sees the masks
     Layers out = ls;
     // s024: styled groups first (the outermost; the inner ones are done
     // inside their look): each becomes one pixel layer, its contents gone.

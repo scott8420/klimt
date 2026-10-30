@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s033")
+set(KLIMT_BUILD "s035")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -98,6 +98,10 @@ add_library(klimt_core STATIC
     # THE SELECTION (s008): a mask on the tile grid; shapes, set arithmetic,
     # feather, the ants' outline, fill / delete through it.
     src/core/Selection.cpp
+    # PATHS (s035): Bezier outlines for selections and masks -- geometry, verbs.
+    src/core/Path.cpp
+    src/core/Paths.cpp
+    src/core/Isolate.cpp   # s035 m7: the path as a hint -- GrabCut over the band (core/MaxFlow.hpp)
     # THE BRUSH (s008 m4): dabs into a stroke's coverage, the layer
     # recomputed from the original per touched tile -- one stroke, one step.
     src/core/Paint.cpp
@@ -136,6 +140,7 @@ if(KLIMT_FAST_PIXELS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     set_source_files_properties(src/core/Composite.cpp src/core/Paint.cpp src/core/Canvas.cpp
                                 src/core/Move.cpp src/core/Selection.cpp src/core/Transform.cpp src/core/Gradient.cpp
                                 src/core/Adjust.cpp src/core/Filter.cpp src/core/Heal.cpp src/core/StylesRender.cpp src/core/Fade.cpp src/core/Patterns.cpp
+                                src/core/Path.cpp src/core/Paths.cpp src/core/Isolate.cpp
                                 PROPERTIES COMPILE_OPTIONS "-O2")
 endif()
 # s007: libzip writes and reads the .klimt container (Fedora: libzip-devel).
@@ -150,7 +155,7 @@ add_executable(klimt_bench src/bench.cpp)
 target_link_libraries(klimt_bench PRIVATE klimt_core Threads::Threads)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp)
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads)
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -203,7 +208,7 @@ add_executable(klimt
     src/Shell_masks.cpp
     src/Shell_tabs.cpp
     src/Shell_adjust.cpp      # s013: adjustment layers, Image > Adjustments
-    src/Shell_filter.cpp      # s014: the Filter menu
+    src/Shell_paths.cpp src/Shell_filter.cpp      # s014: the Filter menu
     src/SizeDialog.cpp
     src/NewDialog.cpp
     src/NumberDialog.cpp
@@ -214,7 +219,7 @@ add_executable(klimt
     # s005 -- the window's regions, one class each (docs/ui.md).
     src/ToolRail.cpp
     src/ContextStrip.cpp
-    src/CanvasView.cpp
+    src/CanvasView.cpp src/CanvasView_pen.cpp
     src/PropertiesPanel.cpp
     src/AdjustEditor.cpp      # s013: the adjustment controls
     src/FilterLayerEditor.cpp   # s030: a filter layer's settings in Properties

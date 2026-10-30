@@ -312,8 +312,23 @@ Gtk::Widget* ContextStrip::presets_button(const std::string& tool) {
     return mb;
 }
 
+void ContextStrip::set_variant(const std::string& tool_id, int v) {
+    m_variant[tool_id] = v;
+    if (m_shown == tool_id)
+        if (const auto* t = core::find_tool(tool_id)) show_tool(*t);
+    m_variant_signal.emit(tool_id, v);
+}
+
+void ContextStrip::show_variant(const std::string& tool_id, int v) {
+    if (m_shown != tool_id || v < 0 || v >= static_cast<int>(m_variant_buttons.size())) return;
+    m_quiet = true;
+    m_variant_buttons[static_cast<std::size_t>(v)]->set_active(true);
+    m_quiet = false;
+}
+
 void ContextStrip::show_tool(const core::ToolSpec& t) {
     m_shown = t.id;
+    m_variant_buttons.clear();
     while (auto* c = get_first_child()) remove(*c);
 
     auto name = Gtk::make_managed<Gtk::Label>();
@@ -331,8 +346,16 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
             b->set_focus_on_click(false);
             if (first) b->set_group(*first); else first = b;
             if (static_cast<int>(i) == chosen) b->set_active(true);
+            m_variant_buttons.push_back(b);
+            if (t.id == "pen") {   // s035 (Scott): the keys, where they're found
+                static const char* tips[] = {
+                    "Draw: click a corner, drag a smooth point, click the first point to close  (P;  Shift+P: the next mode)",
+                    "Select: pick and drag points and handles; Delete removes  (A, or hold Ctrl while drawing;  Shift+P: the next mode)",
+                    "Convert: click a point -- corner <-> smooth; drag a handle alone  (hold Alt while drawing;  Shift+P: the next mode)"};
+                if (i < 3) b->set_tooltip_text(tips[i]);
+            }
             b->signal_toggled().connect([this, b, id = t.id, i] {
-                if (!b->get_active()) return;
+                if (!b->get_active() || m_quiet) return;
                 m_variant[id] = static_cast<int>(i);
                 m_variant_signal.emit(id, static_cast<int>(i));
                 // A variant with its own options (the Wand's) rebuilds the
@@ -397,6 +420,21 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
                      [this] { return m_wand.tolerance; }, [this](int v) { m_wand.tolerance = v; });
     }
 
+    if (t.id == "pen") {   // s035 m5: the picked point -- corner or smooth
+        auto pt = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+        pt->add_css_class("linked");
+        auto corner = Gtk::make_managed<Gtk::Button>("Corner");
+        corner->set_name("strip.pen.corner");
+        corner->set_tooltip_text("The picked point becomes a corner (no handles)");
+        corner->signal_clicked().connect([this] { m_pen_point.emit(false); });
+        auto smooth = Gtk::make_managed<Gtk::Button>("Smooth");
+        smooth->set_name("strip.pen.smooth");
+        smooth->set_tooltip_text("The picked point becomes smooth (handles in line)");
+        smooth->signal_clicked().connect([this] { m_pen_point.emit(true); });
+        pt->append(*corner);
+        pt->append(*smooth);
+        append(*pt);
+    }
     if (t.id == "select") {
         // Klimt's strength, one click from the selection tools (docs/ui.md 4).
         // Shown, greyed, until there are pixels for them to work on.

@@ -42,6 +42,9 @@ pixel::TileMap ellipse_mask(const pixel::Format& mf, int w, int h, double x0, do
 // A closed polygon (the lasso's points), non-zero winding, anti-aliased
 // (4 sub-rows a pixel, exact horizontal coverage).
 pixel::TileMap polygon_mask(const pixel::Format& mf, int w, int h, const std::vector<Pt>& pts);
+// s035: several closed polygons at once (a path's subpaths) -- non-zero
+// winding, or even-odd (a ring drawn inside a shape cuts a hole).
+pixel::TileMap polygons_mask(const pixel::Format& mf, int w, int h, const std::vector<std::vector<Pt>>& polys, bool even_odd);
 
 // `shape` into `old` (nullptr: nothing selected) by `op`.
 pixel::TileMap combine(const pixel::TileMap* old, const pixel::TileMap& shape, Op op);

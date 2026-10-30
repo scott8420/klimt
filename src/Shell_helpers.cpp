@@ -92,6 +92,7 @@ void Shell::load_demo() {
 // the selection follows it.
 void Shell::on_selection() {
     m_properties.show(m_layers.selection());
+    update_paths();   // s035: a picked path layer is the path on the canvas
     update_layer_actions();
     update_summary();
 }
@@ -258,6 +259,7 @@ void Shell::queue_render() {
         m_render_queued = false;
         update_rulers();   // s031: the zero point, the resolution may have changed
         update_guides();   // s032
+        update_paths();    // s035
         const core::Image im = m_doc.image();
         auto layers = m_doc.snapshot();
         // s011: a transform's preview shows in place of the real pixels.

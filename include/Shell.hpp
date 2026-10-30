@@ -11,6 +11,7 @@
 #include "core/Prefs.hpp"      // s014 m4: settings remembered between runs
 #include "core/Tabs.hpp"       // s020: several documents in one window
 #include "core/Fade.hpp"       // s020: Edit > Fade
+#include "core/Paths.hpp"      // s035: paths
 #include "CanvasView.hpp"
 #include "RulerView.hpp"     // s031
 #include "ContextStrip.hpp"
@@ -304,6 +305,17 @@ private:
     void update_rulers();                      // category: canvas: s031 -- their numbers from the document
     void show_rulers(bool on);                 // category: canvas: s031 -- View > Rulers
     void update_guides();                      // category: canvas: s032 -- the canvas's guides from the document
+    // s035: PATHS (Shell_paths.cpp).
+    void update_paths();                       // category: canvas: s035 -- the active path on the canvas
+    void on_path_edit(const core::path::Path& p, const std::string& label);   // category: paths: the Pen's gesture lands (one step)
+    void on_path_selection(core::select::Op op);   // category: paths: Ctrl+Enter -- the active path as the selection
+    void on_path_make_work();                  // category: paths: Make Path from Selection -- a new path layer (a job)
+    void on_path_isolate(const std::string& id, double band);   // category: paths: Isolate -- the figure the path goes round (a job)
+    std::string path_layer() const;
+    void show_path_outline(bool on);           // category: paths: the picked path layer's outline (Ctrl+Shift+H, its node icon) -- the effect stays
+    void toggle_path_outline(const std::string& id);   // category: paths: a path layer's node icon
+    std::set<std::string> m_outlines_off;      // path layers whose outline is hidden (view state)            // category: paths: the picked layer when it's a path layer, else ""
+    std::uint64_t m_path_job = 0;
     widgets::Box       m_dock;                 // vertical: properties, stack switcher, stack
     widgets::Stack     m_dock_stack;           // Layers / Channels / History
     Gtk::Widget*       m_strip_box = nullptr;  // the strip's frame (Tab hides it); managed

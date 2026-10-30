@@ -193,6 +193,19 @@ void Shell::bind_actions() {  // bindings
         });
     };
     if (m_hruler) { ruler_guide(*m_hruler, false); ruler_guide(*m_vruler, true); }
+    // s035: the Pen's gestures, and the path actions.
+    m_canvas.signal_path_edit().connect(sigc::mem_fun(*this, &Shell::on_path_edit));
+    m_properties.signal_path_load().connect([this](const std::string&) { on_path_selection(core::select::Op::Replace); });
+    m_properties.signal_path_isolate().connect(sigc::mem_fun(*this, &Shell::on_path_isolate));
+    m_properties.signal_path_outline().connect([this](bool on) { show_path_outline(on); });
+    add_action("path-outline", [this] { if (!path_layer().empty()) toggle_path_outline(path_layer()); });
+    m_layers.signal_outline_toggle().connect(sigc::mem_fun(*this, &Shell::toggle_path_outline));
+    m_canvas.signal_pen_mode().connect([this](int v) { m_strip.show_variant("pen", v); });   // s035: Ctrl / Alt held -- the button lights
+    m_strip.signal_pen_point().connect([this](bool smooth) {   // s035 m5
+        if (!m_canvas.pen_set_smooth(smooth)) toast("Pick a point first -- the Pen's Select mode, or click one");
+    });
+    m_layer_acts["path-selection"] = add_action("path-selection", [this] { on_path_selection(core::select::Op::Replace); });
+    m_layer_acts["path-make-work"] = add_action("path-make-work", [this] { on_path_make_work(); });
     m_canvas.signal_guide_moved().connect([this](int i, double at) {
         if (i >= 0) core::canvas::move_guide(m_journal, m_doc, static_cast<std::size_t>(i), at);
     });
@@ -302,6 +315,17 @@ void Shell::bind_actions() {  // bindings
             const auto CTRL  = Gdk::ModifierType::CONTROL_MASK;
             const auto SHIFT = Gdk::ModifierType::SHIFT_MASK;
             if (focus_is_text()) return false;
+            // s035: the Pen -- Enter / Escape end the subpath being drawn;
+            // Backspace / Delete take its last anchor (or the picked one).
+            // Ctrl+Enter (any tool): the active path as the selection.
+            if ((keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) && mods == CTRL) { activate_action("win.path-selection"); return true; }
+            if (m_rail.tool() == "pen" && mods == NONE) {
+                if ((keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter || keyval == GDK_KEY_Escape) && m_canvas.pen_drawing()) {
+                    m_canvas.pen_finish();
+                    return true;
+                }
+                if ((keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete) && m_canvas.pen_backspace()) return true;
+            }
             // s011: a transform's box is up -- Enter applies, Escape drops it.
             if (m_xform.active && mods == NONE) {
                 if (keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) { xform_commit(); return true; }
@@ -322,6 +346,20 @@ void Shell::bind_actions() {  // bindings
             if (act) {
                 if (auto lg = log::get(log::Area::Shell)) lg->info("window key -> {}", act);
                 activate_action(act);   // the FULL name: "undo" alone would do nothing
+                return true;
+            }
+            // s035 (Scott: "switching to draw/select/convert needs a quick
+            // modifier"): Shift+P cycles the Pen's modes; P is the Pen
+            // drawing, A the Pen selecting (Photoshop's key for it).
+            if ((keyval == GDK_KEY_H || keyval == GDK_KEY_h) && mods == (CTRL | SHIFT)) { activate_action("win.path-outline"); return true; }   // s035
+            if ((keyval == GDK_KEY_P || keyval == GDK_KEY_p) && mods == SHIFT) {
+                if (m_rail.tool() != "pen") { m_rail.set_tool("pen"); on_tool("pen"); }
+                else m_strip.set_variant("pen", (m_strip.variant("pen") + 1) % 3);
+                return true;
+            }
+            if ((keyval == GDK_KEY_p || keyval == GDK_KEY_a) && mods == NONE) {
+                if (m_rail.tool() != "pen") { m_rail.set_tool("pen"); on_tool("pen"); }
+                m_strip.set_variant("pen", keyval == GDK_KEY_a ? 1 : 0);
                 return true;
             }
             if (mods != NONE) return false;
@@ -380,6 +418,18 @@ void Shell::bind_actions() {  // bindings
                 case GDK_KEY_Up:    m_canvas.nudge_transform(0, -step); return true;
                 case GDK_KEY_Down:  m_canvas.nudge_transform(0, step); return true;
                 default: break;
+            }
+        }
+        // s035: the Pen's keys and Ctrl+Enter -- here in CAPTURE on the
+        // canvas, before the window's own Enter binding (activate-default)
+        // can take them.
+        {
+            const auto m2 = state & (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK | Gdk::ModifierType::ALT_MASK);
+            const bool enter = keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter;
+            if (enter && m2 == Gdk::ModifierType::CONTROL_MASK) { activate_action("win.path-selection"); return true; }
+            if (m_rail.tool() == "pen" && m2 == Gdk::ModifierType{}) {
+                if ((enter || keyval == GDK_KEY_Escape) && m_canvas.pen_drawing()) { m_canvas.pen_finish(); return true; }
+                if ((keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete) && m_canvas.pen_backspace()) return true;
             }
         }
         // s009 m2: the Crop tool's box -- Enter crops, Escape drops it.

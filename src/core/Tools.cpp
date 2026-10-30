@@ -9,6 +9,10 @@ const std::vector<ToolSpec>& tools() {
         {"select",     "Select",      "klimt-tool-select-symbolic",     'm', 0,
          {"Rectangle", "Ellipse", "Lasso", "Wand", "Colour Range"},
          "Drag to select (the Wand: click). Shift adds, Alt subtracts, both intersect; a click deselects."},
+        {"pen",        "Pen",         "klimt-tool-pen-symbolic",        'p', 0, {"Draw", "Select", "Convert"},   // s035
+         "Draw: click a corner, drag a smooth point, click the first point to close. Select: pick a point, drag points and handles. "
+         "Convert: click a point -- corner <-> smooth. Corner / Smooth set the picked point. P draws, A selects, Shift+P: the next mode; "
+         "hold Ctrl / Alt for Select / Convert a moment. Enter ends; Ctrl+Enter: a selection."},
         {"crop",       "Crop",        "klimt-tool-crop-symbolic",       'c', 0, {"Crop", "Straighten"},
          "Crop: drag a box, drag inside / its edges, Enter or double-click crops, Esc drops it. Straighten: drag along what should be level."},
         {"heal",       "Heal",        "klimt-tool-heal-symbolic",       'j', 1, {"Spot", "Healing", "Patch"},

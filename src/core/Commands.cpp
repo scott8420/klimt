@@ -82,7 +82,14 @@ const std::vector<Command>& commands() {
             {"Add Noise", "Filter", "win.filter-add-noise", "", "filter grain film speckle dither", ""},
             {"Box Blur", "Filter", "win.filter-box-blur", "", "filter blur average square soften", ""},
             {"Motion Blur", "Filter", "win.filter-motion-blur", "", "filter blur streak speed movement angle", ""},
+            {"Surface Blur", "Filter", "win.filter-surface-blur", "", "filter blur smooth skin edge-preserving bilateral retouch", ""},
             {"Median", "Filter", "win.filter-median", "", "filter noise despeckle dust remove smooth", ""},
+            // s034
+            {"Smart Sharpen", "Filter", "win.filter-smart-sharpen", "", "filter sharpen crisp detail lens deblur focus halo", ""},
+            {"Dust & Scratches", "Filter", "win.filter-dust-scratches", "", "filter noise despeckle dust scratch scan remove", ""},
+            {"Reduce Noise", "Filter", "win.filter-reduce-noise", "", "filter noise denoise grain photo colour chroma clean", ""},
+            {"Maximum", "Filter", "win.filter-maximum", "", "filter other dilate grow spread light expand mask choke", ""},
+            {"Minimum", "Filter", "win.filter-minimum", "", "filter other erode shrink spread dark contract mask choke", ""},
             // s030: filter layers -- the same filters, live, over what's below.
             {"New Filter Layer: Gaussian Blur", "Layer", "win.filter-layer-gaussian-blur", "", "filter layer live non-destructive blur soften", ""},
             {"New Filter Layer: Unsharp Mask", "Layer", "win.filter-layer-unsharp-mask", "", "filter layer live non-destructive sharpen crisp", ""},
@@ -90,8 +97,18 @@ const std::vector<Command>& commands() {
             {"New Filter Layer: Add Noise", "Layer", "win.filter-layer-add-noise", "", "filter layer live non-destructive grain film", ""},
             {"New Filter Layer: Box Blur", "Layer", "win.filter-layer-box-blur", "", "filter layer live non-destructive blur average", ""},
             {"New Filter Layer: Motion Blur", "Layer", "win.filter-layer-motion-blur", "", "filter layer live non-destructive blur streak speed", ""},
+            {"New Filter Layer: Surface Blur", "Layer", "win.filter-layer-surface-blur", "", "filter layer live non-destructive blur smooth skin edge-preserving", ""},
             {"New Filter Layer: Median", "Layer", "win.filter-layer-median", "", "filter layer live non-destructive despeckle dust", ""},
+            {"New Filter Layer: Smart Sharpen", "Layer", "win.filter-layer-smart-sharpen", "", "filter layer live non-destructive sharpen crisp lens deblur", ""},
+            {"New Filter Layer: Dust & Scratches", "Layer", "win.filter-layer-dust-scratches", "", "filter layer live non-destructive despeckle dust scratch", ""},
+            {"New Filter Layer: Reduce Noise", "Layer", "win.filter-layer-reduce-noise", "", "filter layer live non-destructive denoise grain photo", ""},
+            {"New Filter Layer: Maximum", "Layer", "win.filter-layer-maximum", "", "filter layer live non-destructive dilate grow spread light", ""},
+            {"New Filter Layer: Minimum", "Layer", "win.filter-layer-minimum", "", "filter layer live non-destructive erode shrink spread dark", ""},
             {"Last Filter", "Filter", "win.filter-last", "", "filter again repeat", "Ctrl+F"},
+            // s035: paths
+            {"Load Path as Selection", "Select", "win.path-selection", "", "path pen bezier curve selection outline", "Ctrl+Enter"},
+            {"Show / Hide Path Outline", "View", "win.path-outline", "", "path outline hide show nodes anchors extras mask effect", "Ctrl+Shift+H"},
+            {"Make Path from Selection", "Select", "win.path-make-work", "", "path pen bezier trace outline vector selection to path work path layer", ""},
             {"Last Filter's Settings", "Filter", "win.filter-last-dialog", "", "filter again repeat dialog", "Ctrl+Alt+F"},
             // s019: layer styles.
             {"Layer Style: Drop Shadow", "Layer", "win.style-drop-shadow", "", "effect fx shadow", ""},

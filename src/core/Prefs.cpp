@@ -35,6 +35,8 @@ Prefs load_prefs(const std::string& file) {
     for (const auto& [k, f] : {std::pair<const char*, bool Prefs::*>{"show_guides", &Prefs::show_guides},
                                {"lock_guides", &Prefs::lock_guides}, {"snap", &Prefs::snap}})   // s032
         if (j.contains(k) && j[k].is_boolean()) p.*f = j[k].get<bool>();
+    if (j.contains("path_tolerance") && j["path_tolerance"].is_number())   // s035
+        p.path_tolerance = std::clamp(j["path_tolerance"].get<double>(), 0.5, 10.0);
     return p;
 }
 
@@ -51,6 +53,7 @@ bool save_prefs(const std::string& file, const Prefs& p) {
     j["show_guides"] = p.show_guides;   // s032
     j["lock_guides"] = p.lock_guides;
     j["snap"] = p.snap;
+    j["path_tolerance"] = p.path_tolerance;   // s035
     std::ofstream f(file);
     if (!f) return false;
     f << j.dump(2) << "\n";

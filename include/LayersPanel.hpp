@@ -73,6 +73,10 @@ public:
     Id   mask_target() const;
     void set_mask_target(const Id& id);
     sigc::signal<void(const Id&)>& signal_mask_view() { return m_mask_view; }   // Alt-click a chip
+    // s035 (Scott): a path layer's NODE icon, beside the eye -- its outline and
+    // points shown or hidden on the canvas (view state; the mask stays).
+    void set_outlines_off(const std::set<Id>& off);
+    sigc::signal<void(const Id&)>& signal_outline_toggle() { return m_outline_toggle; }
     void set_mask_viewing(const Id& id) { m_mask_viewing = id; queue_repaint(); }
 
     // Is there something for each verb to act on? (The Shell greys by these.)
@@ -111,6 +115,8 @@ private:
     Id                m_mask_target;            // s012: the layer whose mask is painted
     Id                m_mask_viewing;           // s012: the mask shown on the canvas
     sigc::signal<void(const Id&)> m_mask_view;
+    std::set<Id>      m_outlines_off;       // s035
+    sigc::signal<void(const Id&)> m_outline_toggle;
 
     // The rows, then the verbs. (Blend / opacity / fill / locks moved to the
     // PropertiesPanel at s005 -- docs/ui.md call 2: the panel is the stack.)

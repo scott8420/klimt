@@ -456,6 +456,7 @@ std::optional<canvas::Reshape> reshape(const canvas::Before& b, int w, int h, co
     }
     canvas::Reshape out;
     out.image = std::make_shared<const Image>(next);
+    out.path_map = [m](path::P q) { const Pt t = m.apply({q.x, q.y}); return path::P{t.x, t.y}; };   // s035: any angle -- a Bezier maps exactly
     const pixel::Format f = next.format;
     const pixel::TileMap blank(f, w, h);
     const pixel::TileMap base = f.alpha ? blank : blank.fill({0, 0, w, h}, background);

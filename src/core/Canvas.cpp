@@ -469,6 +469,7 @@ std::optional<Reshape> crop_plan(const Before& b, const pixel::Rect& r, const pi
     next.origin_x = im.origin_x - r.x;   // s031: the zero point stays on the picture
     next.origin_y = im.origin_y - r.y;
     for (auto& g : next.guides) g.at -= g.vertical ? r.x : r.y;   // s032: and the guides
+
     const pixel::Px fill = im.format.alpha ? pixel::transparent() : background;
     Reshape out;
     out.image = std::make_shared<const Image>(next);
@@ -477,6 +478,7 @@ std::optional<Reshape> crop_plan(const Before& b, const pixel::Rect& r, const pi
     for (const auto& [id, m] : b.masks)   // s012: a mask goes with its layer (beyond it: shows)
         out.masks[id] = std::make_shared<const pixel::TileMap>(reframed(*m, r.w, r.h, -r.x, -r.y, pixel::transparent(), !delete_cropped));
     out.mask = nullptr;   // a crop deselects (Photoshop)
+    out.path_map = [dx = r.x, dy = r.y](path::P q) { return path::P{q.x - dx, q.y - dy}; };   // s035: the paths move with the picture
     return out;
 }
 
@@ -491,6 +493,7 @@ std::optional<Reshape> canvas_plan(const Before& b, int w, int h, int anchor_x, 
     next.origin_x = im.origin_x + ox;   // s031
     next.origin_y = im.origin_y + oy;
     for (auto& g : next.guides) g.at += g.vertical ? ox : oy;   // s032
+
     const pixel::Px fill = im.format.alpha ? pixel::transparent() : background;
     Reshape out;
     out.image = std::make_shared<const Image>(next);
@@ -498,6 +501,7 @@ std::optional<Reshape> canvas_plan(const Before& b, int w, int h, int anchor_x, 
         out.pixels[id] = p ? held(reframed(*p, w, h, ox, oy, fill)) : nullptr;
     for (const auto& [id, m] : b.masks)
         out.masks[id] = std::make_shared<const pixel::TileMap>(reframed(*m, w, h, ox, oy, pixel::transparent()));
+    out.path_map = [ox, oy](path::P q) { return path::P{q.x + ox, q.y + oy}; };   // s035
     if (b.mask) {
         auto m = reframed(*b.mask, w, h, ox, oy, pixel::transparent(), false);
         out.mask = select::empty(m) ? nullptr : std::make_shared<const pixel::TileMap>(std::move(m));
@@ -518,13 +522,18 @@ std::optional<Reshape> size_plan(const Before& b, int w, int h, double dpi, Filt
     next.origin_x = im.origin_x * w / std::max(1, im.width);   // s031: scaled with the picture
     next.origin_y = im.origin_y * h / std::max(1, im.height);
     for (auto& g : next.guides) g.at = g.at * (g.vertical ? w : h) / std::max(1, g.vertical ? im.width : im.height);   // s032
+
     if (w == im.width && h == im.height) {   // the resolution alone: no pixel changes
         Reshape out = same_layers(b);
         out.image = std::make_shared<const Image>(next);
-        return out;
+        return out;   // the resolution alone: the paths stay
     }
     Reshape out;
     out.image = std::make_shared<const Image>(next);
+    {   // s035: the paths scale with the picture
+        const double sx = static_cast<double>(w) / std::max(1, im.width), sy = static_cast<double>(h) / std::max(1, im.height);
+        out.path_map = [sx, sy](path::P q) { return path::P{q.x * sx, q.y * sy}; };
+    }
     const double n = static_cast<double>(b.pixels.size() + (b.mask ? 1 : 0));
     double done = 0;
     const auto part = [&](double base) {
@@ -566,7 +575,17 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
             if (!r.pixels.count(base) && std::find(ids.begin(), ids.end(), base) == ids.end()) ids.push_back(base);
         } else if (!r.pixels.count(id)) ids.push_back(id);
     ids.push_back(kSelectionId);
+    std::vector<Id> path_ids;   // s035
+    if (r.path_map)
+        for (const auto& [id, l] : d.snapshot())
+            if (l.kind == Kind::Path && l.path) { path_ids.push_back(id); ids.push_back(id); }
     return j.run(label, ids, [&] {
+        for (const auto& id : path_ids) {   // s035: the outlines go with the picture
+            auto l = d.get(id);
+            if (!l) continue;
+            l->path = std::make_shared<const path::Path>(path::mapped(*l->path, r.path_map));
+            d.put(id, *l);
+        }
         Layer im;
         im.name = "Image";
         im.image = r.image;

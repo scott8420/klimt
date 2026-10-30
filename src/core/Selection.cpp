@@ -178,13 +178,23 @@ TileMap ellipse_mask(const pixel::Format& mf, int w, int h, double x0, double y0
 }
 
 TileMap polygon_mask(const pixel::Format& mf, int w, int h, const std::vector<Pt>& pts) {
+    return polygons_mask(mf, w, h, {pts}, false);
+}
+
+TileMap polygons_mask(const pixel::Format& mf, int w, int h, const std::vector<std::vector<Pt>>& polys, bool even_odd) {
     const TileMap blank(mf, w, h);
-    if (pts.size() < 3 || w <= 0 || h <= 0) return blank;
-    double minx = pts[0].x, maxx = pts[0].x, miny = pts[0].y, maxy = pts[0].y;
-    for (const auto& p : pts) {
-        minx = std::min(minx, p.x); maxx = std::max(maxx, p.x);
-        miny = std::min(miny, p.y); maxy = std::max(maxy, p.y);
+    if (w <= 0 || h <= 0) return blank;
+    bool first = true;
+    double minx = 0, maxx = 0, miny = 0, maxy = 0;
+    for (const auto& pts : polys) {
+        if (pts.size() < 3) continue;
+        for (const auto& p : pts) {
+            if (first) { minx = maxx = p.x; miny = maxy = p.y; first = false; }
+            minx = std::min(minx, p.x); maxx = std::max(maxx, p.x);
+            miny = std::min(miny, p.y); maxy = std::max(maxy, p.y);
+        }
     }
+    if (first) return blank;
     const int ry0 = std::clamp(static_cast<int>(std::floor(miny)), 0, h), ry1 = std::clamp(static_cast<int>(std::ceil(maxy)), 0, h);
     const int cx0 = std::clamp(static_cast<int>(std::floor(minx)), 0, w), cx1 = std::clamp(static_cast<int>(std::ceil(maxx)), 0, w);
     if (ry1 <= ry0 || cx1 <= cx0) return blank;
@@ -201,19 +211,22 @@ TileMap polygon_mask(const pixel::Format& mf, int w, int h, const std::vector<Pt
             for (int s = 0; s < 4; ++s) {
                 const double yy = y + (s + 0.5) / 4;
                 xs.clear();
-                for (std::size_t i = 0; i < pts.size(); ++i) {
-                    const Pt& a = pts[i];
-                    const Pt& b = pts[(i + 1) % pts.size()];
-                    if ((a.y <= yy) == (b.y <= yy)) continue;   // doesn't cross this sub-row
-                    const double t = (yy - a.y) / (b.y - a.y);
-                    xs.emplace_back(a.x + t * (b.x - a.x), b.y > a.y ? 1 : -1);
+                for (const auto& pts : polys) {
+                    if (pts.size() < 3) continue;
+                    for (std::size_t i = 0; i < pts.size(); ++i) {
+                        const Pt& a = pts[i];
+                        const Pt& b = pts[(i + 1) % pts.size()];
+                        if ((a.y <= yy) == (b.y <= yy)) continue;   // doesn't cross this sub-row
+                        const double t = (yy - a.y) / (b.y - a.y);
+                        xs.emplace_back(a.x + t * (b.x - a.x), b.y > a.y ? 1 : -1);
+                    }
                 }
                 std::sort(xs.begin(), xs.end());
                 int wind = 0;
                 for (std::size_t k = 0; k + 1 < xs.size() + 1 && k < xs.size(); ++k) {
-                    wind += xs[k].second;
-                    if (wind == 0 || k + 1 >= xs.size()) continue;
-                    // Inside from xs[k] to xs[k+1] (non-zero winding).
+                    wind += even_odd ? 1 : xs[k].second;
+                    if ((even_odd ? (wind & 1) == 0 : wind == 0) || k + 1 >= xs.size()) continue;
+                    // Inside from xs[k] to xs[k+1] (non-zero winding; s035: or even-odd).
                     const double xa = std::clamp(xs[k].first, static_cast<double>(cx0), static_cast<double>(cx1)) - cx0;
                     const double xb = std::clamp(xs[k + 1].first, static_cast<double>(cx0), static_cast<double>(cx1)) - cx0;
                     if (xb <= xa) continue;
