@@ -182,6 +182,8 @@ private:
     void on_focal_point(int x, int y);            // category: filter: s039 m2 -- Lens Blur's Set Focal Point
     void filter_dialog_channels();                // category: filter: s041 m4 -- the channels, for Lens Blur's Source
     void with_colours(core::Filter& f) const;     // category: filter: s042 m3 -- Clouds' colours from the rail
+    void filter_run_pixels(const core::Filter& f);   // category: filter: s043 m4 -- the job on the pixels (filter_run's tail)
+    std::shared_ptr<const pixel::TileMap> displace_map(const core::Filter& f) const;   // category: filter: s043 m4 -- Displace's map layer
     void update_select_actions();                // category: select: grey Deselect when nothing is
 
     // ── paint (s008 m4) ────────────────────────────────────────────────────
@@ -242,7 +244,7 @@ private:
     void patch_pump();                           // category: paint: one patch preview job at a time; the landing on release
     void on_filter(core::FilterKind k);          // category: filter: Filter > ... -- the dialog, then a job
     void on_filter_last(bool dialog);            // category: filter: Last Filter (Ctrl+F) / its settings (Ctrl+Alt+F)
-    bool filter_layer_ok(const std::string& verb);   // category: filter: the primary layer takes a filter? (toasts why not)
+    bool filter_layer_ok(const std::string& verb, bool may_be_empty = false);   // category: filter: the primary layer takes a filter? (toasts why not)
     void filter_run(const core::Filter& f);      // category: filter: on m_filter_target's pixels, a job; one step
     void filter_preview_soon();                  // category: filter: the preview, a moment after the last change
     void filter_preview_stop();                  // category: filter: drop the preview and its job

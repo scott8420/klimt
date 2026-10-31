@@ -240,7 +240,7 @@ void selftest_sharpen(const Check& check) {
         // the palette's list is by hand and had missed the new three).
         std::string missing;
         for (const auto k : F::kinds())
-            for (const std::string a : {"win.filter-" + std::string(F::key(k)), "win.filter-layer-" + std::string(F::key(k))}) {
+            for (const std::string a : {"win.filter-" + std::string(F::key(k)), F::livable(k) ? "win.filter-layer-" + std::string(F::key(k)) : "win.filter-" + std::string(F::key(k))}) {   // s043 m4: Displace has no filter layer
                 bool found = false;
                 for (const auto& c : core::commands()) found = found || c.action == a;
                 if (!found) missing += a + " ";

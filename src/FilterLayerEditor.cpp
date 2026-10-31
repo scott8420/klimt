@@ -192,6 +192,46 @@ void FilterLayerEditor::rebuild() {
             choice("filter_layer.diffuse_mode", "Mode", {"Normal", "Darken Only", "Lighten Only", "Anisotropic"}, [this] { return m_f.axis; },
                    [this](int v) { m_f.axis = v; });
             break;
+        case FilterKind::Fibers: {   // s043 m3
+            row("filter_layer.variance", "Variance", 1, 64, 0, false, "", &m_f.amount);
+            row("filter_layer.strength", "Strength", 1, 64, 0, false, "", &m_f.ridges);
+            auto rb = Gtk::make_managed<Gtk::Button>("Randomize");
+            rb->set_name("filter_layer.randomize");
+            rb->set_halign(Gtk::Align::START);
+            rb->signal_clicked().connect([this] { m_f.seed = m_f.seed * 1664525u + 1013904223u; if (!m_f.seed) m_f.seed = 1; emit(); });
+            m_body.append(*rb);
+            break;
+        }
+        case FilterKind::Mosaic:   // s043 m1: Pixelate (Fragment: nothing to set)
+            row("filter_layer.cell", "Cell Size", 2, 200, 0, true, "px", &m_f.radius);
+            break;
+        case FilterKind::ColourHalftone:   // s043 m2 (Facet: nothing to set)
+            row("filter_layer.max_radius", "Max. Radius", 4, 127, 0, true, "px", &m_f.radius);
+            row("filter_layer.screen1", "Channel 1", -360, 360, 0, false, "°", &m_f.screen[0]);
+            row("filter_layer.screen2", "Channel 2", -360, 360, 0, false, "°", &m_f.screen[1]);
+            row("filter_layer.screen3", "Channel 3", -360, 360, 0, false, "°", &m_f.screen[2]);
+            break;
+        case FilterKind::Mezzotint: {
+            choice("filter_layer.mezzotint", "Type", {"Fine Dots", "Medium Dots", "Grainy Dots", "Coarse Dots", "Short Lines", "Medium Lines",
+                                                       "Long Lines", "Short Strokes", "Medium Strokes", "Long Strokes"},
+                   [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; });
+            auto rb = Gtk::make_managed<Gtk::Button>("Randomize");
+            rb->set_name("filter_layer.randomize");
+            rb->set_halign(Gtk::Align::START);
+            rb->signal_clicked().connect([this] { m_f.seed = m_f.seed * 1664525u + 1013904223u; if (!m_f.seed) m_f.seed = 1; emit(); });
+            m_body.append(*rb);
+            break;
+        }
+        case FilterKind::Crystallize:
+        case FilterKind::Pointillize: {
+            row("filter_layer.cell", "Cell Size", 3, 300, 0, true, "px", &m_f.radius);
+            auto rb = Gtk::make_managed<Gtk::Button>("Randomize");
+            rb->set_name("filter_layer.randomize");
+            rb->set_halign(Gtk::Align::START);
+            rb->signal_clicked().connect([this] { m_f.seed = m_f.seed * 1664525u + 1013904223u; if (!m_f.seed) m_f.seed = 1; emit(); });
+            m_body.append(*rb);
+            break;
+        }
         case FilterKind::Wind:
             choice("filter_layer.wind_method", "Method", {"Wind", "Blast", "Stagger"}, [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; });
             choice("filter_layer.wind_from", "Direction", {"From the Right", "From the Left"}, [this] { return m_f.from_left ? 1 : 0; },

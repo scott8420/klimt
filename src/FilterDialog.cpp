@@ -85,8 +85,13 @@ void FilterDialog::ask(const core::Filter& start, const std::string& layer) {
     m_threshold = m_f.threshold;
     m_angle = m_f.angle;
     set_title(std::string(F::label(m_f.kind)) + (m_editing ? " (live)" : "") + " -- “" + layer + "”");
-    if (kind_changed || m_rows.empty()) rebuild();
+    // s043 m4: Displace's map lists this document's layers -- built anew each time.
+    if (kind_changed || m_rows.empty() || m_f.kind == FilterKind::Displace) rebuild();
     else if (m_depth) { m_syncing = true; m_depth->set_model(depth_model()); m_syncing = false; }   // s041 m4: this document's channels
+    m_live.set_sensitive(F::livable(m_f.kind));
+    m_live.set_tooltip_text(F::livable(m_f.kind) ? "Keep the layer's pixels: the filter goes under the layer (Properties), "
+                                                   "where you can hide it, change it or reorder it later"
+                                                 : "Displace changes the pixels: its map is another layer, which a live filter can't see");
     sync();
     m_busy.set_visible(false);
     present();
@@ -225,6 +230,96 @@ void FilterDialog::rebuild() {
             l->add_css_class("dim-label");
             m_body.append(*l);
             randomize_button();
+            break;
+        }
+        case FilterKind::Displace: {   // s043 m4: Distort -- by another layer
+            row("filter.scale_h", "Horizontal Scale", -999, 999, 0, false, "%", &m_f.scale_h);
+            row("filter.scale_v", "Vertical Scale", -999, 999, 0, false, "%", &m_f.scale_v);
+            std::vector<Glib::ustring> names;
+            for (const auto& [id, name] : m_layers) names.emplace_back(name);
+            if (names.empty()) names.emplace_back("(no pixel layer)");
+            choice("filter.map", "Map", names,
+                   [this] {
+                       for (std::size_t i = 0; i < m_layers.size(); ++i) if (m_layers[i].first == m_f.map_layer) return static_cast<int>(i);
+                       return 0;
+                   },
+                   [this](int v) { if (v >= 0 && static_cast<std::size_t>(v) < m_layers.size()) m_f.map_layer = m_layers[static_cast<std::size_t>(v)].first; },
+                   "The layer whose colours move the pixels: its red across, its green down (a grey one both ways); mid grey, or clear, moves nothing");
+            choice("filter.map_fit", "Displacement Map", {"Stretch to Fit", "Tile"}, [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; },
+                   "Stretch to Fit: the map's content over the selection (or the picture); Tile: at its own size, repeated from the corner");
+            choice("filter.undefined", "Undefined Areas", {"Repeat Edge Pixels", "Wrap Around"}, [this] { return m_f.wrap ? 1 : 0; },
+                   [this](int v) { m_f.wrap = v == 1; }, "What fills in where a pixel would come from past the picture's edge");
+            auto l = Gtk::make_managed<Gtk::Label>("A white map moves the picture right and down by 128 pixels at 100 %, black left and up. "
+                                                   "It changes the pixels (no Live: the map is another layer).");
+            l->set_wrap(true);
+            l->set_xalign(0.0f);
+            l->add_css_class("dim-label");
+            m_body.append(*l);
+            break;
+        }
+        case FilterKind::Fibers: {   // s043 m3: Render
+            row("filter.variance", "Variance", 1, 64, 0, false, "", &m_f.amount);
+            row("filter.strength", "Strength", 1, 64, 0, false, "", &m_f.ridges);
+            auto l = Gtk::make_managed<Gtk::Label>("From the foreground colour to the background colour. Variance: low -- long streaks; "
+                                                   "Strength: low -- a loose weave, high -- short stringy fibres.");
+            l->set_wrap(true);
+            l->set_xalign(0.0f);
+            l->add_css_class("dim-label");
+            m_body.append(*l);
+            randomize_button();
+            break;
+        }
+        case FilterKind::Mosaic:   // s043 m1: Pixelate
+            row("filter.cell", "Cell Size", 2, 200, 0, true, "square", &m_f.radius);
+            break;
+        case FilterKind::Crystallize:
+        case FilterKind::Pointillize: {
+            row("filter.cell", "Cell Size", 3, 300, 0, true, "pixels", &m_f.radius);
+            if (m_f.kind == FilterKind::Pointillize) {
+                auto l = Gtk::make_managed<Gtk::Label>("Dots of the colour there, on the background colour.");
+                l->set_wrap(true);
+                l->set_xalign(0.0f);
+                l->add_css_class("dim-label");
+                m_body.append(*l);
+            }
+            randomize_button();   // other points
+            break;
+        }
+        case FilterKind::ColourHalftone:   // s043 m2
+            row("filter.max_radius", "Max. Radius", 4, 127, 0, true, "pixels", &m_f.radius);
+            row("filter.screen1", "Channel 1", -360, 360, 0, false, "°", &m_f.screen[0]);
+            row("filter.screen2", "Channel 2", -360, 360, 0, false, "°", &m_f.screen[1]);
+            row("filter.screen3", "Channel 3", -360, 360, 0, false, "°", &m_f.screen[2]);
+            row("filter.screen4", "Channel 4", -360, 360, 0, false, "°", &m_f.screen[3]);
+            {
+                auto l = Gtk::make_managed<Gtk::Label>("Screen angles: RGB uses channels 1 - 3 (red, green, blue), Gray channel 1; 4 is for CMYK.");
+                l->set_wrap(true);
+                l->set_xalign(0.0f);
+                l->add_css_class("dim-label");
+                m_body.append(*l);
+            }
+            break;
+        case FilterKind::Mezzotint:
+            choice("filter.mezzotint", "Type", {"Fine Dots", "Medium Dots", "Grainy Dots", "Coarse Dots", "Short Lines", "Medium Lines",
+                                                 "Long Lines", "Short Strokes", "Medium Strokes", "Long Strokes"},
+                   [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; },
+                   "Each channel inked fully or not at all, against a random pattern -- a mezzotint print");
+            randomize_button();
+            break;
+        case FilterKind::Facet: {
+            auto l = Gtk::make_managed<Gtk::Label>("No settings: similar colours clumped into flat blocks -- hand-painted.");
+            l->set_wrap(true);
+            l->set_xalign(0.0f);
+            l->add_css_class("dim-label");
+            m_body.append(*l);
+            break;
+        }
+        case FilterKind::Fragment: {
+            auto l = Gtk::make_managed<Gtk::Label>("No settings: four copies of the pixels, 4 pixels apart, averaged -- a shaken camera.");
+            l->set_wrap(true);
+            l->set_xalign(0.0f);
+            l->add_css_class("dim-label");
+            m_body.append(*l);
             break;
         }
         case FilterKind::Diffuse:   // s042 m2

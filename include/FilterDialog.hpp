@@ -33,7 +33,7 @@ public:
     // instead of changing the pixels; remembered by the Shell. `editing`: the
     // dialog edits a live filter already there (no Live box: it is live).
     void set_live(bool live, bool editing);
-    bool live() const { return m_editing || m_live.get_active(); }
+    bool live() const { return m_editing || (m_live.get_active() && core::filter::livable(m_f.kind)); }   // s043 m4: never Displace
     bool editing() const { return m_editing; }
     bool preview() const { return m_preview.get_active(); }
     const core::Filter& value() const { return m_f; }
@@ -42,6 +42,8 @@ public:
     void set_has_mask(bool on) { m_has_mask = on; }
     // s041 m4: the document's saved channels (id, name) -- Lens Blur's Source lists them.
     void set_channels(std::vector<std::pair<std::string, std::string>> ch) { m_channels = std::move(ch); }
+    // s043 m4: the document's pixel layers (id, name), top first -- Displace's map lists them.
+    void set_layers(std::vector<std::pair<std::string, std::string>> ls) { m_layers = std::move(ls); }
     // s039 m2: SET FOCAL POINT -- the button armed (the dialog lets the canvas
     // have a click) or not; the Shell answers with the depth there (0 .. 1).
     sigc::signal<void(bool)>& signal_focal_pick() { return m_focal_signal; }
@@ -97,6 +99,7 @@ private:
     std::vector<Gtk::Widget*> m_depth_only;            // the rows that need a source
     bool                      m_has_mask = false;
     std::vector<std::pair<std::string, std::string>> m_channels;   // s041 m4
+    std::vector<std::pair<std::string, std::string>> m_layers;     // s043 m4
     Glib::RefPtr<Gtk::StringList> depth_model() const;
     std::vector<Row>     m_rows;
     Gtk::CheckButton*    m_gauss = nullptr;

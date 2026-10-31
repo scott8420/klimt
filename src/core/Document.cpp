@@ -528,7 +528,7 @@ bool add_path_stroke(DocJournal& j, Document& d, const Id& id, const path::Strok
 // s030: a filter layer, with its mask, as one step.
 Id add_filter_layer(DocJournal& j, Document& d, const Filter& f_in, const Id& above) {
     const Filter f = filter::normalised(f_in);
-    if (f.kind == FilterKind::None) return {};
+    if (!filter::livable(f.kind)) return {};   // s043 m4: not Displace
     const std::string base(filter::label(f.kind));
     int n = 1;
     for (const auto& [id, l] : d.snapshot())

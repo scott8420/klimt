@@ -102,6 +102,7 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["define-pattern"] = add_action("define-pattern", [this] { on_define_pattern(); });
     // s030: a new filter layer (Shell_filter.cpp).
     for (const auto k : core::filter::kinds())
+        if (core::filter::livable(k))   // s043 m4: not Displace (its map is another layer)
         m_layer_acts["filter-layer-" + std::string(core::filter::key(k))] =
             add_action("filter-layer-" + std::string(core::filter::key(k)), [this, k] { on_filter_layer_new(k); });
     // s014: the Filter menu (Shell_filter.cpp).

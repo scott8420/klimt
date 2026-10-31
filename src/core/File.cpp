@@ -361,6 +361,7 @@ json live_json(const LiveFilter& lf) {
             {"depth_channel", f.depth_channel},   // s041 m4
             {"from_left", f.from_left},           // s042 m2
             {"c1", f.c1}, {"c2", f.c2},           // s042 m3: the clouds' colours
+            {"screen", f.screen},                 // s043 m2: Colour Halftone
             {"generators", f.generators}, {"wl_min", f.wl_min}, {"amp_min", f.amp_min},   // s042 m4: Wave
             {"ridges", f.ridges}, {"scale_h", f.scale_h}, {"scale_v", f.scale_v}, {"wrap", f.wrap}};   // s041 m3
 }
@@ -412,14 +413,13 @@ std::optional<LiveFilter> live_from(const json& j) {
     lf.f.amp_min = j.value("amp_min", lf.f.amount);
     if (j.contains("c1") && j["c1"].is_array() && j["c1"].size() == 3) for (std::size_t i = 0; i < 3; ++i) lf.f.c1[i] = j["c1"][i].get<float>();   // s042 m3
     if (j.contains("c2") && j["c2"].is_array() && j["c2"].size() == 3) for (std::size_t i = 0; i < 3; ++i) lf.f.c2[i] = j["c2"][i].get<float>();
+    if (j.contains("screen") && j["screen"].is_array() && j["screen"].size() == 4) for (std::size_t i = 0; i < 4; ++i) lf.f.screen[i] = j["screen"][i].get<double>();   // s043 m2
     lf.f.scale_h = j.value("scale_h", 100.0);
     lf.f.scale_v = j.value("scale_v", 100.0);
     lf.f.wrap = j.value("wrap", false);
     const std::uint32_t seed = lf.f.seed;
     lf.f = filter::normalised(lf.f);
-    lf.f.seed = (lf.f.kind == FilterKind::AddNoise || lf.f.kind == FilterKind::LensBlur || lf.f.kind == FilterKind::Diffuse ||
-                 lf.f.kind == FilterKind::Wind || lf.f.kind == FilterKind::Clouds || lf.f.kind == FilterKind::DifferenceClouds ||
-                 lf.f.kind == FilterKind::Wave) ? seed : lf.f.seed;   // s039; s042
+    lf.f.seed = filter::seeded(lf.f.kind) ? seed : lf.f.seed;   // s039; s042; s043: one list, in core
     return lf;
 }
 

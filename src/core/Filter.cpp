@@ -47,12 +47,29 @@ constexpr Info kInfo[] = {
     {FilterKind::Wind,         "wind",          "Wind",          "Stylize"},
     {FilterKind::Clouds,       "clouds",        "Clouds",        "Render"},    // s042 m3
     {FilterKind::DifferenceClouds, "difference-clouds", "Difference Clouds", "Render"},
+    {FilterKind::Mosaic,       "mosaic",        "Mosaic",        "Pixelate"},   // s043 m1
+    {FilterKind::Crystallize,  "crystallize",   "Crystallize",   "Pixelate"},
+    {FilterKind::Pointillize,  "pointillize",   "Pointillize",   "Pixelate"},
+    {FilterKind::Fragment,     "fragment",      "Fragment",      "Pixelate"},
+    {FilterKind::ColourHalftone, "colour-halftone", "Colour Halftone", "Pixelate"},   // s043 m2
+    {FilterKind::Facet,        "facet",         "Facet",         "Pixelate"},
+    {FilterKind::Mezzotint,    "mezzotint",     "Mezzotint",     "Pixelate"},
+    {FilterKind::Fibers,       "fibers",        "Fibers",        "Render"},     // s043 m3
+    {FilterKind::Displace,     "displace",      "Displace",      "Distort"},    // s043 m4
 };
+// s043: PIXELATE -- cells anchored to the image's corner.
+bool pixelate_kind(FilterKind k) {
+    return k == FilterKind::Mosaic || k == FilterKind::Crystallize || k == FilterKind::Pointillize || k == FilterKind::Fragment ||
+           k == FilterKind::ColourHalftone || k == FilterKind::Facet || k == FilterKind::Mezzotint;   // s043 m2
+}
 bool clouds_kind(FilterKind k) { return k == FilterKind::Clouds || k == FilterKind::DifferenceClouds; }
+// s043 m3: RENDER -- made from nothing (reads no pixels), fills clear ones too.
+bool renders(FilterKind k) { return clouds_kind(k) || k == FilterKind::Fibers; }
 // s040 m4: Distort -- a map from where each pixel takes its colour.
 bool warps(FilterKind k) {
     return k == FilterKind::Twirl || k == FilterKind::Pinch || k == FilterKind::Spherize || k == FilterKind::PolarCoordinates ||
-           k == FilterKind::Ripple || k == FilterKind::Wave || k == FilterKind::ZigZag;   // s041 m3
+           k == FilterKind::Ripple || k == FilterKind::Wave || k == FilterKind::ZigZag ||   // s041 m3
+           k == FilterKind::Displace;   // s043 m4: by its map (worked in the same pass)
 }
 const Info* info(FilterKind k) {
     for (const auto& i : kInfo)
@@ -61,7 +78,7 @@ const Info* info(FilterKind k) {
 }
 
 // Reads its neighbours (all but Add Noise).
-bool reads(FilterKind k) { return k != FilterKind::None && k != FilterKind::AddNoise && !clouds_kind(k); }   // s042 m3: nor the clouds
+bool reads(FilterKind k) { return k != FilterKind::None && k != FilterKind::AddNoise && !renders(k); }   // s042 m3: nor the clouds (s043: nor Fibers)
 // Its result IS the worked buffer (a blur, the median) -- not a difference
 // from it (Unsharp Mask, High Pass).
 bool replaces(FilterKind k) {
@@ -79,7 +96,7 @@ bool ranked(FilterKind k) {
 bool custom(FilterKind k) {
     return k == FilterKind::SmartSharpen || k == FilterKind::DustScratches || k == FilterKind::ReduceNoise ||
            k == FilterKind::FindEdges || k == FilterKind::Emboss || k == FilterKind::Solarize ||   // s042: Stylize
-           k == FilterKind::Diffuse || k == FilterKind::Wind;
+           k == FilterKind::Diffuse || k == FilterKind::Wind || pixelate_kind(k);   // s043
 }
 bool stylize_kind(FilterKind k) { return k == FilterKind::FindEdges || k == FilterKind::Emboss || k == FilterKind::Solarize; }
 // The Gaussian under Gaussian Blur, Unsharp Mask and High Pass.
@@ -976,6 +993,208 @@ double place_hash(int x, int y, std::uint32_t seed, std::uint32_t salt) {
     return static_cast<double>(h >> 8) / 16777216.0;
 }
 
+// s043: the cell's point (image pixels), somewhere in its middle 80 %.
+Point2 point_of(int i, int j, double s, std::uint32_t seed) {
+    return {(i + 0.1 + 0.8 * place_hash(i, j, seed, 101)) * s, (j + 0.1 + 0.8 * place_hash(i, j, seed, 202)) * s};
+}
+
+// s043 m1: PIXELATE over the band's own pixels -- straight colour into `out`
+// (alpha kept by the write-out). (ox, oy): the buffer's place in the image;
+// the cells are the image's, so a cell is the same whichever band works it.
+void pixelate(const std::vector<float>& buf, std::vector<float>& out, int W, int H, int C, int cc, bool has_a, const Rect& b,
+              int ox, int oy, const Filter& f, const std::function<bool()>& stop) {
+    const auto at = [&](int x, int y) {
+        return buf.data() + (static_cast<std::size_t>(std::clamp(y, 0, H - 1)) * static_cast<std::size_t>(W) + static_cast<std::size_t>(std::clamp(x, 0, W - 1))) *
+                                static_cast<std::size_t>(C);
+    };
+    const auto put = [&](int x, int y) {
+        return out.data() + (static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)) * static_cast<std::size_t>(C);
+    };
+    // The mean straight colour of the buffer's [x0, x1) x [y0, y1) (clipped to it).
+    using Col = std::array<float, 4>;
+    const auto mean = [&](int x0, int y0, int x1, int y1) {
+        x0 = std::max(x0, 0); y0 = std::max(y0, 0); x1 = std::min(x1, W); y1 = std::min(y1, H);
+        std::array<double, 5> sum{};
+        for (int y = y0; y < y1; ++y)
+            for (int x = x0; x < x1; ++x) {
+                const float* p = at(x, y);
+                for (int c = 0; c < cc; ++c) sum[static_cast<std::size_t>(c)] += p[c];
+                sum[4] += has_a ? p[cc] : 1.f;
+            }
+        Col m{};
+        if (sum[4] > 1e-9)
+            for (int c = 0; c < cc; ++c) m[static_cast<std::size_t>(c)] = static_cast<float>(sum[static_cast<std::size_t>(c)] / sum[4]);
+        return m;
+    };
+    if (f.kind == FilterKind::Mezzotint) {   // s043 m2: each channel inked (1) or not (0) against the type's pattern
+        for (int y = b.y; y < b.y + b.h; ++y) {
+            if ((y & 15) == 0 && stop && stop()) return;
+            for (int x = b.x; x < b.x + b.w; ++x) {
+                const float* p = at(x, y);
+                const float a = has_a ? p[cc] : 1.f;
+                float* o = put(x, y);
+                for (int c = 0; c < cc; ++c) {
+                    const float v = a > 1e-6f ? p[c] / a : 0.f;
+                    o[c] = v > mezzotint_at(f.axis, x + ox, y + oy, c, f.seed) ? 1.f : 0.f;
+                }
+            }
+        }
+        return;
+    }
+    if (f.kind == FilterKind::Facet) {   // s043 m2: Kuwahara -- the mean of the calmest of four 4 x 4 quarters round the pixel
+        constexpr int kR = 3;
+        for (int y = b.y; y < b.y + b.h; ++y) {
+            if ((y & 15) == 0 && stop && stop()) return;
+            for (int x = b.x; x < b.x + b.w; ++x) {
+                double best = 1e300;
+                std::array<double, 5> pick{};
+                for (int q = 0; q < 4; ++q) {
+                    const int qx = (q & 1) ? x : x - kR, qy = (q & 2) ? y : y - kR;
+                    std::array<double, 5> sum{};
+                    double lum2 = 0, lum1 = 0;
+                    for (int yy = qy; yy <= qy + kR; ++yy)
+                        for (int xx = qx; xx <= qx + kR; ++xx) {
+                            const float* p = at(xx, yy);
+                            const float a = has_a ? p[cc] : 1.f;
+                            for (int c = 0; c < cc; ++c) sum[static_cast<std::size_t>(c)] += p[c];
+                            sum[4] += a;
+                            const double l = a > 1e-6f ? (cc >= 3 ? (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) / a : p[0] / a) : 0.0;
+                            lum1 += l; lum2 += l * l;
+                        }
+                    constexpr double n = (kR + 1) * (kR + 1);
+                    const double var = lum2 / n - (lum1 / n) * (lum1 / n);
+                    if (var < best) { best = var; pick = sum; }
+                }
+                float* o = put(x, y);
+                for (int c = 0; c < cc; ++c) o[c] = pick[4] > 1e-9 ? static_cast<float>(pick[static_cast<std::size_t>(c)] / pick[4]) : 0.f;
+            }
+        }
+        return;
+    }
+    if (f.kind == FilterKind::ColourHalftone) {   // s043 m2: each channel a screen of dots at its angle
+        constexpr double kPi = 3.14159265358979323846;
+        const double R = std::max(4.0, f.radius), g = R * std::sqrt(2.0);   // the cell: the biggest dot reaches its corners
+        const auto sample = [&](double X, double Y, int c) {   // straight, nearest pixel (image coordinates)
+            const float* p = at(static_cast<int>(std::floor(X)) - ox, static_cast<int>(std::floor(Y)) - oy);
+            const float a = has_a ? p[cc] : 1.f;
+            return a > 1e-6f ? std::clamp(p[c] / a, 0.f, 1.f) : 0.f;
+        };
+        for (int c = 0; c < cc; ++c) {
+            const double th = f.screen[static_cast<std::size_t>(std::min(c, 3))] * kPi / 180, cs = std::cos(th), sn = std::sin(th);
+            for (int y = b.y; y < b.y + b.h; ++y) {
+                if ((y & 15) == 0 && stop && stop()) return;
+                const double Y = y + oy + 0.5;
+                for (int x = b.x; x < b.x + b.w; ++x) {
+                    const double X = x + ox + 0.5;
+                    // The screen's coordinates; the cell's centre back in the image.
+                    const double u = X * cs + Y * sn, v = -X * sn + Y * cs;
+                    const double cu = (std::floor(u / g) + 0.5) * g, cv = (std::floor(v / g) + 0.5) * g;
+                    const double CX = cu * cs - cv * sn, CY = cu * sn + cv * cs;
+                    // The cell's tone: nine samples across its middle.
+                    double tone = 0;
+                    for (int sy = -1; sy <= 1; ++sy)
+                        for (int sx = -1; sx <= 1; ++sx) {
+                            const double du = sx * g / 3, dv = sy * g / 3;
+                            tone += sample(CX + du * cs - dv * sn, CY + du * sn + dv * cs, c);
+                        }
+                    tone /= 9;
+                    const double rho = halftone_radius(tone) * g;
+                    const double d = std::hypot(u - cu, v - cv);
+                    put(x, y)[c] = static_cast<float>(tone <= 0 ? 0.0 : tone >= 1 ? 1.0 : std::clamp(rho - d + 0.5, 0.0, 1.0));
+                }
+            }
+        }
+        return;
+    }
+    if (f.kind == FilterKind::Fragment) {   // four copies 4 px apart (diagonally), averaged
+        constexpr int kOff[4][2] = {{-4, -4}, {4, -4}, {-4, 4}, {4, 4}};
+        for (int y = b.y; y < b.y + b.h; ++y) {
+            if ((y & 15) == 0 && stop && stop()) return;
+            for (int x = b.x; x < b.x + b.w; ++x) {
+                std::array<double, 5> sum{};
+                for (const auto& o : kOff) {
+                    const float* p = at(x + o[0], y + o[1]);
+                    for (int c = 0; c < cc; ++c) sum[static_cast<std::size_t>(c)] += p[c];
+                    sum[4] += has_a ? p[cc] : 1.f;
+                }
+                float* o = put(x, y);
+                for (int c = 0; c < cc; ++c) o[c] = sum[4] > 1e-9 ? static_cast<float>(sum[static_cast<std::size_t>(c)] / sum[4]) : 0.f;
+            }
+        }
+        return;
+    }
+    const double s = std::max(1.0, f.radius);
+    const auto floor_div = [](double v, double d) { return static_cast<int>(std::floor(v / d)); };
+    if (f.kind == FilterKind::Mosaic) {   // squares of their average
+        const int S = static_cast<int>(s);
+        for (int j = floor_div(b.y + oy, S); j * S < b.y + b.h + oy; ++j) {
+            if (stop && stop()) return;
+            for (int i = floor_div(b.x + ox, S); i * S < b.x + b.w + ox; ++i) {
+                const int x0 = i * S - ox, y0 = j * S - oy;
+                const Col m = mean(x0, y0, x0 + S, y0 + S);
+                for (int y = std::max(y0, b.y); y < std::min(y0 + S, b.y + b.h); ++y)
+                    for (int x = std::max(x0, b.x); x < std::min(x0 + S, b.x + b.w); ++x) {
+                        float* o = put(x, y);
+                        for (int c = 0; c < cc; ++c) o[c] = m[static_cast<std::size_t>(c)];
+                    }
+            }
+        }
+        return;
+    }
+    // Crystallize, Pointillize: a point in each grid cell; a pixel goes with
+    // the nearest (of the 3 x 3 cells round it). Each point's colour: the mean
+    // of the square of half `s` / 4 round it.
+    const int i0 = floor_div(b.x + ox, s) - 2, i1 = floor_div(b.x + b.w - 1 + ox, s) + 2;
+    const int j0 = floor_div(b.y + oy, s) - 2, j1 = floor_div(b.y + b.h - 1 + oy, s) + 2;
+    const int ni = i1 - i0 + 1, nj = j1 - j0 + 1;
+    struct Pt { double x, y; Col c; double r; };
+    std::vector<Pt> pts(static_cast<std::size_t>(ni) * static_cast<std::size_t>(nj));
+    const int half = std::max(1, static_cast<int>(s / 4));
+    const bool dots = f.kind == FilterKind::Pointillize;
+    for (int j = j0; j <= j1; ++j)
+        for (int i = i0; i <= i1; ++i) {
+            Pt& p = pts[static_cast<std::size_t>(j - j0) * static_cast<std::size_t>(ni) + static_cast<std::size_t>(i - i0)];
+            const Point2 q = point_of(i, j, s, f.seed);
+            p.x = q.x; p.y = q.y;
+            // (A point past the picture's edge takes its colour from the edge.)
+            const int bx = std::clamp(static_cast<int>(std::floor(q.x)) - ox, 0, W - 1), by = std::clamp(static_cast<int>(std::floor(q.y)) - oy, 0, H - 1);
+            p.c = mean(bx - half, by - half, bx + half + 1, by + half + 1);
+            if (dots) {   // a dot a little smaller or bigger than half the cell; its colour a touch varied
+                p.r = s * (0.42 + 0.22 * place_hash(i, j, f.seed, 303));
+                const float v = static_cast<float>(0.92 + 0.16 * place_hash(i, j, f.seed, 404));
+                for (int c = 0; c < cc; ++c) p.c[static_cast<std::size_t>(c)] = std::clamp(p.c[static_cast<std::size_t>(c)] * v, 0.f, 1.f);
+            }
+        }
+    Col bg{};
+    if (dots) {
+        if (cc >= 3) for (int c = 0; c < 3; ++c) bg[static_cast<std::size_t>(c)] = f.c2[static_cast<std::size_t>(c)];
+        else bg[0] = 0.299f * f.c2[0] + 0.587f * f.c2[1] + 0.114f * f.c2[2];
+    }
+    for (int y = b.y; y < b.y + b.h; ++y) {
+        if ((y & 15) == 0 && stop && stop()) return;
+        const double Y = y + oy + 0.5;
+        const int gj = floor_div(Y, s);
+        for (int x = b.x; x < b.x + b.w; ++x) {
+            const double X = x + ox + 0.5;
+            const int gi = floor_div(X, s);
+            const Pt* best = nullptr;
+            double bd = 1e300;
+            for (int j = gj - 1; j <= gj + 1; ++j)
+                for (int i = gi - 1; i <= gi + 1; ++i) {
+                    const Pt& p = pts[static_cast<std::size_t>(j - j0) * static_cast<std::size_t>(ni) + static_cast<std::size_t>(i - i0)];
+                    const double d = (p.x - X) * (p.x - X) + (p.y - Y) * (p.y - Y);
+                    if (d < bd) { bd = d; best = &p; }
+                }
+            float* o = put(x, y);
+            if (!dots) { for (int c = 0; c < cc; ++c) o[c] = best->c[static_cast<std::size_t>(c)]; continue; }
+            // The dot over the background, its edge a pixel soft.
+            const float k = static_cast<float>(std::clamp(best->r - std::sqrt(bd) + 0.5, 0.0, 1.0));
+            for (int c = 0; c < cc; ++c)
+                o[c] = bg[static_cast<std::size_t>(c)] + (best->c[static_cast<std::size_t>(c)] - bg[static_cast<std::size_t>(c)]) * k;
+        }
+    }
+}
+
 // s042 m2: DIFFUSE and WIND over the band's own pixels -- straight colour
 // into `out`. (ox, oy): the buffer's place in the image (the hashes are of
 // the image's pixels, so the preview is the result).
@@ -1263,8 +1482,83 @@ float clouds_at(int x, int y, std::uint32_t seed) {
 bool placed(const Filter& in) {
     const Filter f = normalised(in);
     return f.kind == FilterKind::AddNoise || (f.kind == FilterKind::LensBlur && f.amount > 0) || f.kind == FilterKind::RadialBlur || warps(f.kind) ||
-           f.kind == FilterKind::Diffuse || f.kind == FilterKind::Wind || clouds_kind(f.kind);   // s042 m2: by the place's hash
+           f.kind == FilterKind::Diffuse || f.kind == FilterKind::Wind || renders(f.kind) ||   // s042 m2: by the place's hash
+           pixelate_kind(f.kind);   // s043: the image's cells
 }
+
+bool seeded(FilterKind k) {
+    return k == FilterKind::AddNoise || k == FilterKind::LensBlur || k == FilterKind::Diffuse || k == FilterKind::Wind || clouds_kind(k) ||
+           k == FilterKind::Wave || k == FilterKind::Crystallize || k == FilterKind::Pointillize || k == FilterKind::Mezzotint ||   // s043 m2
+           k == FilterKind::Fibers;
+}
+bool coloured(FilterKind k) { return renders(k) || k == FilterKind::Pointillize; }
+bool fills(FilterKind k) { return k == FilterKind::Clouds || k == FilterKind::Fibers; }
+bool livable(FilterKind k) { return k != FilterKind::Displace && k != FilterKind::None; }
+bool wants_map(const Filter& f) { return f.kind == FilterKind::Displace && !f.map_layer.empty(); }
+
+float fibers_at(int x, int y, double variance, double strength, std::uint32_t seed) {
+    const auto lattice = [&](long i, long j, int oct) {
+        std::uint32_t h = static_cast<std::uint32_t>(i) * 0x8da6b343U ^ static_cast<std::uint32_t>(j) * 0xd8163841U ^
+                          (seed * 0x27d4eb2dU + static_cast<std::uint32_t>(oct) * 0x165667b1U + 0x5f356495U);
+        h ^= h >> 13; h *= 0x5bd1e995U; h ^= h >> 15;
+        return static_cast<double>(h & 0xFFFFFF) / 16777215.0;
+    };
+    const auto fade = [](double t) { return t * t * (3 - 2 * t); };
+    // Across: a cell of 8 / strength px (finer with strength); down: 512 / variance px.
+    double sx = std::max(0.35, 8.0 / std::clamp(strength, 1.0, 64.0)), sy = 512.0 / std::clamp(variance, 1.0, 64.0);
+    double sum = 0, amp = 1, total = 0;
+    for (int oct = 0; oct < 4; ++oct, sx *= 0.5, sy *= 0.5, amp *= 0.55) {
+        const double u = x / std::max(sx, 0.35), v = y / std::max(sy, 1.0);
+        const long i = static_cast<long>(std::floor(u)), j = static_cast<long>(std::floor(v));
+        const double fx = fade(u - static_cast<double>(i)), fy = fade(v - static_cast<double>(j));
+        const double a = lattice(i, j, oct), b = lattice(i + 1, j, oct), c = lattice(i, j + 1, oct), d = lattice(i + 1, j + 1, oct);
+        sum += amp * ((a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy);
+        total += amp;
+    }
+    return static_cast<float>(std::clamp(0.5 + (sum / total - 0.5) * 1.8, 0.0, 1.0));
+}
+
+double halftone_radius(double v) {
+    constexpr double kPi = 3.14159265358979323846;
+    v = std::clamp(v, 0.0, 1.0);
+    if (v <= kPi / 4) return std::sqrt(v / kPi);   // a whole disc inside the cell
+    // Past it the disc is clipped by the cell's sides; from half a cell to the
+    // corners, the clipped area grows -- found by bisection.
+    const auto area = [&](double r) {   // a disc of radius r (in cells) clipped to the unit square round its centre
+        if (r <= 0.5) return kPi * r * r;
+        const double h = std::sqrt(std::max(0.0, r * r - 0.25));
+        const double seg = r * r * std::acos(0.5 / r) - 0.5 * h;   // one cap beyond a side
+        return std::min(1.0, kPi * r * r - 4 * seg);
+    };
+    double lo = 0.5, hi = std::sqrt(0.5);
+    for (int i = 0; i < 40; ++i) { const double m = (lo + hi) / 2; (area(m) < v ? lo : hi) = m; }
+    return (lo + hi) / 2;
+}
+
+double mezzotint_at(int type, int x, int y, int channel, std::uint32_t seed) {
+    const auto salt = static_cast<std::uint32_t>(channel * 977 + 11);
+    switch (std::clamp(type, 0, 9)) {
+        case 0: return place_hash(x, y, seed, salt);                                    // Fine Dots: each pixel
+        case 1: return place_hash(x >> 1, y >> 1, seed, salt);                          // Medium Dots: 2 x 2
+        case 2: {   // Grainy: fine on a coarse ground -- the sum of two, made even again (the triangle's CDF) so the tone holds
+            const double t = place_hash(x, y, seed, salt) + place_hash(x >> 2, y >> 2, seed, salt + 5);
+            return t <= 1 ? t * t / 2 : 1 - (2 - t) * (2 - t) / 2;
+        }
+        case 3: return place_hash(x / 3, y / 3, seed, salt);                            // Coarse Dots: 3 x 3
+        case 4: case 5: case 6: {                                                        // Lines: runs along the row
+            const int len = type == 4 ? 4 : type == 5 ? 10 : 24;
+            const int off = static_cast<int>(place_hash(0, y, seed, salt + 9) * len);   // each row's runs start elsewhere
+            return place_hash((x + off) / len, y, seed, salt);
+        }
+        default: {                                                                       // Strokes: runs on the diagonal
+            const int len = type == 7 ? 4 : type == 8 ? 10 : 24;
+            const int d = x - y;                                                         // the diagonal's index
+            const int off = static_cast<int>(place_hash(d, 0, seed, salt + 9) * len);
+            return place_hash(d, (y + off) / len, seed, salt);
+        }
+    }
+}
+Point2 cell_point(int i, int j, double cell, std::uint32_t seed) { return point_of(i, j, cell, seed); }
 
 double depth_amount(const Filter& f, double d) {
     d = std::clamp(d, 0.0, 1.0);
@@ -1292,11 +1586,14 @@ const std::vector<FilterKind>& kinds() {
     // Alphabetical within each submenu, as Photoshop's.
     static const std::vector<FilterKind> v{FilterKind::BoxBlur, FilterKind::GaussianBlur, FilterKind::LensBlur, FilterKind::MotionBlur,
                                            FilterKind::RadialBlur, FilterKind::SurfaceBlur,   // s040
+                                           FilterKind::Displace,                                                                         // s043 m4
                                            FilterKind::Pinch, FilterKind::PolarCoordinates, FilterKind::Ripple, FilterKind::Spherize,   // s040 m4,
                                            FilterKind::Twirl, FilterKind::Wave, FilterKind::ZigZag,                                    // s041 m3: Distort
                                            FilterKind::Diffuse, FilterKind::Emboss, FilterKind::FindEdges, FilterKind::Solarize,       // s042 m1: Stylize
                                            FilterKind::Wind,                                                                            // s042 m2
-                                           FilterKind::Clouds, FilterKind::DifferenceClouds,                                            // s042 m3: Render
+                                           FilterKind::Clouds, FilterKind::DifferenceClouds, FilterKind::Fibers,                        // s042 m3: Render; s043 m3
+                                           FilterKind::ColourHalftone, FilterKind::Crystallize, FilterKind::Facet, FilterKind::Fragment,   // s043: Pixelate
+                                           FilterKind::Mezzotint, FilterKind::Mosaic, FilterKind::Pointillize,
                                            FilterKind::AddNoise, FilterKind::DustScratches, FilterKind::Median, FilterKind::ReduceNoise,
                                            FilterKind::SmartSharpen, FilterKind::UnsharpMask, FilterKind::HighPass,
                                            FilterKind::Maximum, FilterKind::Minimum};
@@ -1345,6 +1642,15 @@ Filter fresh(FilterKind k) {
         case FilterKind::Emboss:       f.angle = 135; f.radius = 3; f.amount = 100; break;
         case FilterKind::Diffuse: case FilterKind::Wind: break;   // s042 m2: Normal; Wind, From the Right
         case FilterKind::Clouds: case FilterKind::DifferenceClouds: break;   // s042 m3: black to white until the Shell gives the colours
+        case FilterKind::Mosaic:       f.radius = 10; break;   // s043 m1: Photoshop's
+        case FilterKind::Crystallize:  f.radius = 10; break;
+        case FilterKind::Pointillize:  f.radius = 5; break;
+        case FilterKind::Fragment:     break;
+        case FilterKind::ColourHalftone: f.radius = 8; break;   // s043 m2: Photoshop's (screens 108, 162, 90, 45)
+        case FilterKind::Facet:        break;
+        case FilterKind::Mezzotint:    break;                   // Fine Dots
+        case FilterKind::Fibers:       f.amount = 16; f.ridges = 4; break;   // s043 m3: Photoshop's
+        case FilterKind::Displace:     f.scale_h = 10; f.scale_v = 10; break;   // s043 m4: Photoshop's (Stretch to Fit, Repeat Edge)
         case FilterKind::None: break;
     }
     return f;
@@ -1371,6 +1677,11 @@ Filter normalised(const Filter& in) {
         case FilterKind::Diffuse: case FilterKind::Wind: f.radius = 1; break;   // s042 m2
         case FilterKind::Clouds: case FilterKind::DifferenceClouds: f.radius = 1; break;   // s042 m3
         case FilterKind::Emboss: f.radius = std::round(std::clamp(f.radius, 1.0, 10.0)); break;   // its Height
+        case FilterKind::Mosaic: f.radius = std::round(std::clamp(f.radius, 2.0, 200.0)); break;   // s043 m1: the Cell Size
+        case FilterKind::Crystallize: case FilterKind::Pointillize: f.radius = std::round(std::clamp(f.radius, 3.0, 300.0)); break;
+        case FilterKind::Fragment: case FilterKind::Facet: case FilterKind::Mezzotint: case FilterKind::Fibers: f.radius = 1; break;
+        case FilterKind::Displace: f.radius = 1; break;   // s043 m4
+        case FilterKind::ColourHalftone: f.radius = std::round(std::clamp(f.radius, 4.0, 127.0)); break;   // s043 m2: the Max. Radius
         default:                     f.radius = std::round(std::clamp(f.radius, 0.1, 250.0) * 10) / 10; break;
     }
     const bool streak = f.kind == FilterKind::MotionBlur || (f.kind == FilterKind::SmartSharpen && f.remove == Remove::Motion);
@@ -1388,6 +1699,7 @@ Filter normalised(const Filter& in) {
     else if (f.kind == FilterKind::Ripple) f.amount = std::round(std::clamp(f.amount, -999.0, 999.0));   // s041 m3
     else if (f.kind == FilterKind::Wave) f.amount = std::round(std::clamp(f.amount, 1.0, 999.0));
     else if (f.kind == FilterKind::Emboss) f.amount = std::round(std::clamp(f.amount, 1.0, 500.0));   // s042 m1
+    else if (f.kind == FilterKind::Fibers) f.amount = std::round(std::clamp(f.amount, 1.0, 64.0));    // s043 m3: the Variance
     else f.amount = 0;
     if (f.kind == FilterKind::SurfaceBlur) f.threshold = std::max(f.threshold, 2);   // m4
     else if (f.kind != FilterKind::UnsharpMask && f.kind != FilterKind::DustScratches && f.kind != FilterKind::LensBlur) f.threshold = 0;
@@ -1425,25 +1737,35 @@ Filter normalised(const Filter& in) {
         f.cx = std::round(std::clamp(f.cx, 0.0, 100.0) * 10) / 10;
         f.cy = std::round(std::clamp(f.cy, 0.0, 100.0) * 10) / 10;
     } else { f.zoom = blank.zoom; f.cx = blank.cx; f.cy = blank.cy; }   // (quality: below -- Ripple's Size too)
-    f.axis = f.kind == FilterKind::Diffuse ? std::clamp(f.axis, 0, 3)   // s042 m2
+    f.axis = f.kind == FilterKind::Mezzotint ? std::clamp(f.axis, 0, 9)   // s043 m2: its Type
+           : f.kind == FilterKind::Displace ? std::clamp(f.axis, 0, 1)    // s043 m4: Stretch to Fit / Tile
+           : f.kind == FilterKind::Diffuse ? std::clamp(f.axis, 0, 3)   // s042 m2
            : (f.kind == FilterKind::Spherize || f.kind == FilterKind::Wave || f.kind == FilterKind::ZigZag || f.kind == FilterKind::Wind) ? std::clamp(f.axis, 0, 2)
            : f.kind == FilterKind::PolarCoordinates ? std::clamp(f.axis, 0, 1) : 0;   // s040 m4, s041 m3
     if (f.kind == FilterKind::Ripple) f.quality = std::clamp(f.quality, 0, 2);       // s041 m3: its Size
     else if (f.kind != FilterKind::RadialBlur) f.quality = blank.quality;
-    f.ridges = f.kind == FilterKind::ZigZag ? std::round(std::clamp(f.ridges, 1.0, 20.0)) : blank.ridges;
+    f.ridges = f.kind == FilterKind::ZigZag ? std::round(std::clamp(f.ridges, 1.0, 20.0))
+             : f.kind == FilterKind::Fibers ? std::round(std::clamp(f.ridges, 1.0, 64.0)) : blank.ridges;   // s043 m3: the Strength
     if (f.kind == FilterKind::Wave) {   // s042 m4: the generators and their ranges (min <= max)
         f.generators = std::round(std::clamp(f.generators, 1.0, 999.0));
         f.wl_min = std::round(std::clamp(f.wl_min, 2.0, f.radius));
         f.amp_min = std::round(std::clamp(f.amp_min, 1.0, f.amount));
         f.scale_h = std::round(std::clamp(f.scale_h, 0.0, 100.0));
         f.scale_v = std::round(std::clamp(f.scale_v, 0.0, 100.0));
+    } else if (f.kind == FilterKind::Displace) {   // s043 m4: its scales; Wrap Around
+        f.scale_h = std::round(std::clamp(f.scale_h, -999.0, 999.0));
+        f.scale_v = std::round(std::clamp(f.scale_v, -999.0, 999.0));
+        f.generators = blank.generators; f.wl_min = blank.wl_min; f.amp_min = blank.amp_min;
     } else { f.scale_h = blank.scale_h; f.scale_v = blank.scale_v; f.wrap = blank.wrap;
              f.generators = blank.generators; f.wl_min = blank.wl_min; f.amp_min = blank.amp_min; }
+    if (f.kind != FilterKind::Displace) f.map_layer.clear();
     if (f.kind != FilterKind::Wind) f.from_left = false;   // s042 m2
+    if (f.kind == FilterKind::ColourHalftone)   // s043 m2: the screens' angles
+        for (auto& a : f.screen) a = std::round(std::clamp(a, -360.0, 360.0));
+    else f.screen = blank.screen;
     if (f.kind != FilterKind::AddNoise && f.kind != FilterKind::LensBlur) { f.gaussian = f.mono = false; }
-    if (f.kind != FilterKind::AddNoise && f.kind != FilterKind::LensBlur && f.kind != FilterKind::Diffuse && f.kind != FilterKind::Wind &&
-        !clouds_kind(f.kind) && f.kind != FilterKind::Wave) f.seed = 1;   // s042 m2, m3, m4: they have one
-    if (clouds_kind(f.kind)) for (int i = 0; i < 3; ++i) { f.c1[static_cast<std::size_t>(i)] = std::clamp(f.c1[static_cast<std::size_t>(i)], 0.f, 1.f);
+    if (!seeded(f.kind)) f.seed = 1;   // s042 m2, m3, m4; s043: they have one
+    if (coloured(f.kind)) for (int i = 0; i < 3; ++i) { f.c1[static_cast<std::size_t>(i)] = std::clamp(f.c1[static_cast<std::size_t>(i)], 0.f, 1.f);
                                                           f.c2[static_cast<std::size_t>(i)] = std::clamp(f.c2[static_cast<std::size_t>(i)], 0.f, 1.f); }
     else { f.c1 = blank.c1; f.c2 = blank.c2; }   // s039: Lens Blur's Noise has them
     if (f.kind == FilterKind::AddNoise) f.radius = 0.1;
@@ -1466,12 +1788,21 @@ int reach(const Filter& in) {
         case FilterKind::RadialBlur:    return 1 << 16;   // s040: a streak may cross the picture -- it reads all of it
         case FilterKind::Twirl: case FilterKind::Pinch: case FilterKind::Spherize: return 1 << 16;   // s040 m4: the whole ellipse
         case FilterKind::PolarCoordinates: case FilterKind::Ripple: case FilterKind::Wave: case FilterKind::ZigZag: return 1 << 16;   // s041 m3
+        case FilterKind::Displace: return 1 << 16;   // s043 m4: anywhere the map sends it
         case FilterKind::FindEdges: return 1;   // s042 m1: the 3 x 3
         case FilterKind::Solarize:  return 0;
         case FilterKind::Emboss:    return static_cast<int>(std::ceil(f.radius / 2)) + 2;
         case FilterKind::Diffuse:   return 1;   // s042 m2
         case FilterKind::Wind:      return f.axis == 1 ? 260 : 120;   // the trail's fade to nothing (e^-5 of the longest)
         case FilterKind::Clouds: case FilterKind::DifferenceClouds: return 0;   // s042 m3
+        case FilterKind::Mosaic:    return static_cast<int>(f.radius);   // s043 m1: the whole cell
+        case FilterKind::Crystallize: case FilterKind::Pointillize:   // the points two cells off, and their squares
+            return 2 * static_cast<int>(f.radius) + static_cast<int>(f.radius / 4) + 3;
+        case FilterKind::Fragment:  return 4;
+        case FilterKind::Facet:     return 3;   // s043 m2
+        case FilterKind::Mezzotint: return 0;
+        case FilterKind::Fibers:    return 0;   // s043 m3
+        case FilterKind::ColourHalftone: return 2 * static_cast<int>(std::ceil(f.radius * std::sqrt(2.0))) + 2;   // the cell's centre and its samples
         case FilterKind::SmartSharpen: {   // s034: the kernel's reach, and the tones'
             int r = f.remove == Remove::Gaussian ? plan_of(f.radius).reach
                   : f.remove == Remove::Lens     ? static_cast<int>(std::floor(f.radius + 0.5))
@@ -1559,8 +1890,59 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                 }
             }
     };
+    // s043 m4: DISPLACE -- no map, nothing moves.
+    const pixel::TileMap* dmap = f.kind == FilterKind::Displace ? depth : nullptr;
+    if (f.kind == FilterKind::Displace && (!dmap || (f.scale_h == 0 && f.scale_v == 0))) return src;
+    Rect M{};   // the map's content (its pixels that aren't clear), in its own pixels
+    if (dmap) {
+        const auto& mf = dmap->format();
+        int x0 = dmap->width(), y0 = dmap->height(), x1 = -1, y1 = -1;
+        for (int tr = 0; tr < dmap->rows(); ++tr)
+            for (int tc = 0; tc < dmap->cols(); ++tc) {
+                if (!dmap->tile(tc, tr)) continue;
+                for (int y = tr * kTile; y < std::min((tr + 1) * kTile, dmap->height()); ++y)
+                    for (int x = tc * kTile; x < std::min((tc + 1) * kTile, dmap->width()); ++x)
+                        if (!mf.alpha || dmap->get(x, y).c[static_cast<std::size_t>(mf.colour_channels())] > 0.f) {
+                            x0 = std::min(x0, x); y0 = std::min(y0, y); x1 = std::max(x1, x); y1 = std::max(y1, y);
+                        }
+            }
+        if (x1 < 0) return src;   // a clear map moves nothing
+        M = Rect{x0, y0, x1 - x0 + 1, y1 - y0 + 1};
+    }
+    // The map at a place in its own pixels: (across, down) each -0.5 .. 0.5,
+    // over mid grey by its alpha (clear: 0).
+    const auto map_px = [&](int mx, int my) {
+        const auto& mf = dmap->format();
+        const auto p = dmap->get(std::clamp(mx, 0, dmap->width() - 1), std::clamp(my, 0, dmap->height() - 1));
+        const float a = mf.alpha ? p.c[static_cast<std::size_t>(mf.colour_channels())] : 1.f;
+        const float h = p.c[0], v = mf.colour_channels() >= 3 ? p.c[1] : p.c[0];
+        return std::array<double, 2>{(0.5 + (h - 0.5) * a) - 0.5, (0.5 + (v - 0.5) * a) - 0.5};
+    };
+    const auto map_at = [&](double x, double y) {   // image pixel centre (x, y) -> bilinear in the map
+        double mx, my;
+        if (f.axis == 1) {   // Tile: at its size, from the image's corner
+            mx = M.x + std::fmod(std::fmod(x, M.w) + M.w, M.w);
+            my = M.y + std::fmod(std::fmod(y, M.h) + M.h, M.h);
+        } else {             // Stretch to Fit: its content over the selection's bounds
+            mx = M.x + (x - whole_r.x) * M.w / whole_r.w;
+            my = M.y + (y - whole_r.y) * M.h / whole_r.h;
+        }
+        mx -= 0.5; my -= 0.5;
+        const int ix = static_cast<int>(std::floor(mx)), iy = static_cast<int>(std::floor(my));
+        const double fx = mx - ix, fy = my - iy;
+        const auto clampx = [&](int v) { return f.axis == 1 ? M.x + ((v - M.x) % M.w + M.w) % M.w : std::clamp(v, M.x, M.x + M.w - 1); };
+        const auto clampy = [&](int v) { return f.axis == 1 ? M.y + ((v - M.y) % M.h + M.h) % M.h : std::clamp(v, M.y, M.y + M.h - 1); };
+        const auto a = map_px(clampx(ix), clampy(iy)), b = map_px(clampx(ix + 1), clampy(iy)), c = map_px(clampx(ix), clampy(iy + 1)),
+                   d = map_px(clampx(ix + 1), clampy(iy + 1));
+        std::array<double, 2> o{};
+        for (int k = 0; k < 2; ++k)
+            o[static_cast<std::size_t>(k)] = (a[static_cast<std::size_t>(k)] * (1 - fx) + b[static_cast<std::size_t>(k)] * fx) * (1 - fy) +
+                                             (c[static_cast<std::size_t>(k)] * (1 - fx) + d[static_cast<std::size_t>(k)] * fx) * fy;
+        return o;
+    };
     if (warps(f.kind)) {   // s040 m4: DISTORT -- each pixel of r read through the map, bilinear
-        G = Rect{whole_r.x - 2, whole_r.y - 2, whole_r.w + 4, whole_r.h + 4}.intersect({0, 0, IW, IH});
+        G = f.kind == FilterKind::Displace ? Rect{0, 0, IW, IH}   // s043 m4: from anywhere in the picture
+                                           : Rect{whole_r.x - 2, whole_r.y - 2, whole_r.w + 4, whole_r.h + 4}.intersect({0, 0, IW, IH});
         load_g();
         std::vector<float> res = gbuf;
         const double ex = whole_r.x + whole_r.w / 2.0, ey = whole_r.y + whole_r.h / 2.0, rx = whole_r.w / 2.0, ry = whole_r.h / 2.0;
@@ -1571,7 +1953,12 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                 if ((y & 15) == 0 && stop()) { quit = true; return; }
                 for (int x = r.x; x < r.x + r.w; ++x) {
                     double sx = 0, sy = 0;
-                    if (!warp_source(f, ex, ey, rx, ry, x + 0.5, y + 0.5, sx, sy)) continue;
+                    if (dmap) {   // s043 m4: the picture moved by the map -- white right / down, black left / up (it reads from the other way)
+                        const auto m = map_at(x + 0.5, y + 0.5);
+                        sx = x + 0.5 - m[0] * 256 * f.scale_h / 100;
+                        sy = y + 0.5 - m[1] * 256 * f.scale_v / 100;
+                        if (f.wrap) { sx = std::fmod(std::fmod(sx, IW) + IW, IW); sy = std::fmod(std::fmod(sy, IH) + IH, IH); }
+                    } else if (!warp_source(f, ex, ey, rx, ry, x + 0.5, y + 0.5, sx, sy)) continue;
                     const double bx = std::clamp(sx - 0.5 - G.x, 0.0, G.w - 1.0), by = std::clamp(sy - 0.5 - G.y, 0.0, G.h - 1.0);
                     const int x0 = static_cast<int>(bx), y0 = static_cast<int>(by);
                     const int x1 = std::min(x0 + 1, G.w - 1), y1 = std::min(y0 + 1, G.h - 1);
@@ -1626,6 +2013,7 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                 const Rect own{b.x - R.x, b.y - R.y, b.w, b.h};
                 if (stylize_kind(f.kind)) stylize(buf, out, R.w, R.h, C, cc, has_a, own, f, stop);   // s042
                 else if (f.kind == FilterKind::Diffuse || f.kind == FilterKind::Wind) weather(buf, out, R.w, R.h, C, cc, has_a, own, R.x, R.y, f, stop);
+                else if (pixelate_kind(f.kind)) pixelate(buf, out, R.w, R.h, C, cc, has_a, own, R.x, R.y, f, stop);   // s043
                 else if (f.kind == FilterKind::SmartSharpen) smart(buf, out, R.w, R.h, C, cc, has_a, own, f, stop);
                 else if (f.kind == FilterKind::DustScratches) dust(buf, out, R.w, R.h, C, cc, has_a, own, f, bins, clamp01, stop);
                 else reduce(buf, out, R.w, R.h, C, cc, has_a, own, f, stop);
@@ -1719,9 +2107,9 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                                 n.c[static_cast<std::size_t>(c)] = clamp01 ? std::clamp(v, 0.f, 1.f) : std::max(v, 0.f);
                             }
                         }
-                    } else if (clouds_kind(f.kind)) {   // s042 m3: CLOUDS -- they fill, clear pixels too (unless the transparency is locked)
-                        const float v = clouds_at(x, y, f.seed);
-                        if (f.kind == FilterKind::Clouds) {
+                    } else if (renders(f.kind)) {   // s042 m3: CLOUDS -- they fill, clear pixels too (unless the transparency is locked)
+                        const float v = f.kind == FilterKind::Fibers ? fibers_at(x, y, f.amount, f.ridges, f.seed) : clouds_at(x, y, f.seed);   // s043 m3
+                        if (f.kind != FilterKind::DifferenceClouds) {
                             if (has_a && keep_alpha && oa <= 0.f) continue;
                             for (int c = 0; c < cc; ++c) {
                                 const auto ci = static_cast<std::size_t>(std::min(c, 2));

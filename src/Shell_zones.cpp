@@ -418,7 +418,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     again->append("Last Filter's Settings…", "win.filter-last-dialog");
     filt->append_section(again);
     auto groups = Gio::Menu::create();
-    for (const char* g : {"Blur", "Distort", "Noise", "Sharpen", "Render", "Stylize", "Other"}) {
+    for (const char* g : {"Blur", "Distort", "Noise", "Pixelate", "Render", "Sharpen", "Stylize", "Other"}) {
         auto gm = Gio::Menu::create();
         for (const auto k : core::filter::kinds())
             if (core::filter::group(k) == g)

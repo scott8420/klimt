@@ -131,12 +131,13 @@ void Shell::update_layer_actions() {
             on(("adjust-apply-" + key).c_str(), img && pixel_layer && pl->pixels);
             on(("adjust-new-" + key).c_str(), img);
         for (const auto fk : core::filter::kinds())   // s030
-            on(("filter-layer-" + std::string(core::filter::key(fk))).c_str(), img && m_doc.image().format.mode == pixel::Mode::RGB);
+            if (core::filter::livable(fk)) on(("filter-layer-" + std::string(core::filter::key(fk))).c_str(), img && m_doc.image().format.mode == pixel::Mode::RGB);
         }
         // s014: the Filter menu wants a pixel layer with pixels (Last Filter: one run before).
         const bool filterable = img && pixel_layer && pl->pixels;
-        for (const auto k : core::filter::kinds()) on(("filter-" + std::string(core::filter::key(k))).c_str(), filterable);
-        on("filter-last", filterable && m_last_filter);
+        for (const auto k : core::filter::kinds())   // s043: Clouds and Fibers fill an empty layer too
+            on(("filter-" + std::string(core::filter::key(k))).c_str(), filterable || (img && pixel_layer && core::filter::fills(k)));
+        on("filter-last", m_last_filter && (filterable || (img && pixel_layer && core::filter::fills(m_last_filter->kind))));
         // s019: a pixel layer takes styles; Paste wants something copied.
         // s024: groups take styles too (Rasterize: pixel layers only).
         const bool styleable = pixel_layer || (pl && pl->kind == core::Kind::Group);
@@ -144,7 +145,7 @@ void Shell::update_layer_actions() {
             on(v, img && styleable);
         on("style-rasterize", img && pixel_layer);
         on("style-paste", img && styleable && m_style_clip);
-        on("filter-last-dialog", filterable && m_last_filter);
+        on("filter-last-dialog", m_last_filter && (filterable || (img && pixel_layer && core::filter::fills(m_last_filter->kind))));
     }
     on("layer-duplicate", any);
     on("layer-group", any);

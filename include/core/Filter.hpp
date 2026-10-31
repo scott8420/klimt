@@ -34,7 +34,11 @@ enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass
                                        PolarCoordinates, Ripple, Wave, ZigZag,   // s041 m3
                                        FindEdges, Emboss, Solarize,       // s042 m1: Stylize
                                        Diffuse, Wind,                     // s042 m2
-                                       Clouds, DifferenceClouds };        // s042 m3: Render
+                                       Clouds, DifferenceClouds,          // s042 m3: Render
+                                       Mosaic, Crystallize, Pointillize, Fragment,   // s043 m1: Pixelate
+                                       ColourHalftone, Facet, Mezzotint,             // s043 m2
+                                       Fibers,                                       // s043 m3: Render
+                                       Displace };                                   // s043 m4: Distort
 
 // s034: what Smart Sharpen takes away -- the blur it undoes.
 enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
@@ -142,6 +146,31 @@ struct Filter {
     double generators = 1, wl_min = 120, amp_min = 35;
     double scale_h = 100, scale_v = 100;
     bool wrap = false;
+    // s043 -- PIXELATE, its cells anchored to the image's top-left corner (so
+    // the preview is the result, and a live one is made whole). Mosaic:
+    // `radius` the Cell Size 2 .. 200 px (squares of their average).
+    // Crystallize: `radius` the Cell Size 3 .. 300 (polygons round scattered
+    // points, each its point's colour); Pointillize: `radius` 3 .. 300, dots
+    // of the colour there on `c2` (the background colour); both `seed`.
+    // Fragment: no settings (four copies, 4 px apart, averaged).
+    // s043 m2 -- Colour Halftone: `radius` the Max. Radius 4 .. 127 px,
+    // `screen` each channel's screen angle (RGB: 1 .. 3; Gray: 1). Facet: no
+    // settings. Mezzotint: `axis` the Type 0 .. 9 (Fine / Medium / Grainy /
+    // Coarse Dots, Short / Medium / Long Lines, Short / Medium / Long
+    // Strokes); `seed`.
+    std::array<double, 4> screen{108, 162, 90, 45};
+    // s043 m3 -- RENDER > Fibers: `amount` the Variance 1 .. 64 (how soon a
+    // fibre's colour changes along it -- low: long streaks), `ridges` the
+    // Strength 1 .. 64 (how fine across -- low: a loose weave, high: short
+    // stringy fibres); from `c1` to `c2`, as Clouds; `seed`.
+    // s043 m4 -- DISTORT > Displace: `scale_h` / `scale_v` the Horizontal /
+    // Vertical Scale -999 .. 999 % (100 %: a map's white or black moves a
+    // pixel 128 px); `map_layer` the pixel layer that is the map (its red
+    // moves across, its green down; a Gray one both; mid grey, or clear, not
+    // at all); `axis` the Displacement Map 0 Stretch to Fit (the map's
+    // content over the selection's bounds), 1 Tile (at its size, from the
+    // image's corner); `wrap` Wrap Around (else Repeat Edge Pixels).
+    std::string map_layer;
     bool operator==(const Filter&) const = default;
 };
 
@@ -208,6 +237,37 @@ bool placed(const Filter& f);
 // s042 m3: the clouds' value at an image pixel, 0 .. 1 (fractal value noise,
 // 8 octaves from 256 px down; the seed picks the pattern).
 float clouds_at(int x, int y, std::uint32_t seed);
+// s043: it has a pattern of its own (`seed` kept, Randomize offered) --
+// Add Noise, Lens Blur's Noise, Diffuse, Wind, the clouds, Wave, Crystallize,
+// Pointillize, Mezzotint. A file keeps its seed.
+bool seeded(FilterKind k);
+// s043: it takes the rail's colours (`c1` / `c2`) -- the clouds, Pointillize.
+bool coloured(FilterKind k);
+// s043 m4: it can live on a layer (a live filter, a filter layer) -- all but
+// Displace, whose map is another layer the live stack can't see.
+bool livable(FilterKind k);
+// s043: it makes its own pixels, so an EMPTY layer takes it -- Clouds, Fibers
+// (Difference Clouds needs something there).
+bool fills(FilterKind k);
+// s043 m4: Displace wants its map passed in (`depth` below: the map layer's
+// pixels).
+bool wants_map(const Filter& f);
+// s043: Crystallize's / Pointillize's point for the grid cell (i, j) of
+// `cell` px, in image pixels (somewhere inside that cell, by the seed).
+struct Point2 { double x, y; };
+Point2 cell_point(int i, int j, double cell, std::uint32_t seed);
+// s043 m2: Colour Halftone -- how far from its cell's centre a channel of
+// value v (0 .. 1) inks, in cells: the dot whose area (clipped to the
+// square cell) is v of it -- 0 at 0, half a cell at pi/4, the corners
+// (sqrt(2)/2) at 1. For the selftest too.
+double halftone_radius(double v);
+// s043 m2: Mezzotint's threshold for a channel at an image pixel, [0, 1) --
+// the type's pattern (dots, lines, strokes); the channel is inked where its
+// value is above it.
+double mezzotint_at(int type, int x, int y, int channel, std::uint32_t seed);
+// s043 m3: the fibres' value at an image pixel, 0 .. 1 (value noise stretched
+// down the picture by the variance, fine across by the strength).
+float fibers_at(int x, int y, double variance, double strength, std::uint32_t seed);
 
 // The 1-D blur Gaussian Blur, Unsharp Mask and High Pass share, along a line of n samples with
 // stride `stride` floats (edges clamp): sigma < 3 an exact Gaussian kernel,
@@ -230,6 +290,7 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
 // what it hides, as Document's). nullptr with that source: the blur is even
 // (as None). Transparency reads `src`'s own alpha. s041 m4: the Channel
 // source -- the channel's saved selection (stored as what is selected).
+// s043 m4: Displace -- the map layer's pixels (nullptr: nothing moves).
 }  // namespace filter
 
 }  // namespace klimt::core

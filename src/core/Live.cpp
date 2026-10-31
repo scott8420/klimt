@@ -765,7 +765,7 @@ bool set_filter_mask(DocJournal& j, Document& d, const Id& id, std::shared_ptr<c
 
 bool add_live(DocJournal& j, Document& d, const Id& id, const Filter& f) {
     auto l = stack_layer(d, id);
-    if (!l || f.kind == FilterKind::None) return false;
+    if (!l || !filter::livable(f.kind)) return false;   // s043 m4: not Displace
     l->filters.push_back({filter::normalised(f), true});
     return j.run(std::string(filter::label(f.kind)) + " (live) on “" + l->name + "”", {id}, [&] { d.put(id, *l); });
 }

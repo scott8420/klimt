@@ -87,6 +87,7 @@ const std::vector<Command>& commands() {
             {"Lens Blur", "Filter", "win.filter-lens-blur", "", "filter blur bokeh depth of field aperture iris blades highlights camera", ""},   // s037
             {"Radial Blur", "Filter", "win.filter-radial-blur", "", "filter blur spin zoom rotate wheel speed burst centre center motion", ""},   // s040
             {"Twirl", "Filter", "win.filter-twirl", "", "filter distort swirl whirl spiral rotate", ""},   // s040 m4
+            {"Displace", "Filter", "win.filter-displace", "", "filter distort displace displacement map texture warp layer", ""},   // s043 m4
             {"Pinch", "Filter", "win.filter-pinch", "", "filter distort squeeze bulge shrink", ""},
             {"Spherize", "Filter", "win.filter-spherize", "", "filter distort sphere bulge fisheye lens dent", ""},
             {"Polar Coordinates", "Filter", "win.filter-polar-coordinates", "", "filter distort polar rectangular circle tiny planet unwrap", ""},   // s041 m3
@@ -100,6 +101,14 @@ const std::vector<Command>& commands() {
             {"Wind", "Filter", "win.filter-wind", "", "filter stylize wind blast stagger streaks speed", ""},
             {"Clouds", "Filter", "win.filter-clouds", "", "filter render clouds noise fractal smoke sky texture", ""},   // s042 m3
             {"Difference Clouds", "Filter", "win.filter-difference-clouds", "", "filter render clouds difference marble texture", ""},
+            {"Fibers", "Filter", "win.filter-fibers", "", "filter render fibers fibres fabric wood grain hair texture", ""},   // s043 m3
+            {"Mosaic", "Filter", "win.filter-mosaic", "", "filter pixelate mosaic blocks pixels squares censor", ""},   // s043 m1
+            {"Crystallize", "Filter", "win.filter-crystallize", "", "filter pixelate crystallize polygons cells voronoi stained glass", ""},
+            {"Pointillize", "Filter", "win.filter-pointillize", "", "filter pixelate pointillize dots seurat painting", ""},
+            {"Colour Halftone", "Filter", "win.filter-colour-halftone", "", "filter pixelate color colour halftone dots screen print comic", ""},   // s043 m2
+            {"Facet", "Filter", "win.filter-facet", "", "filter pixelate facet blocks painted clump kuwahara", ""},
+            {"Mezzotint", "Filter", "win.filter-mezzotint", "", "filter pixelate mezzotint dots lines strokes print grain", ""},
+            {"Fragment", "Filter", "win.filter-fragment", "", "filter pixelate fragment shake double vision copies", ""},
             {"Median", "Filter", "win.filter-median", "", "filter noise despeckle dust remove smooth", ""},
             // s034
             {"Smart Sharpen", "Filter", "win.filter-smart-sharpen", "", "filter sharpen crisp detail lens deblur focus halo", ""},
@@ -131,6 +140,14 @@ const std::vector<Command>& commands() {
             {"New Filter Layer: Wind", "Layer", "win.filter-layer-wind", "", "filter layer live non-destructive stylize wind", ""},
             {"New Filter Layer: Clouds", "Layer", "win.filter-layer-clouds", "", "filter layer live non-destructive render clouds", ""},   // s042 m3
             {"New Filter Layer: Difference Clouds", "Layer", "win.filter-layer-difference-clouds", "", "filter layer live non-destructive render clouds difference", ""},
+            {"New Filter Layer: Fibers", "Layer", "win.filter-layer-fibers", "", "filter layer live non-destructive render fibers fibres", ""},   // s043 m3
+            {"New Filter Layer: Mosaic", "Layer", "win.filter-layer-mosaic", "", "filter layer live non-destructive pixelate mosaic blocks", ""},   // s043 m1
+            {"New Filter Layer: Crystallize", "Layer", "win.filter-layer-crystallize", "", "filter layer live non-destructive pixelate crystallize cells", ""},
+            {"New Filter Layer: Pointillize", "Layer", "win.filter-layer-pointillize", "", "filter layer live non-destructive pixelate pointillize dots", ""},
+            {"New Filter Layer: Colour Halftone", "Layer", "win.filter-layer-colour-halftone", "", "filter layer live non-destructive pixelate halftone", ""},   // s043 m2
+            {"New Filter Layer: Facet", "Layer", "win.filter-layer-facet", "", "filter layer live non-destructive pixelate facet", ""},
+            {"New Filter Layer: Mezzotint", "Layer", "win.filter-layer-mezzotint", "", "filter layer live non-destructive pixelate mezzotint", ""},
+            {"New Filter Layer: Fragment", "Layer", "win.filter-layer-fragment", "", "filter layer live non-destructive pixelate fragment", ""},
             {"New Filter Layer: Median", "Layer", "win.filter-layer-median", "", "filter layer live non-destructive despeckle dust", ""},
             {"New Filter Layer: Smart Sharpen", "Layer", "win.filter-layer-smart-sharpen", "", "filter layer live non-destructive sharpen crisp lens deblur", ""},
             {"New Filter Layer: Dust & Scratches", "Layer", "win.filter-layer-dust-scratches", "", "filter layer live non-destructive despeckle dust scratch", ""},

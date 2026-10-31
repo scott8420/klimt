@@ -18,13 +18,13 @@ namespace klimt {
 namespace L = core::layers;
 namespace F = core::filter;
 
-bool Shell::filter_layer_ok(const std::string& verb) {
+bool Shell::filter_layer_ok(const std::string& verb, bool may_be_empty) {
     const auto id = m_layers.primary();
     const auto l = m_doc.get(id);
     if (!l) { toast(verb + ": select a layer first"); return false; }
     if (l->kind != core::Kind::Pixel) { toast(verb + ": " + L::not_pixels(m_doc, id)); return false; }
     if (m_doc.locked_all(id) || (l->locks & core::lock::Pixels)) { toast(verb + ": “" + l->name + "” is locked"); return false; }
-    if (!l->pixels) { toast(verb + ": “" + l->name + "” is empty"); return false; }
+    if (!l->pixels && !may_be_empty) { toast(verb + ": “" + l->name + "” is empty"); return false; }   // s043: Clouds, Fibers may
     const auto mode = m_doc.image().format.mode;
     if (mode != pixel::Mode::RGB && mode != pixel::Mode::Gray) {
         toast(verb + ": RGB and Gray documents only, for now (CMYK and Lab wait on colour management)");
@@ -37,7 +37,7 @@ bool Shell::filter_layer_ok(const std::string& verb) {
 void Shell::filter_run(const core::Filter& f) {
     const auto target = m_filter_target;
     const auto cur = m_doc.get(target);
-    if (!cur || !cur->pixels || F::identity(f)) return;
+    if (!cur || (!cur->pixels && !F::fills(f.kind)) || F::identity(f)) return;   // s043: Clouds, Fibers fill an empty layer
     // s018: from the dialog -- editing a live filter, or Live ticked: the
     // stack changes, not the pixels (one step, at once; the canvas follows).
     const bool from_dialog = m_filter_dialog && m_filter_dialog->get_visible();
@@ -46,7 +46,13 @@ void Shell::filter_run(const core::Filter& f) {
         if (m_preview.erase(target)) queue_render();
         return;
     }
-    if (from_dialog) m_filter_live = m_filter_dialog->live();
+    if (from_dialog && F::livable(f.kind)) m_filter_live = m_filter_dialog->live();   // s043 m4: Displace leaves the choice as it was
+    if (m_filter_live && (!F::livable(f.kind) || !cur->pixels)) {   // s043 m4: never live -- the pixels (s043: nor on an empty layer)
+        m_last_filter = f;
+        update_layer_actions();
+        filter_run_pixels(f);
+        return;
+    }
     if (m_filter_live) {
         m_last_filter = f;
         update_layer_actions();
@@ -56,15 +62,26 @@ void Shell::filter_run(const core::Filter& f) {
     }
     m_last_filter = f;
     update_layer_actions();
-    const auto before = cur->pixels;
+    filter_run_pixels(f);
+}
+
+// The filter on the target's pixels, as a job: ONE step when it lands.
+void Shell::filter_run_pixels(const core::Filter& f) {
+    const auto target = m_filter_target;
+    const auto cur = m_doc.get(target);
+    if (!cur || (!cur->pixels && !F::fills(f.kind))) return;
+    const auto before = cur->pixels;   // s043: none -- an empty layer (Clouds, Fibers)
     const auto sel = m_doc.selection_ptr();
     const bool keep_alpha = (cur->locks & core::lock::Alpha) != 0;
     const std::string label(F::label(f.kind));
     // s039: Lens Blur's depth map -- the layer's mask; s041 m4: or a channel.
     const auto depth = F::wants_mask(f) ? cur->mask
-                     : F::wants_channel(f) && m_doc.channels().count(f.depth_channel) ? m_doc.channels().at(f.depth_channel).mask : nullptr;
-    m_filter_landing = start_job(label, [this, target, before, sel, f, keep_alpha, label, depth](core::Jobs::Token& t) -> core::Jobs::Landing {
-        auto out = F::filtered(*before, f, sel.get(), keep_alpha, nullptr, [&t] { return t.cancelled(); },
+                     : F::wants_channel(f) && m_doc.channels().count(f.depth_channel) ? m_doc.channels().at(f.depth_channel).mask
+                     : displace_map(f);   // s043 m4
+    // s043: an empty layer -- a clear map (made here, not on the worker) for Clouds and Fibers to fill.
+    const auto src = before ? before : std::make_shared<const pixel::TileMap>(m_doc.blank());
+    m_filter_landing = start_job(label, [this, target, before, src, sel, f, keep_alpha, label, depth](core::Jobs::Token& t) -> core::Jobs::Landing {
+        auto out = F::filtered(*src, f, sel.get(), keep_alpha, nullptr, [&t] { return t.cancelled(); },
                                [&t](double p) { t.progress(p); }, depth.get());
         if (!out || t.cancelled()) return [] {};
         auto res = std::make_shared<pixel::TileMap>(std::move(*out));
@@ -99,8 +116,12 @@ void Shell::filter_preview_soon() {
     // A moment after the last change: a slider drag doesn't start a job a pixel.
     m_filter_soon = Glib::signal_timeout().connect([this] {
         const auto l = m_doc.get(m_filter_target);
-        if (!l || !l->pixels || !m_filter_dialog) return false;
-        const auto src = l->pixels;
+        if (!l || !m_filter_dialog) return false;
+        const core::Filter fv = F::normalised(m_filter_dialog->value());
+        if (!l->pixels && !F::fills(fv.kind)) return false;
+        // s043: an empty layer -- a clear map for Clouds and Fibers to fill.
+        const auto src = l->pixels ? l->pixels : std::make_shared<const pixel::TileMap>(m_doc.blank());
+        const auto was = l->pixels;
         const auto sel = m_doc.selection_ptr();
         const bool keep_alpha = (l->locks & core::lock::Alpha) != 0;
         const core::Filter f = F::normalised(m_filter_dialog->value());
@@ -116,8 +137,9 @@ void Shell::filter_preview_soon() {
         const int later = core::live::reach(*l);
         const auto depth = l->mask;   // s039: Lens Blur's depth map (Layer Mask)
         // s041 m4: a channel as the depth -- the pixels' preview only (a live one sees none).
-        const auto chan = F::wants_channel(f) && m_doc.channels().count(f.depth_channel) ? m_doc.channels().at(f.depth_channel).mask : nullptr;
-        m_filter_job = start_job("Preview", [this, src, sel, keep_alpha, f, view, target, stack, editing, live, later, depth, chan](core::Jobs::Token& t) -> core::Jobs::Landing {
+        const auto chan = F::wants_channel(f) && m_doc.channels().count(f.depth_channel) ? m_doc.channels().at(f.depth_channel).mask
+                        : displace_map(f);   // s043 m4: Displace's map layer
+        m_filter_job = start_job("Preview", [this, src, was, sel, keep_alpha, f, view, target, stack, editing, live, later, depth, chan](core::Jobs::Token& t) -> core::Jobs::Landing {
             const auto stop = [&t] { return t.cancelled(); };
             std::optional<pixel::TileMap> out;
             if (editing || live) out = core::live::run(*src, stack, &view, stop, depth.get());
@@ -129,12 +151,12 @@ void Shell::filter_preview_soon() {
             }
             if (!out || t.cancelled()) return [] {};
             auto res = std::make_shared<const pixel::TileMap>(std::move(*out));
-            return [this, res, target, src] {
+            return [this, res, target, was] {
                 m_filter_job = 0;
                 if (m_filter_dialog) m_filter_dialog->set_busy(false);
                 // Still the dialog's layer, untouched, preview still wanted?
                 const auto now = m_doc.get(target);
-                if (!m_filter_dialog || !m_filter_dialog->get_visible() || !m_filter_dialog->preview() || !now || now->pixels != src) return;
+                if (!m_filter_dialog || !m_filter_dialog->get_visible() || !m_filter_dialog->preview() || !now || now->pixels != was) return;
                 m_preview[target] = res;
                 queue_render();
             };
@@ -149,6 +171,19 @@ void Shell::filter_dialog_channels() {
     for (const auto& id : m_doc.channel_order())
         if (m_doc.channels().count(id)) ch.emplace_back(id, m_doc.channels().at(id).name);
     m_filter_dialog->set_channels(std::move(ch));
+    // s043 m4: and the pixel layers with pixels, top first -- Displace's map.
+    std::vector<std::pair<std::string, std::string>> ls;
+    for (const auto& id : m_doc.walk())
+        if (const auto l = m_doc.get(id); l && l->kind == core::Kind::Pixel && l->pixels) ls.emplace_back(id, l->name);
+    m_filter_dialog->set_layers(std::move(ls));
+}
+
+// s043 m4: Displace's map -- the named pixel layer's pixels (nullptr: gone, or not Displace).
+std::shared_ptr<const pixel::TileMap> Shell::displace_map(const core::Filter& f) const {
+    if (!F::wants_map(f)) return nullptr;
+    const auto l = m_doc.get(f.map_layer);
+    if (!l || l->kind != core::Kind::Pixel || !l->pixels) return nullptr;
+    return l->pixels;
 }
 
 // s039 m2: SET FOCAL POINT -- the depth map's value at (x, y) becomes the
@@ -182,19 +217,28 @@ void Shell::on_focal_point(int x, int y) {
     toast("Focal distance " + std::to_string(static_cast<int>(m_filter_dialog->value().focal)) + " -- the depth there");
 }
 
-// s042 m3: Clouds take the rail's foreground and background colours.
+// s042 m3: Clouds take the rail's foreground and background colours (s043:
+// and Pointillize, its background).
 void Shell::with_colours(core::Filter& f) const {
-    if (f.kind != core::FilterKind::Clouds && f.kind != core::FilterKind::DifferenceClouds) return;
+    if (!F::coloured(f.kind)) return;
     const auto fg = m_rail.foreground(), bg = m_rail.background();
     f.c1 = {fg.r, fg.g, fg.b};
     f.c2 = {bg.r, bg.g, bg.b};
 }
 
 void Shell::on_filter(core::FilterKind k) {
-    if (!filter_layer_ok(std::string(F::label(k)))) return;
+    if (!filter_layer_ok(std::string(F::label(k)), F::fills(k))) return;
     core::Filter start = (m_last_filter && m_last_filter->kind == k) ? *m_last_filter : F::fresh(k);
     start.seed = ++m_filter_seed;   // Add Noise: new noise each time the dialog opens
     with_colours(start);            // s042 m3: Clouds -- today's foreground / background
+    if (k == core::FilterKind::Displace && !displace_map(start)) {   // s043 m4: the map -- the top pixel layer that isn't this one
+        start.map_layer.clear();
+        for (const auto& id : m_doc.walk())
+            if (const auto l = m_doc.get(id); l && l->kind == core::Kind::Pixel && l->pixels && (start.map_layer.empty() || id != m_filter_target)) {
+                start.map_layer = id;
+                if (id != m_filter_target) break;
+            }
+    }
     m_filter_edit.reset();
     if (!m_filter_dialog) {
         m_filter_dialog = std::make_unique<FilterDialog>(*this);
@@ -235,7 +279,7 @@ void Shell::on_live_edit(const core::Document::Id& id, std::size_t i) {
 void Shell::on_filter_last(bool dialog) {
     if (!m_last_filter) { toast("Last Filter: no filter yet this session"); return; }
     if (dialog) { on_filter(m_last_filter->kind); return; }
-    if (!filter_layer_ok(std::string(F::label(m_last_filter->kind)))) return;
+    if (!filter_layer_ok(std::string(F::label(m_last_filter->kind)), F::fills(m_last_filter->kind))) return;
     core::Filter f = *m_last_filter;
     f.seed = ++m_filter_seed;
     filter_run(f);
