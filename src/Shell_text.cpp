@@ -58,15 +58,27 @@ void Shell::text_follow() {
     const auto l = m_doc.get(id);
     if (!l || l->kind != core::Kind::Text || !l->text) return;
     const auto& t = *l->text;
+    // s047: while editing, the look of the letters at the caret (the first
+    // selected, else the one before the caret -- what typing continues).
+    int at = 0;
+    if (m_te.on) {
+        const int a = std::min(m_te.caret, m_te.anchor), b = std::max(m_te.caret, m_te.anchor);
+        at = a != b ? a : a > 0 ? T::prev_char(t.text, a) : 0;
+    }
+    const T::Look k = T::look_at(t, at);
     ContextStrip::TextOpts o;
-    o.family = t.family;
-    o.weight = t.weight;
-    o.italic = t.italic;
-    o.size = static_cast<int>(std::lround(t.size));
-    o.colour = t.colour;
+    o.family = *k.family;
+    o.weight = *k.weight;
+    o.italic = *k.italic;
+    o.stretch = *k.stretch;
+    o.size = static_cast<int>(std::lround(*k.size));
+    o.colour = {(*k.colour)[0], (*k.colour)[1], (*k.colour)[2], t.colour[3]};
     o.align = static_cast<int>(t.align);
-    o.tracking = static_cast<int>(std::lround(t.tracking));
+    o.tracking = static_cast<int>(std::lround(*k.tracking));
     o.leading = static_cast<int>(std::lround(t.leading));
+    o.underline = *k.underline;
+    o.strike = *k.strike;
+    o.shift = static_cast<int>(std::lround(*k.shift));
     m_strip.show_text(o);
 }
 
@@ -78,21 +90,60 @@ void Shell::on_text_style(const std::string& what) {
             if (const auto l = m_doc.get(id); l && l->kind == core::Kind::Text) ids.push_back(id);
     if (ids.empty()) return;   // only what new type starts from
     const auto o = m_strip.text();
-    const auto f = [o, what](T::Spec& s) {
+    static const std::map<std::string, std::string> labels = {
+        {"family", "Font"}, {"face", "Font Face"}, {"weight", "Font Weight"}, {"italic", "Italic"}, {"size", "Font Size"}, {"colour", "Text Colour"},
+        {"align", "Align Text"}, {"tracking", "Tracking"}, {"leading", "Leading"},
+        {"underline", "Underline"}, {"strike", "Strikethrough"}, {"shift", "Baseline Shift"}};
+    const auto it = labels.find(what);
+    const std::string label = it == labels.end() ? "Type" : it->second;
+    // s047: the letters' look (a run) -- only a character setting; align and
+    // leading are the layer's.
+    T::Look add;
+    std::optional<T::Field> field;
+    if (what == "family") { add.family = o.family; field = T::Field::Family; }
+    else if (what == "weight") { add.weight = o.weight; field = T::Field::Weight; }
+    else if (what == "face") { add.weight = o.weight; add.italic = o.italic; add.stretch = o.stretch; field = T::Field::Weight; }
+    else if (what == "italic") { add.italic = o.italic; field = T::Field::Italic; }
+    else if (what == "size") { add.size = o.size; field = T::Field::Size; }
+    else if (what == "colour") { add.colour = std::array<float, 3>{o.colour[0], o.colour[1], o.colour[2]}; field = T::Field::Colour; }
+    else if (what == "tracking") { add.tracking = o.tracking; field = T::Field::Tracking; }
+    else if (what == "underline") { add.underline = o.underline; field = T::Field::Underline; }
+    else if (what == "strike") { add.strike = o.strike; field = T::Field::Strike; }
+    else if (what == "shift") { add.shift = o.shift; field = T::Field::Shift; }
+    const int sa = std::min(m_te.caret, m_te.anchor), sb = std::max(m_te.caret, m_te.anchor);
+    if (m_te.on && sa != sb && field) {   // the selected letters
+        const auto l = m_doc.get(m_te.id);
+        if (!l || !l->text) return;
+        L::set_text(m_journal, m_doc, m_te.id, T::styled(*l->text, sa, sb, add), label, "text:" + what);
+        text_show();
+        return;
+    }
+    // The whole layer: the Spec's own setting, and no run keeps its own
+    // (colour's alpha is the layer's, always).
+    const auto f = [o, what, field](T::Spec& s) {
         if (what == "family") s.family = o.family;
         else if (what == "weight") s.weight = o.weight;
         else if (what == "italic") s.italic = o.italic;
+        else if (what == "face") {
+            s.weight = o.weight; s.italic = o.italic; s.stretch = o.stretch;
+            s = T::without(T::without(s, T::Field::Italic), T::Field::Stretch);
+        }
         else if (what == "size") s.size = o.size;
         else if (what == "colour") s.colour = o.colour;
         else if (what == "align") s.align = static_cast<T::Align>(std::clamp(o.align, 0, 3));
         else if (what == "tracking") s.tracking = o.tracking;
         else if (what == "leading") s.leading = o.leading;
+        if (field) s = T::without(s, *field);
+        // underline / strike / shift have no layer-wide field: a run over all of it
+        if (what == "underline" || what == "strike" || what == "shift") {
+            T::Look k;
+            if (what == "underline") k.underline = o.underline;
+            else if (what == "strike") k.strike = o.strike;
+            else k.shift = o.shift;
+            s = T::styled(s, 0, static_cast<int>(s.text.size()), k);
+        }
     };
-    static const std::map<std::string, std::string> labels = {
-        {"family", "Font"}, {"weight", "Font Weight"}, {"italic", "Italic"}, {"size", "Font Size"}, {"colour", "Text Colour"},
-        {"align", "Align Text"}, {"tracking", "Tracking"}, {"leading", "Leading"}};
-    const auto it = labels.find(what);
-    L::set_text_on(m_journal, m_doc, ids, f, it == labels.end() ? "Type" : it->second, "text:" + what);
+    L::set_text_on(m_journal, m_doc, ids, f, label, "text:" + what);
     if (m_te.on) text_show();
 }
 
@@ -154,6 +205,23 @@ void Shell::text_close() {
     if (auto lg = log::get(log::Area::Shell)) lg->info("text: visit ends ({})", kept ? "a step" : "nothing");
 }
 
+// s047: box type's eight handles, image px: 0 TL, 1 T, 2 TR, 3 R, 4 BR, 5 B, 6 BL, 7 L.
+std::vector<CanvasView::Cross> Shell::text_handles(const T::Spec& s) const {
+    const auto f = T::frame(s);
+    const auto mid = [](const T::Box& a, const T::Box& b) { return CanvasView::Cross{(a.x + b.x) / 2, (a.y + b.y) / 2}; };
+    return {{f[0].x, f[0].y}, mid(f[0], f[1]), {f[1].x, f[1].y}, mid(f[1], f[2]),
+            {f[2].x, f[2].y}, mid(f[2], f[3]), {f[3].x, f[3].y}, mid(f[3], f[0])};
+}
+int Shell::text_handle_at(const T::Spec& s, double x, double y) const {
+    const double r = 7 / std::max(0.01, m_canvas.zoom());
+    const auto hs = text_handles(s);
+    int best = -1;
+    double bd = r;
+    for (std::size_t k = 0; k < hs.size(); ++k)
+        if (const double d = std::hypot(hs[k].x - x, hs[k].y - y); d <= bd) { bd = d; best = static_cast<int>(k); }
+    return best;
+}
+
 std::string Shell::text_hit(double x, double y) const {
     const double pad = 4 / std::max(0.01, m_canvas.zoom());
     for (const auto& id : m_doc.walk()) {   // top first
@@ -173,12 +241,14 @@ void Shell::text_show() {
     o.frame_on = true;
     o.frame = quad_of(T::frame(s));
     o.overflow = T::overflows(s);
+    if (!s.point()) o.handles = text_handles(s);   // s047
     for (const auto& q : T::range(s, std::min(m_te.caret, m_te.anchor), std::max(m_te.caret, m_te.anchor))) o.sel.push_back(quad_of(q));
     const auto c = T::caret(s, m_te.caret);
     o.caret = m_te.blink;
     o.c0 = {c.x0, c.y0};
     o.c1 = {c.x1, c.y1};
     m_canvas.set_text_overlay(o);
+    text_follow();   // s047: the strip shows the caret's look
     if (m_im) {   // the input method's popup beside the caret
         GdkRectangle r;
         r.x = static_cast<int>(m_canvas.screen_x_of(std::min(c.x0, c.x1)));
@@ -196,9 +266,8 @@ void Shell::text_insert(const std::string& in) {
     if (!l || !l->text) return;
     std::string add;
     for (char ch : in) if (ch != '\r') add += ch;   // pasted CRLF: one break
-    T::Spec s = *l->text;
     const int a = std::min(m_te.caret, m_te.anchor), b = std::max(m_te.caret, m_te.anchor);
-    s.text.replace(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a), add);
+    const T::Spec s = T::edited(*l->text, a, b, add);   // s047: the runs carried
     if (!T::refusal(s).empty()) return;
     L::set_text(m_journal, m_doc, m_te.id, s);
     m_te.caret = m_te.anchor = a + static_cast<int>(add.size());
@@ -210,12 +279,11 @@ void Shell::text_erase(int a, int b) {
     const auto l = m_te.on ? m_doc.get(m_te.id) : std::nullopt;
     if (!l || !l->text) return;
     if (a > b) std::swap(a, b);
-    T::Spec s = *l->text;
-    a = std::clamp(a, 0, static_cast<int>(s.text.size()));
-    b = std::clamp(b, 0, static_cast<int>(s.text.size()));
+    const int n = static_cast<int>(l->text->text.size());
+    a = std::clamp(a, 0, n);
+    b = std::clamp(b, 0, n);
     if (a == b) return;
-    s.text.erase(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a));
-    L::set_text(m_journal, m_doc, m_te.id, s);
+    L::set_text(m_journal, m_doc, m_te.id, T::edited(*l->text, a, b, {}));   // s047: the runs carried
     m_te.caret = m_te.anchor = a;
     m_te.blink = true;
     text_show();
@@ -238,6 +306,30 @@ bool Shell::text_key(guint k, Gdk::ModifierType state) {
         text_show();
         return true;
     };
+    // s047: Alt+Left / Right -- kern the pair at the caret (Composix's kern:
+    // space after the character before it), or track the selection; 20/1000
+    // em a press, 100 with Ctrl (Photoshop's steps).
+    if (alt && (k == GDK_KEY_Left || k == GDK_KEY_Right || k == GDK_KEY_KP_Left || k == GDK_KEY_KP_Right)) {
+        const double d = ((k == GDK_KEY_Left || k == GDK_KEY_KP_Left) ? -1 : 1) * (ctrl ? 100 : 20);
+        if (a != b) {
+            T::Spec n = s;
+            for (int i = a; i < b; i = T::next_char(s.text, i)) {   // each letter's own tracking, moved
+                const int j = T::next_char(s.text, i);
+                T::Look lk;
+                lk.tracking = std::clamp(*T::look_at(s, i).tracking + d, -1000.0, 5000.0);
+                n = T::styled(n, i, j, lk);
+            }
+            L::set_text(m_journal, m_doc, m_te.id, n, "Tracking", "text:tracking");
+        } else if (m_te.caret > 0) {
+            const int i = T::prev_char(s.text, m_te.caret);
+            T::Look lk;
+            lk.kern = std::clamp(*T::look_at(s, i).kern + d, -1000.0, 5000.0);
+            L::set_text(m_journal, m_doc, m_te.id, T::styled(s, i, m_te.caret, lk), "Kerning", "text:kern");
+        }
+        m_te.blink = true;
+        text_show();
+        return true;
+    }
     switch (k) {
         case GDK_KEY_Escape: text_close(); return true;
         case GDK_KEY_KP_Enter: text_close(); return true;
@@ -270,6 +362,30 @@ bool Shell::text_key(guint k, Gdk::ModifierType state) {
         switch (k) {
             case GDK_KEY_a: case GDK_KEY_A:
                 m_te.anchor = 0; m_te.caret = len; text_show(); return true;
+            case GDK_KEY_b: case GDK_KEY_B: case GDK_KEY_i: case GDK_KEY_I: case GDK_KEY_u: case GDK_KEY_U: {
+                // s047: Bold / Italic / Underline -- the selected letters, else the layer
+                const T::Look at = T::look_at(s, a != b ? a : a > 0 ? T::prev_char(s.text, a) : 0);
+                ContextStrip::TextOpts o = m_strip.text();
+                std::string what;
+                if (k == GDK_KEY_b || k == GDK_KEY_B) {
+                    const auto fs = T::faces(*at.family);
+                    const bool bold = *at.weight >= 600;
+                    o.weight = bold ? 400 : 700;
+                    if (const int f = T::nearest_face(fs, o.weight, *at.italic, *at.stretch); f >= 0) o.weight = fs[static_cast<std::size_t>(f)].weight;
+                    if (bold == (o.weight >= 600)) o.weight = bold ? 400 : 700;   // no such face: Pango's nearest
+                    o.italic = *at.italic; o.stretch = *at.stretch;
+                    what = "face";
+                } else if (k == GDK_KEY_i || k == GDK_KEY_I) {
+                    o.weight = *at.weight; o.italic = !*at.italic; o.stretch = *at.stretch;
+                    what = "face";
+                } else {
+                    o.underline = !*at.underline;
+                    what = "underline";
+                }
+                m_strip.show_text(o);
+                on_text_style(what);
+                return true;
+            }
             case GDK_KEY_c: case GDK_KEY_C: case GDK_KEY_x: case GDK_KEY_X:
                 if (a == b) return true;
                 get_clipboard()->set_text(s.text.substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a)));
@@ -306,6 +422,15 @@ void Shell::on_text(CanvasView::TextAt at, double x, double y, bool shift) {
         if (m_te.on) {
             const auto l = m_doc.get(m_te.id);
             const double pad = 6 / std::max(0.01, m_canvas.zoom());
+            // s047: a box's handle -- resize it (inside the visit: one step with it)
+            if (l && l->text && !l->text->point()) {
+                const int h = text_handle_at(*l->text, x, y);
+                if (h >= 0) {
+                    m_te.handle = h;
+                    m_te.hspec = *l->text;
+                    return;
+                }
+            }
             if (l && l->text && in_quad(T::frame(*l->text), x, y, pad)) {
                 const auto& s = *l->text;
                 const auto t = now_ms();
@@ -348,6 +473,23 @@ void Shell::on_text(CanvasView::TextAt at, double x, double y, bool shift) {
         return;
     }
     if (at == At::Drag) {
+        if (m_te.on && m_te.handle >= 0) {
+            T::Spec s = m_te.hspec;
+            const auto p = T::to_text(s, x, y);
+            double x0 = s.x, y0 = s.y, x1 = s.x + s.box_w;
+            double y1 = s.y + (s.box_h > 0 ? s.box_h : T::frame(s)[2].y - T::frame(s)[0].y);
+            const int h = m_te.handle;   // 0 TL, 1 T, 2 TR, 3 R, 4 BR, 5 B, 6 BL, 7 L
+            constexpr double kMin = 8;
+            if (h == 0 || h == 6 || h == 7) x0 = std::min(p.x, x1 - kMin);
+            if (h == 2 || h == 3 || h == 4) x1 = std::max(p.x, x0 + kMin);
+            if (h == 0 || h == 1 || h == 2) y0 = std::min(p.y, y1 - kMin);
+            if (h == 4 || h == 5 || h == 6) y1 = std::max(p.y, y0 + kMin);
+            s.x = x0; s.y = y0; s.box_w = x1 - x0; s.box_h = y1 - y0;
+            L::set_text(m_journal, m_doc, m_te.id, s, "Resize Text Box", "text:box");
+            m_te.blink = true;
+            text_show();
+            return;
+        }
         if (m_te.on && m_te.selecting) {
             const auto l = m_doc.get(m_te.id);
             if (l && l->text) { m_te.caret = T::index_at(*l->text, x, y); m_te.blink = true; text_show(); }
@@ -368,7 +510,7 @@ void Shell::on_text(CanvasView::TextAt at, double x, double y, bool shift) {
         return;
     }
     // Release.
-    if (m_te.on) { m_te.selecting = false; return; }
+    if (m_te.on) { m_te.selecting = false; m_te.handle = -1; return; }
     if (!m_te.pressing) return;
     m_te.pressing = false;
     const auto o = m_strip.text();
@@ -376,6 +518,7 @@ void Shell::on_text(CanvasView::TextAt at, double x, double y, bool shift) {
     s.family = o.family;
     s.weight = o.weight;
     s.italic = o.italic;
+    s.stretch = o.stretch;
     s.size = o.size;
     s.colour = o.colour;
     s.align = static_cast<T::Align>(std::clamp(o.align, 0, 3));

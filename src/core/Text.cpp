@@ -16,6 +16,8 @@ std::shared_ptr<const pixel::TileMap> text_pixels(const Image& im, const text::S
     const pixel::Format& f = im.format;
     const pixel::Px ink = from_srgb(f, s.colour[0], s.colour[1], s.colour[2]);
     const auto ai = static_cast<std::size_t>(f.channels() - 1);
+    std::uint32_t last_key = 0xFFFFFFFFu;
+    pixel::Px last = ink;
     pixel::TileMap map(f, im.width, im.height);
     const int c0 = cov.at.x / kTile, c1 = (cov.at.x + cov.at.w - 1) / kTile;
     const int r0 = cov.at.y / kTile, r1 = (cov.at.y + cov.at.h - 1) / kTile;
@@ -31,6 +33,16 @@ std::shared_ptr<const pixel::TileMap> text_pixels(const Image& im, const text::S
                     const std::uint8_t a = src[x - cov.at.x];
                     if (!a) continue;
                     pixel::Px p = ink;
+                    if (!cov.rgb.empty()) {   // s047: a run's own colour
+                        const std::size_t i = (static_cast<std::size_t>(y - cov.at.y) * static_cast<std::size_t>(cov.at.w) +
+                                               static_cast<std::size_t>(x - cov.at.x)) * 3;
+                        const std::uint32_t key = (std::uint32_t{cov.rgb[i]} << 16) | (std::uint32_t{cov.rgb[i + 1]} << 8) | cov.rgb[i + 2];
+                        if (key != last_key) {
+                            last_key = key;
+                            last = from_srgb(f, cov.rgb[i] / 255.f, cov.rgb[i + 1] / 255.f, cov.rgb[i + 2] / 255.f);
+                        }
+                        p = last;
+                    }
                     p.c[ai] = static_cast<float>(a) / 255.f * s.colour[3];
                     w.set(x - col * kTile, y - row * kTile, p);
                     any = true;

@@ -290,13 +290,61 @@ Styles styles_from(const json& o) {
 
 // s035: a path -- its subpaths, each anchor [x, y, in x, in y, out x, out y, smooth].
 // s046: a text layer's type.
+// s047: a text layer's runs -- [start, end) bytes and the fields they set.
+json runs_json(const std::vector<text::Run>& rs) {
+    json out = json::array();
+    for (const auto& r : rs) {
+        json o = {{"start", r.start}, {"end", r.end}};
+        const auto& k = r.look;
+        if (k.family) o["family"] = *k.family;
+        if (k.weight) o["weight"] = *k.weight;
+        if (k.italic) o["italic"] = *k.italic;
+        if (k.stretch) o["stretch"] = *k.stretch;
+        if (k.size) o["size"] = *k.size;
+        if (k.colour) o["colour"] = {(*k.colour)[0], (*k.colour)[1], (*k.colour)[2]};
+        if (k.tracking) o["tracking"] = *k.tracking;
+        if (k.shift) o["shift"] = *k.shift;
+        if (k.kern) o["kern"] = *k.kern;
+        if (k.underline) o["underline"] = *k.underline;
+        if (k.strike) o["strike"] = *k.strike;
+        out.push_back(std::move(o));
+    }
+    return out;
+}
+std::vector<text::Run> runs_from(const json& j) {
+    std::vector<text::Run> out;
+    if (!j.is_array()) return out;
+    for (const auto& o : j) {
+        if (!o.is_object()) continue;
+        text::Run r;
+        r.start = o.value("start", 0);
+        r.end = o.value("end", 0);
+        auto& k = r.look;
+        if (o.contains("family") && o["family"].is_string()) k.family = o["family"].get<std::string>();
+        if (o.contains("weight") && o["weight"].is_number()) k.weight = o["weight"].get<int>();
+        if (o.contains("italic") && o["italic"].is_boolean()) k.italic = o["italic"].get<bool>();
+        if (o.contains("stretch") && o["stretch"].is_number()) k.stretch = o["stretch"].get<int>();
+        if (o.contains("size") && o["size"].is_number()) k.size = o["size"].get<double>();
+        if (o.contains("colour") && o["colour"].is_array() && o["colour"].size() == 3)
+            k.colour = std::array<float, 3>{o["colour"][0].get<float>(), o["colour"][1].get<float>(), o["colour"][2].get<float>()};
+        if (o.contains("tracking") && o["tracking"].is_number()) k.tracking = o["tracking"].get<double>();
+        if (o.contains("shift") && o["shift"].is_number()) k.shift = o["shift"].get<double>();
+        if (o.contains("kern") && o["kern"].is_number()) k.kern = o["kern"].get<double>();
+        if (o.contains("underline") && o["underline"].is_boolean()) k.underline = o["underline"].get<bool>();
+        if (o.contains("strike") && o["strike"].is_boolean()) k.strike = o["strike"].get<bool>();
+        out.push_back(std::move(r));
+    }
+    return out;
+}
+
 json text_json(const text::Spec& t) {
     const char* al = t.align == text::Align::Center ? "center" : t.align == text::Align::Right ? "right"
                    : t.align == text::Align::Justify ? "justify" : "left";
-    return {{"text", t.text}, {"family", t.family}, {"weight", t.weight}, {"italic", t.italic}, {"size", t.size},
+    return {{"text", t.text}, {"family", t.family}, {"weight", t.weight}, {"italic", t.italic}, {"stretch", t.stretch}, {"size", t.size},
             {"colour", {t.colour[0], t.colour[1], t.colour[2], t.colour[3]}}, {"align", al},
             {"tracking", t.tracking}, {"leading", t.leading}, {"x", t.x}, {"y", t.y},
-            {"box_w", t.box_w}, {"box_h", t.box_h}, {"m", {t.m[0], t.m[1], t.m[2], t.m[3], t.m[4], t.m[5]}}};
+            {"box_w", t.box_w}, {"box_h", t.box_h}, {"m", {t.m[0], t.m[1], t.m[2], t.m[3], t.m[4], t.m[5]}},
+            {"runs", runs_json(t.runs)}};
 }
 text::Spec text_from(const json& j) {
     text::Spec t;
@@ -304,6 +352,7 @@ text::Spec text_from(const json& j) {
     t.family = j.value("family", std::string("Sans"));
     t.weight = j.value("weight", 400);
     t.italic = j.value("italic", false);
+    t.stretch = j.value("stretch", 4);
     t.size = j.value("size", 48.0);
     if (j.contains("colour") && j.at("colour").is_array() && j.at("colour").size() == 4)
         for (std::size_t k = 0; k < 4; ++k) t.colour[k] = j.at("colour")[k].get<float>();
@@ -317,6 +366,7 @@ text::Spec text_from(const json& j) {
     t.box_h = j.value("box_h", 0.0);
     if (j.contains("m") && j.at("m").is_array() && j.at("m").size() == 6)
         for (std::size_t k = 0; k < 6; ++k) t.m[k] = j.at("m")[k].get<double>();
+    if (j.contains("runs")) t.runs = runs_from(j.at("runs"));   // s047
     return text::normalised(t);   // a damaged value comes in range, never refused
 }
 

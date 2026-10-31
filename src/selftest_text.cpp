@@ -164,6 +164,49 @@ void selftest_text(const Check& check) {
         std::string u = "é—x";
         check("text: UTF-8 steps keep whole characters", T::next_char(u, 0) == 2 && T::next_char(u, 2) == 5 && T::prev_char(u, 5) == 2, "");
     }
+    // ── s047 m1: Composix's leading -- lines at the pitch, each centred in it ─
+    {
+        std::cout << "\n-- text: leading, as Composix sets it (s047 m1) --\n";
+        T::Spec s;
+        s.text = "Gold leaf\nand oil\nand ash";
+        s.size = 40;
+        s.x = 30;
+        s.y = 90;
+        const double c0 = T::caret(s, 0).y0, c1 = T::caret(s, 10).y0, c2 = T::caret(s, 18).y0;
+        check("text: auto leading is 1.2 x the size, line to line", std::abs(c1 - c0 - 48) < 0.01 && std::abs(c2 - c1 - 48) < 0.01,
+              num(c1 - c0) + " " + num(c2 - c1));
+        s.leading = 70;
+        const double d0 = T::caret(s, 0).y0, d1 = T::caret(s, 10).y0;
+        check("text: a set leading is the pitch", std::abs(d1 - d0 - 70) < 0.01, num(d1 - d0));
+        check("text: point type's first baseline stays at its anchor whatever the leading",
+              std::abs(T::caret(s, 0).y0 - c0) < 0.01, num(T::caret(s, 0).y0) + " vs " + num(c0));
+        // box type: the first line's logical box centred in its leading, from the box's top
+        T::Spec b = s;
+        b.box_w = 400;
+        b.leading = 80;
+        b.y = 20;
+        const auto k = T::caret(b, 0);
+        const double h = k.y1 - k.y0;
+        check("text: a line's box is centred in its leading", std::abs((k.y0 - 20) - (80 - h) / 2) < 0.01,
+              num(k.y0 - 20) + " vs " + num((80 - h) / 2));
+        const auto fr = T::frame(b);   // no height: the lines' bands
+        check("text: box type with no height is as tall as its lines' leading", std::abs(fr[2].y - (20 + 3 * 80)) < 0.01, num(fr[2].y));
+        b.box_h = 160;
+        check("text: lines whose leading fits the box are set; the rest overflow", T::overflows(b), "");
+        b.box_h = 240;
+        check("text: three leadings fit three lines", !T::overflows(b), "");
+        b.box_h = 239;
+        check("text: one px short and the third line is out", T::overflows(b), "");
+        b.box_h = 0;
+        const auto q = T::range(b, 0, 4);
+        check("text: a selection fills its line's leading", q.size() == 1 && std::abs(q[0][0].y - 20) < 0.01 && std::abs(q[0][2].y - 100) < 0.01,
+              q.empty() ? "" : num(q[0][0].y) + ".." + num(q[0][2].y));
+        check("text: a click in the leading below a line's glyphs is still that line",
+              T::index_at(b, 31, 20 + 80 - 1) <= 9 && T::index_at(b, 31, 20 + 80 + 1) >= 10,
+              num(T::index_at(b, 31, 99)) + " " + num(T::index_at(b, 31, 101)));
+        const auto ink = ink_of(T::render(b, 480, 360));
+        check("text: the set lines' ink lies in their bands", ink.any() && ink.y0 >= 20 && ink.y1 <= 20 + 3 * 80, num(ink.y0) + ".." + num(ink.y1));
+    }
     {
         T::Spec s;
         check("text: a fresh Spec is in range", T::refusal(s).empty(), T::refusal(s));
@@ -319,6 +362,11 @@ void selftest_text(const Check& check) {
         s.family = "Serif"; s.weight = 700; s.italic = true; s.size = 36; s.colour = {0.7f, 0.5f, 0.1f, 0.9f};
         s.align = T::Align::Center; s.tracking = 50; s.leading = 44; s.x = 60; s.y = 30; s.box_w = 200; s.box_h = 150;
         s.m = {1, 0, 0.2, 1, 3, 4};
+        {   // s047: runs ride along
+            T::Look k; k.weight = 400; k.colour = std::array<float, 3>{0.1f, 0.2f, 0.3f}; k.kern = 40; k.underline = true;
+            T::Look k2; k2.size = 20; k2.shift = 6; k2.strike = true; k2.family = "Monospace"; k2.tracking = -30;
+            s = T::styled(T::styled(s, 0, 4, k), 8, 14, k2);
+        }
         const auto id = L::add_text(j, d, s);
         core::Styles st; st.drop.on = true;
         core::layers::set_styles(j, d, id, st);
@@ -338,6 +386,7 @@ void selftest_text(const Check& check) {
             check("text: with every setting", t.text == s.text && t.family == s.family && t.weight == 700 && t.italic && t.size == 36 &&
                   std::abs(t.colour[3] - 0.9f) < 1e-6 && t.align == T::Align::Center && t.tracking == 50 && t.leading == 44 &&
                   t.box_w == 200 && t.box_h == 150 && t.m[2] == 0.2, "");
+            check("text: and its runs, every field", t.runs == s.runs && s.runs.size() == 2, num(static_cast<double>(t.runs.size())));
             check("text: and its pixels as they were saved", back->layers.at(id).pixels && ink_of(*back->layers.at(id).pixels).x0 == ink_of(*d.get(id)->pixels).x0, "");
             check("text: and its layer style", back->layers.at(id).styles.drop.on, "");
         }
@@ -359,4 +408,155 @@ void selftest_text(const Check& check) {
         check("text: setting on six threads at once gives the same pixels", same, "");
     }
     check("text: the font map lists families", !T::families().empty(), "");
+
+    // ── s047 m2: runs ───────────────────────────────────────────────────────
+    std::cout << "\n-- text: runs -- a word bold, coloured, tracked inside a line (s047 m2) --\n";
+    {
+        T::Spec s;
+        s.text = "gold leaf and oil";   // gold 0-4, leaf 5-9, and 10-13, oil 14-17
+        s.size = 40; s.x = 20; s.y = 100;
+        T::Look bold; bold.weight = 700;
+        const auto b = T::styled(s, 5, 9, bold);
+        check("runs: styling a word makes one run over it", b.runs.size() == 1 && b.runs[0].start == 5 && b.runs[0].end == 9 && b.runs[0].look.weight == 700, "");
+        check("runs: the letters in it take the look; those outside keep the layer's",
+              *T::look_at(b, 6).weight == 700 && *T::look_at(b, 2).weight == 400 && *T::look_at(b, 10).weight == 400, "");
+        T::Look it; it.italic = true;
+        const auto c = T::styled(b, 7, 12, it);
+        check("runs: a look over part of a run splits it", c.runs.size() == 3 && c.runs[1].start == 7 && c.runs[1].end == 9 &&
+              c.runs[1].look.weight == 700 && c.runs[1].look.italic == true && c.runs[2].start == 9 && !c.runs[2].look.weight,
+              num(static_cast<double>(c.runs.size())));
+        T::Look reg; reg.weight = 400;
+        check("runs: setting the layer's own look again leaves no run", T::styled(b, 5, 9, reg).runs.empty(), "");
+        check("runs: neighbours with one look join", T::styled(b, 9, 13, bold).runs.size() == 1 && T::styled(b, 9, 13, bold).runs[0].end == 13, "");
+        check("runs: a whole-layer change clears the field from every run", T::without(c, T::Field::Weight).runs.size() == 1 &&
+              !T::without(c, T::Field::Weight).runs[0].look.weight, "");
+        // edits carry them
+        const auto e1 = T::edited(b, 7, 7, "XY");   // inside "leaf"
+        check("runs: typing inside a run joins it", e1.text == "gold leXYaf and oil" && e1.runs.size() == 1 && e1.runs[0].start == 5 && e1.runs[0].end == 11, "");
+        const auto e2 = T::edited(b, 9, 9, "s");    // at its end: the letter before is bold
+        check("runs: typing at a run's end continues its look", e2.runs.size() == 1 && e2.runs[0].end == 10, "");
+        const auto e3 = T::edited(b, 0, 2, "");     // before it
+        check("runs: a cut before a run moves it", e3.runs.size() == 1 && e3.runs[0].start == 3 && e3.runs[0].end == 7, "");
+        const auto e4 = T::edited(b, 3, 7, "");     // into it
+        check("runs: a cut into a run shrinks it", e4.runs.size() == 1 && e4.runs[0].start == 3 && e4.runs[0].end == 5 && e4.text == "golaf and oil", "");
+        const auto e5 = T::edited(T::styled(s, 0, 4, bold), 0, 0, "A");
+        check("runs: typing at the very start takes the first letter's look", e5.runs.size() == 1 && e5.runs[0].start == 0 && e5.runs[0].end == 5, "");
+        T::Look kern; kern.kern = 300;
+        const auto e6 = T::edited(T::styled(s, 3, 4, kern), 4, 4, "Z");
+        check("runs: new letters don't take a kern", e6.runs.size() == 1 && e6.runs[0].end == 4, "");
+        const auto e7 = T::edited(b, 4, 10, "");    // the run cut whole
+        check("runs: a cut over a whole run removes it", e7.runs.empty() && e7.text == "goldand oil", e7.text);
+        check("runs: UTF-8 -- a run never splits a character", T::styled([] { T::Spec u; u.text = "é—x"; return u; }(), 1, 4, bold).runs[0].start == 0, "");
+        T::Spec bad = b;
+        bad.runs.push_back({2, 3, bold});
+        check("runs: out of order is refused", !T::refusal(bad).empty() && T::refusal(T::normalised(bad)).empty(), T::refusal(bad));
+    }
+    {
+        // The look shows: a bigger run is taller; it gets its own leading
+        T::Spec s;
+        s.text = "HH HH\nHH";
+        s.size = 40; s.x = 20; s.y = 60;
+        T::Look big; big.size = 80;
+        const auto b = T::styled(s, 3, 5, big);
+        const Ink a0 = ink_of(T::render(s, 480, 360)), a1 = ink_of(T::render(b, 480, 360));
+        check("runs: a run's size sets its letters bigger", a0.any() && a1.any() && a1.y0 < a0.y0 - 20, num(a0.y0) + " -> " + num(a1.y0));
+        const auto band = [](const T::Spec& x, int i) { const auto q = T::range(x, i, T::next_char(x.text, i)); return q.empty() ? -1.0 : q[0][2].y - q[0][0].y; };
+        check("runs: auto leading is 1.2 x the line's LARGEST size", std::abs(band(b, 0) - 96) < 0.01 && std::abs(band(b, 6) - 48) < 0.01 &&
+              std::abs(band(s, 0) - 48) < 0.01, num(band(b, 0)) + " " + num(band(b, 6)));
+        T::Spec fixed = b;
+        fixed.leading = 50;
+        check("runs: a set leading stays the pitch whatever the sizes", std::abs(band(fixed, 0) - 50) < 0.01 && std::abs(band(fixed, 6) - 50) < 0.01,
+              num(band(fixed, 0)) + " " + num(band(fixed, 6)));
+        // baseline shift: the letters rise; the line stays where it was
+        T::Look up; up.shift = 15;
+        const auto r = T::styled(s, 0, 2, up);
+        const Ink i0 = ink_of(T::render(s, 480, 360)), i1 = ink_of(T::render(r, 480, 360));
+        check("runs: a baseline shift raises its letters", i1.any() && std::abs((i0.y0 - i1.y0) - 15) <= 2, num(i0.y0 - i1.y0));
+        check("runs: and doesn't move its line", std::abs(T::caret(r, 6).y0 - T::caret(s, 6).y0) < 0.01, "");
+        // kern: the space after a letter -- what follows moves by it, the letter stays
+        T::Spec k = s;
+        k.text = "HHHH";
+        T::Look kn; kn.kern = 500;
+        const auto kk = T::styled(k, 1, 2, kn);
+        const double dx = T::caret(kk, 2).x0 - T::caret(k, 2).x0, dx3 = T::caret(kk, 3).x0 - T::caret(k, 3).x0;
+        check("runs: a kern of 500 moves what follows by half an em", std::abs(dx - 20) < 0.6 && std::abs(dx3 - 20) < 0.6, num(dx) + " " + num(dx3));
+        check("runs: and the kerned letter stays", std::abs(ink_of(T::render(kk, 480, 360)).x0 - ink_of(T::render(k, 480, 360)).x0) <= 1, "");
+        T::Look tr; tr.tracking = 500;
+        const auto tt = T::styled(k, 0, 4, tr);
+        check("runs: a run's tracking spreads its letters", ink_of(T::render(tt, 480, 360)).x1 > ink_of(T::render(k, 480, 360)).x1 + 40, "");
+        // folded: Image Size scales the runs too
+        const auto f = T::folded([&] { T::Spec h = T::styled(r, 3, 5, big); h.m = {0.5, 0, 0, 0.5, 0, 0}; return h; }());
+        check("runs: a uniform scale folds into the runs' sizes and shifts",
+              std::abs(f.size - 20) < 1e-9 && f.runs.size() == 2 && f.runs[0].look.shift && std::abs(*f.runs[0].look.shift - 7.5) < 1e-9 &&
+              f.runs[1].look.size && std::abs(*f.runs[1].look.size - 40) < 1e-9, "");
+    }
+    {
+        // A coloured word: its pixels in its colour, the rest in the layer's
+        auto d = doc();
+        core::DocJournal j(d);
+        d.set_door([&] { return j.open(); });
+        T::Spec s;
+        s.text = "IIII IIII";
+        s.size = 80; s.x = 20; s.y = 150; s.weight = 700;
+        s.colour = {0, 0, 1, 1};
+        T::Look red; red.colour = std::array<float, 3>{1, 0, 0};
+        const auto id = L::add_text(j, d, s);
+        check("runs: styling letters is one step", L::set_text(j, d, id, T::styled(s, 5, 9, red), "Text Colour") && j.size() == 2, "");
+        const auto& px = *d.get(id)->pixels;
+        const Ink all = ink_of(px);
+        const int mid = (all.x0 + all.x1) / 2;
+        bool left_blue = false, right_red = false, wrong = false;
+        for (int y = all.y0; y <= all.y1; ++y)
+            for (int x = all.x0; x <= all.x1; ++x) {
+                const auto p = px.get(x, y);
+                if (p.c[3] < 0.999f) continue;
+                if (x < mid) { left_blue = left_blue || (p.c[2] > 0.99f && p.c[0] < 0.01f); wrong = wrong || p.c[0] > 0.01f; }
+                else { right_red = right_red || (p.c[0] > 0.99f && p.c[2] < 0.01f); wrong = wrong || p.c[2] > 0.01f; }
+            }
+        check("runs: a coloured word is set in its colour; the rest in the layer's", left_blue && right_red && !wrong, "");
+        j.undo();
+        check("runs: undo takes the run back", d.get(id)->text->runs.empty(), "");
+    }
+
+    // ── s047 m3: the font's real faces; the box by its handles ──────────────
+    std::cout << "\n-- text: faces, stretch, the box in text space (s047 m3) --\n";
+    {
+        const auto fams = T::families();
+        bool listed = false, ordered = true, found = true;
+        std::string where;
+        for (std::size_t k = 0; k < fams.size() && k < 12; ++k) {   // any machine's fonts: rules, not names
+            const auto fs = T::faces(fams[k]);
+            listed = listed || !fs.empty();
+            for (std::size_t i = 1; i < fs.size(); ++i) {
+                const auto& a = fs[i - 1];
+                const auto& b = fs[i];
+                if (a.stretch > b.stretch || (a.stretch == b.stretch && (a.weight > b.weight || (a.weight == b.weight && a.italic > b.italic)))) {
+                    ordered = false; where = fams[k];
+                }
+            }
+            for (std::size_t i = 0; i < fs.size(); ++i)
+                if (T::nearest_face(fs, fs[i].weight, fs[i].italic, fs[i].stretch) != static_cast<int>(i)) { found = false; where = fams[k] + " " + fs[i].name; }
+        }
+        check("faces: an installed family lists its faces", listed, "");
+        check("faces: narrow to wide, light to heavy, upright first", ordered, where);
+        check("faces: each face is its own nearest", found, where);
+        check("faces: a family not installed has none", T::faces("No Such Family Klimt").empty(), "");
+        T::Spec s;
+        s.text = "wide";
+        s.stretch = 9;
+        check("faces: stretch out of range is refused", !T::refusal(s).empty() && T::normalised(s).stretch == 8, "");
+        T::Spec c;
+        c.text = "abc";
+        T::Look narrow; narrow.stretch = 2;
+        check("faces: a run keeps its stretch; the layer's own is dropped", T::styled(c, 0, 2, narrow).runs.size() == 1 &&
+              [&] { T::Look n4; n4.stretch = 4; return T::styled(c, 0, 2, n4).runs.empty(); }(), "");
+        T::Spec m;
+        m.text = "x"; m.x = 10; m.y = 20; m.box_w = 100; m.box_h = 50;
+        m.m = {0, 1, -1, 0, 300, 0};   // turned a quarter
+        const auto f = T::frame(m);
+        const auto t0 = T::to_text(m, f[0].x, f[0].y), t2 = T::to_text(m, f[2].x, f[2].y);
+        check("box: to_text undoes the matrix (the frame's corners are the box's)",
+              std::abs(t0.x - 10) < 1e-9 && std::abs(t0.y - 20) < 1e-9 && std::abs(t2.x - 110) < 1e-9 && std::abs(t2.y - 70) < 1e-9,
+              num(t0.x) + "," + num(t0.y) + " " + num(t2.x) + "," + num(t2.y));
+    }
 }

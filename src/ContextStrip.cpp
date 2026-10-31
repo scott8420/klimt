@@ -1,6 +1,7 @@
 #include "ContextStrip.hpp"
 #include "core/Patterns.hpp"   // s033: the texture's patterns
 
+#include <glibmm/main.h>
 #include <glibmm/markup.h>
 #include <gtkmm/image.h>
 #include <gtkmm/label.h>
@@ -947,44 +948,59 @@ void ContextStrip::text_strip() {
         if (i == GTK_INVALID_LIST_POSITION || i >= fams.size() || fams[i] == m_text.family) return;
         m_text.family = fams[i];
         m_text_signal.emit("family");
+        refresh_strip("text");   // s047: its faces (rebuilt when idle)
     });
     append(*fam);
 
-    // The weight, and italic beside it.
-    static const std::vector<std::pair<int, const char*>> weights = {
-        {100, "Thin"}, {200, "Extra Light"}, {300, "Light"}, {400, "Regular"}, {500, "Medium"},
-        {600, "Semibold"}, {700, "Bold"}, {800, "Extra Bold"}, {900, "Black"}};
-    std::vector<Glib::ustring> wn;
-    guint wat = 3;
-    for (std::size_t i = 0; i < weights.size(); ++i) {
-        wn.emplace_back(weights[i].second);
-        if (weights[i].first == m_text.weight) wat = static_cast<guint>(i);
-    }
+    // s047: the family's real faces ("Regular", "Bold Italic", "Condensed
+    // Light"), as the font names them -- in place of a weight number and an
+    // italic switch. Picking one sets weight, italic and width together.
+    const auto fs = std::make_shared<std::vector<text::Face>>(text::faces(m_text.family));
     auto style = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
     style->add_css_class("linked");
-    auto wt = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(wn));
-    wt->set_name("strip.text.weight");
-    wt->set_tooltip_text("The weight (the font's nearest face is used)");
-    wt->set_selected(wat);
-    wt->property_selected().signal_changed().connect([this, wt] {
-        const auto i = wt->get_selected();
-        if (i >= weights.size() || weights[i].first == m_text.weight) return;
-        m_text.weight = weights[i].first;
-        m_text_signal.emit("weight");
-    });
-    style->append(*wt);
-    auto it = Gtk::make_managed<Gtk::ToggleButton>();
-    it->set_name("strip.text.italic");
-    it->set_icon_name("format-text-italic-symbolic");
-    it->set_tooltip_text("Italic");
-    it->set_focus_on_click(false);
-    it->set_active(m_text.italic);
-    it->signal_toggled().connect([this, it] {
-        if (it->get_active() == m_text.italic) return;
-        m_text.italic = it->get_active();
-        m_text_signal.emit("italic");
-    });
-    style->append(*it);
+    if (!fs->empty()) {
+        std::vector<Glib::ustring> fn;
+        for (const auto& f : *fs) fn.emplace_back(f.name);
+        auto face = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(fn));
+        face->set_name("strip.text.face");
+        face->set_tooltip_text("The face -- the family's own weights, widths and italics");
+        const int at = text::nearest_face(*fs, m_text.weight, m_text.italic, m_text.stretch);
+        if (at >= 0) face->set_selected(static_cast<guint>(at));
+        face->property_selected().signal_changed().connect([this, face, fs] {
+            const auto i = face->get_selected();
+            if (i >= fs->size()) return;
+            const auto& f = (*fs)[i];
+            if (f.weight == m_text.weight && f.italic == m_text.italic && f.stretch == m_text.stretch) return;
+            m_text.weight = f.weight;
+            m_text.italic = f.italic;
+            m_text.stretch = f.stretch;
+            m_text_signal.emit("face");
+        });
+        style->append(*face);
+    } else {   // a family not installed here: what it asked for, as words
+        auto lb = Gtk::make_managed<Gtk::Label>(m_text.weight >= 600 ? (m_text.italic ? "Bold Italic" : "Bold") : (m_text.italic ? "Italic" : "Regular"));
+        lb->add_css_class("dim-label");
+        lb->set_margin_start(6);
+        lb->set_margin_end(6);
+        style->append(*lb);
+    }
+    // s047: underline and strikethrough (runs' looks, or the whole layer's)
+    const auto toggle = [&](const char* name, const char* icon, const char* tip, bool TextOpts::*f, const char* what) {
+        auto t = Gtk::make_managed<Gtk::ToggleButton>();
+        t->set_name(name);
+        t->set_icon_name(icon);
+        t->set_tooltip_text(tip);
+        t->set_focus_on_click(false);
+        t->set_active(m_text.*f);
+        t->signal_toggled().connect([this, t, f, what] {
+            if (t->get_active() == m_text.*f) return;
+            m_text.*f = t->get_active();
+            m_text_signal.emit(what);
+        });
+        style->append(*t);
+    };
+    toggle("strip.text.underline", "format-text-underline-symbolic", "Underline", &TextOpts::underline, "underline");
+    toggle("strip.text.strike", "format-text-strikethrough-symbolic", "Strikethrough", &TextOpts::strike, "strike");
     append(*style);
 
     number_field(*this, "Size", 1, 5000, m_text.size, "px", "The type's size (the em), image pixels",
@@ -1036,15 +1052,17 @@ void ContextStrip::text_strip() {
     auto mb = Gtk::make_managed<Gtk::MenuButton>();
     mb->set_name("strip.text.spacing");
     mb->set_label("Spacing");
-    mb->set_tooltip_text("Tracking (between letters) and leading (between lines)");
+    mb->set_tooltip_text("Tracking (between letters), leading (between lines) and baseline shift");
     auto pop = Gtk::make_managed<Gtk::Popover>();
     auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
     box->set_margin(10);
     number_field(*box, "Tracking", -1000, 5000, m_text.tracking, "", "Between letters, in thousandths of an em (Photoshop's tracking); 0 is the font's own",
                  [this] { return m_text.tracking; }, [this](int v) { if (v == m_text.tracking) return; m_text.tracking = v; m_text_signal.emit("tracking"); });
-    number_field(*box, "Leading", 0, 10000, m_text.leading, "px", "Line to line, image pixels; 0 is the font's own (auto)",
+    number_field(*box, "Leading", 0, 10000, m_text.leading, "px", "Line to line, image pixels; 0 is auto (1.2 x the line's largest size)",
                  [this] { return m_text.leading; }, [this](int v) { if (v == m_text.leading) return; m_text.leading = v; m_text_signal.emit("leading"); });
-    auto hint = Gtk::make_managed<Gtk::Label>("Click to set point type; drag for a box.\nEsc or Ctrl+Enter ends the editing.");
+    number_field(*box, "Baseline shift", -5000, 5000, m_text.shift, "px", "Raises (or, below 0, lowers) the selected letters, image pixels",
+                 [this] { return m_text.shift; }, [this](int v) { if (v == m_text.shift) return; m_text.shift = v; m_text_signal.emit("shift"); });
+    auto hint = Gtk::make_managed<Gtk::Label>("Click to set point type; drag for a box.\nSelect letters to style just them; with none\nselected a change is the whole layer's.\nAlt+←/→ kerns at the caret (tracks a selection).\nEsc or Ctrl+Enter ends the editing.");
     hint->add_css_class("dim-label");
     hint->add_css_class("caption");
     hint->set_xalign(0.f);

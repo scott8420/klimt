@@ -512,6 +512,14 @@ CanvasView::CanvasView() {
         }
         if (painting() || m_hint_mode || (m_tool == "pen" && m_pen_sub >= 0)) queue_draw();   // the brush outline / the Pen's rubber band follows the pointer
         if (m_on_pointer) m_on_pointer(x, y);   // s031: the rulers' marks
+        if (m_tool == "text" && !m_space && !m_panning && !m_text_ov.handles.empty()) {   // s047: over a box handle
+            int at = -1;
+            for (std::size_t k = 0; k < m_text_ov.handles.size() && at < 0; ++k)
+                if (std::hypot(to_screen_x(m_text_ov.handles[k].x) - x, to_screen_y(m_text_ov.handles[k].y) - y) <= 7) at = static_cast<int>(k);
+            static const char* names[] = {"nwse-resize", "ns-resize", "nesw-resize", "ew-resize", "nwse-resize", "ns-resize", "nesw-resize", "ew-resize"};
+            if (at >= 0) set_cursor(names[at]);
+            else update_cursor();
+        }
         if (m_tool == "move" && !m_space && !m_panning && m_guide_drag < 0) {   // s032: over a guide
             const int g = guide_near(x, y);
             if (g >= 0) set_cursor(m_guides[static_cast<std::size_t>(g)].vertical ? "col-resize" : "row-resize");
@@ -829,6 +837,15 @@ void CanvasView::draw_text_overlay(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->stroke();
         cr->move_to(x - 8, y - 5.5); cr->line_to(x - 3, y - 5.5);
         cr->move_to(x - 5.5, y - 8); cr->line_to(x - 5.5, y - 3);
+        cr->stroke();
+    }
+    for (const auto& h : m_text_ov.handles) {   // s047: the box's handles
+        const double x = std::round(to_screen_x(h.x)) + 0.5, y = std::round(to_screen_y(h.y)) + 0.5;
+        cr->rectangle(x - 3.5, y - 3.5, 7, 7);
+        cr->set_source_rgb(1, 1, 1);
+        cr->fill_preserve();
+        cr->set_source_rgba(0, 0, 0, 0.8);
+        cr->set_line_width(1);
         cr->stroke();
     }
     if (m_text_ov.caret) {

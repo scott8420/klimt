@@ -196,6 +196,7 @@ public:
         Cross c0, c1;                  // its ends
         bool box = false;              // a box being dragged out
         Cross b0, b1;
+        std::vector<Cross> handles;    // s047: box type's eight (0 TL, 1 T, 2 TR, 3 R, 4 BR, 5 B, 6 BL, 7 L)
     };
     void set_text_overlay(const TextOverlay& o) { m_text_ov = o; queue_draw(); }
     void set_cross(std::optional<Cross> at) { m_cross = at; queue_draw(); }

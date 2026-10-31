@@ -102,17 +102,23 @@ public:
     // type is edited, or text layers are picked) their style: the strip
     // follows the layer (show_text, no signal) and a change made on it is
     // told (signal_text, with what changed: "family", "weight", "italic",
-    // "size", "colour", "align", "tracking", "leading") for the Shell to
-    // apply to the layers.
+    // "size", "colour", "align", "tracking", "leading"; s047: "face" (weight,
+    // italic and stretch at once), "underline",
+    // "strike", "shift") for the Shell to apply -- to the selected letters
+    // while type is edited with a selection (a run), else the whole layer.
     struct TextOpts {
         std::string family = "Sans";
         int  weight = 400;
         bool italic = false;
+        int  stretch = 4;                     // s047: the face's width (PangoStretch)
         int  size = 48;                       // px
         std::array<float, 4> colour{0, 0, 0, 1};
         int  align = 0;                       // text::Align
         int  tracking = 0;                    // 1/1000 em
         int  leading = 0;                     // px; 0 auto
+        bool underline = false;               // s047: runs' fields
+        bool strike = false;
+        int  shift = 0;                       // baseline shift, px, up
         bool operator==(const TextOpts&) const = default;
     };
     const TextOpts& text() const { return m_text; }

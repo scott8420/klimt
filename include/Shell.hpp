@@ -399,7 +399,11 @@ private:
         double      px = 0, py = 0;       // the press, image px
         std::int64_t last_ms = 0;         // double / triple click
         int          clicks = 0;
+        int          handle = -1;         // s047: a box handle being dragged (0 TL .. 7 L)
+        text::Spec   hspec;               // the Spec at its press
     };
+    std::vector<CanvasView::Cross> text_handles(const text::Spec& s) const;   // category: text: s047
+    int  text_handle_at(const text::Spec& s, double x, double y) const;     // category: text: -1 none
     TextEdit         m_te;
     sigc::connection m_te_blink;
     GtkIMContext*    m_im = nullptr;               // a GtkIMMulticontext (gtkmm doesn't wrap it)

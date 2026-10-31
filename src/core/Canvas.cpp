@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
+#include <mutex>
+#include <atomic>
 #include <cstring>
 #include <limits>
 #include <set>
@@ -535,30 +538,57 @@ std::optional<Reshape> size_plan(const Before& b, int w, int h, double dpi, Filt
         const double sx = static_cast<double>(w) / std::max(1, im.width), sy = static_cast<double>(h) / std::max(1, im.height);
         out.path_map = [sx, sy](path::P q) { return path::P{q.x * sx, q.y * sy}; };
     }
-    const double n = static_cast<double>(b.pixels.size() + (b.mask ? 1 : 0));
-    double done = 0;
-    const auto part = [&](double base) {
-        return [&progress, base, n](double p) { if (progress) progress((base + p) / std::max(1.0, n)); };
-    };
+    // s047 (WEAKNESSES 27): every layer, layer mask and the selection is one
+    // item; the cores take items as they free up, and the plan lands as ONE
+    // step when all are done (a cancel or a failure: nothing).
+    struct Item { const Id* id; MapPtr src; int kind; };   // 0 a layer's pixels, 1 its mask, 2 the selection
+    std::vector<Item> items;
     for (const auto& [id, p] : b.pixels) {
-        if (p) {
-            auto m = resampled_layer(*p, w, h, f, cancelled, part(done));
-            if (!m) return std::nullopt;
-            out.pixels[id] = held(std::move(*m));
-        } else {
-            out.pixels[id] = nullptr;
+        if (p) items.push_back({&id, p, 0});
+        else out.pixels[id] = nullptr;
+    }
+    for (const auto& [id, lm] : b.masks) items.push_back({&id, lm, 1});
+    if (b.mask) items.push_back({nullptr, b.mask, 2});
+    std::vector<std::optional<pixel::TileMap>> got(items.size());
+    std::vector<std::atomic<double>> part(items.size());
+    for (auto& p : part) p.store(0);
+    std::atomic<std::size_t> take{0};
+    std::atomic<bool> failed{false};
+    std::mutex told;
+    double shown = 0;
+    const auto report = [&] {
+        if (!progress) return;
+        const std::lock_guard<std::mutex> g(told);   // summed under the lock: never told less than before
+        double sum = 0;
+        for (const auto& p : part) sum += p.load(std::memory_order_relaxed);
+        progress(std::max(shown, sum / static_cast<double>(std::max<std::size_t>(1, items.size()))));
+        shown = std::max(shown, sum / static_cast<double>(std::max<std::size_t>(1, items.size())));
+    };
+    const auto stop = [&] { return failed.load(std::memory_order_relaxed) || (cancelled && cancelled()); };
+    const auto work = [&] {
+        for (std::size_t i = take++; i < items.size(); i = take++) {
+            if (stop()) return;
+            const Item& it = items[i];
+            const auto mine = [&, i](double p) { part[i].store(p, std::memory_order_relaxed); report(); };
+            got[i] = it.kind == 2 ? resampled(*it.src, w, h, f, stop, mine) : resampled_layer(*it.src, w, h, f, stop, mine);
+            if (!got[i]) { failed = true; return; }
+            part[i].store(1, std::memory_order_relaxed);
+            report();
         }
-        done += 1;
+    };
+    const unsigned nt = static_cast<unsigned>(std::min<std::size_t>(items.size(), std::max(1u, std::thread::hardware_concurrency())));
+    if (nt <= 1) work();
+    else {
+        std::vector<std::thread> pool;
+        for (unsigned k = 0; k < nt; ++k) pool.emplace_back(work);
+        for (auto& th : pool) th.join();
     }
-    for (const auto& [id, lm] : b.masks) {   // s012: layer masks scale with their layers
-        auto m = resampled_layer(*lm, w, h, f, cancelled);
-        if (!m) return std::nullopt;
-        out.masks[id] = std::make_shared<const pixel::TileMap>(std::move(*m));
-    }
-    if (b.mask) {
-        auto m = resampled(*b.mask, w, h, f, cancelled, part(done));
-        if (!m) return std::nullopt;
-        out.mask = select::empty(*m) ? nullptr : std::make_shared<const pixel::TileMap>(std::move(*m));
+    if (failed || (cancelled && cancelled())) return std::nullopt;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        const Item& it = items[i];
+        if (it.kind == 0) out.pixels[*it.id] = held(std::move(*got[i]));
+        else if (it.kind == 1) out.masks[*it.id] = std::make_shared<const pixel::TileMap>(std::move(*got[i]));
+        else out.mask = select::empty(*got[i]) ? nullptr : std::make_shared<const pixel::TileMap>(std::move(*got[i]));
     }
     return out;
 }

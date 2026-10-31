@@ -211,4 +211,27 @@ void selftest_canvas(const Check& check) {
         core::layers::fill(t.j, t.d, "L5", {0, 0, 10, 10}, P::rgba(0, 1, 0, 1));
         check("canvas: a stale plan is refused", p && !C::land(t.j, t.d, b, *p, "Image Size") && t.d.image().width == 600, "");
     }
+    {
+        // s047 (WEAKNESSES 27): the layers resampled on all the cores at once --
+        // each exactly what it is resampled alone; progress only climbs, to 1;
+        // a cancel gives nothing.
+        Fix t;
+        const auto b = C::before(t.d);
+        std::vector<double> told;
+        const auto p = C::size_plan(b, 250, 170, 72, C::Filter::Smooth, {}, [&](double v) { told.push_back(v); });
+        bool same = p.has_value() && p->pixels.size() == b.pixels.size();
+        for (const auto& [id, src] : b.pixels) {
+            if (!same || !src) continue;
+            const auto alone = C::resampled_layer(*src, 250, 170, C::Filter::Smooth);
+            const auto& got = p->pixels.at(id);
+            for (int y = -4; same && alone && got && y < 174; y += 3)
+                for (int x = -4; x < 254; x += 5) if (got->get(x, y).c != alone->get(x, y).c) { same = false; break; }
+        }
+        check("canvas: Image Size over the cores: each layer as if alone", same, "");
+        check("canvas: its progress only climbs, to the end", !told.empty() && std::is_sorted(told.begin(), told.end()) && told.back() > 0.999,
+              told.empty() ? "" : std::to_string(told.back()));
+        int calls = 0;
+        check("canvas: cancelled midway, it gives nothing",
+              !C::size_plan(b, 250, 170, 72, C::Filter::Smooth, [&] { return ++calls > 3; }).has_value(), "");
+    }
 }

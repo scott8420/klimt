@@ -5,7 +5,7 @@ and tests, the way Composix carries `libs/plate`. The app is a thin shell over
 them. Long jobs run on worker threads, never on the UI thread
 (docs/REQUIREMENTS.md, "Threading").
 
-Built: `pixel` (s006), `formats` (s007), `text` (s046: type on Pango + Cairo). Planned, each added only when a milestone needs it:
+Built: `pixel` (s006), `formats` (s007), `text` (s046: type on Pango + Cairo; s047: Composix's leading, runs, real faces). Planned, each added only when a milestone needs it:
 
 | Library | Holds | Shared with |
 |---|---|---|
