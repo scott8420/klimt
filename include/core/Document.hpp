@@ -30,6 +30,7 @@
 #include "core/Undo.hpp"
 #include "pixel/Blend.hpp"
 #include "pixel/Pixel.hpp"
+#include "text/Text.hpp"   // s046
 
 #include <cstdint>
 #include <functional>
@@ -56,7 +57,11 @@ std::string_view     blend_key(Blend b);
 std::string_view     blend_label(Blend b);
 std::optional<Blend> blend_from_key(std::string_view key);
 
-enum class Kind : std::uint8_t { Pixel, Group, Adjustment, Filter, Path };   // s013: Adjustment; s030: Filter; s035: Path; Text later
+enum class Kind : std::uint8_t { Pixel, Group, Adjustment, Filter, Path, Text };   // s013: Adjustment; s030: Filter; s035: Path; s046: Text
+// s046: a layer that draws PIXELS of its own -- a pixel layer, or a text layer
+// (its pixels set from its text; core/Text.hpp). Styles, masks, clipping and
+// the compositor treat them alike; painting and filters take pixel layers only.
+inline bool draws_pixels(Kind k) { return k == Kind::Pixel || k == Kind::Text; }
 
 // Photoshop's four locks, as bits. Only All bites in the tree today: it
 // refuses opacity, fill, blend and clip on the layer and on everything inside
@@ -139,6 +144,11 @@ struct Layer {
     // background" hints (path::Hints), shared by pointer like the outline.
     // nullptr: none. They draw nothing and mask nothing; Isolate reads them.
     std::shared_ptr<const path::Hints> hints;
+    // s046: a TEXT LAYER's type (Kind::Text; libs/text, docs/text.md) --
+    // shared and compared by pointer like the pixels. Its `pixels` are this
+    // set at the image's size (nullptr while the text is empty); every edit
+    // sets them again in the same step. Rasterize drops it and keeps them.
+    std::shared_ptr<const text::Spec> text;
     bool operator==(const Layer&) const = default;
 };
 
@@ -472,6 +482,9 @@ bool set_path_hints(DocJournal& j, Document& d, const Id& id, const path::Hints&
 bool add_path_stroke(DocJournal& j, Document& d, const Id& id, const path::Stroke& s);
 // A path layer "L6" holding `p` at the top, LOADED (a verb's setup; tests).
 void load_path_layer(Document& d, const path::Path& p, bool mask = false, bool select = false);
+// s046: a text layer "L6" at the top (point text at (40, 100), or a 220 x 160
+// box at (40, 40)), set.
+void load_text_layer(Document& d, const std::string& words, double size, bool box);
 // s032: these guides on the picture (a verb's setup; tests).
 void load_guides(Document& d, const std::vector<Guide>& g);
 // s012: a layer mask (a verb's setup; tests).

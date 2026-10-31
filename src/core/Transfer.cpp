@@ -1,6 +1,7 @@
 // core::transfer -- layers from one document into another (s022).
 #include "core/Transfer.hpp"
 #include "core/Canvas.hpp"   // reframed
+#include "core/Text.hpp"     // s046
 
 #include <algorithm>
 
@@ -123,6 +124,10 @@ std::vector<Id> paste(DocJournal& j, Document& d, const transfer::Bundle& b, con
         l.pixels = fit(l.pixels, to.format);
         l.mask = fit(l.mask, mask_to);
         l.filter_mask = fit(l.filter_mask, mask_to);
+        if (l.kind == Kind::Text && l.text) {   // s046: the type moves with the rest and stays live
+            l.text = std::make_shared<const text::Spec>(text::mapped(*l.text, {1, 0, 0, 1, double(ox), double(oy)}));
+            l.pixels = text_pixels(to, *l.text);
+        }
         if (!l.pixels && l.kind == Kind::Pixel && l0.pixels) return {};
         fitted.emplace_back(id, std::move(l));
     }

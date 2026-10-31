@@ -97,6 +97,8 @@ void Shell::load_demo() {
 // The Layers selection moved, or the panel repainted: everything that follows
 // the selection follows it.
 void Shell::on_selection() {
+    if (m_te.on && m_layers.primary() != m_te.id) text_close();   // s046: another layer picked ends the editing
+    text_follow();   // s046: a picked text layer's style in the strip
     m_properties.show(m_layers.selection());
     update_paths();   // s035: a picked path layer is the path on the canvas
     update_layer_actions();
@@ -140,7 +142,8 @@ void Shell::update_layer_actions() {
         on("filter-last", m_last_filter && (filterable || (img && pixel_layer && core::filter::fills(m_last_filter->kind))));
         // s019: a pixel layer takes styles; Paste wants something copied.
         // s024: groups take styles too (Rasterize: pixel layers only).
-        const bool styleable = pixel_layer || (pl && pl->kind == core::Kind::Group);
+        const bool styleable = pl && (core::draws_pixels(pl->kind) || pl->kind == core::Kind::Group);   // s046: type too
+        on("text-rasterize", img && pl && pl->kind == core::Kind::Text);   // s046
         for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-satin", "style-pattern-overlay", "style-gradient-overlay", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear"})
             on(v, img && styleable);
         on("style-rasterize", img && pixel_layer);
@@ -340,6 +343,37 @@ void Shell::queue_render() {
                 }
         std::sort(owed.begin(), owed.end(), [](const T& a, const T& b) { return a.d < b.d; });
         auto shared = std::make_shared<const core::Layers>(std::move(layers));
+        // s046: THE VIEW PYRAMID (WEAKNESSES 13; docs/speed.md). Zoomed out to
+        // 1/4 or less with most of the picture owed (a document opened, a tab
+        // back, an adjustment or a full-frame layer changed): a likeness at
+        // that level first -- the layers reduced (each once: the cache keeps
+        // them while their pixels last), composited small, on one worker --
+        // then the tiles replace it as they land. klimt_bench: ~2x sooner the
+        // first time, ~10x (1/4) to ~30x (1/8) once the layers are reduced.
+        {
+            int k = 0;
+            while (k < std::min(CanvasView::kMips, 6) && std::ldexp(1.0, -(k + 1)) >= m_canvas.zoom() - 1e-9) ++k;
+            const std::size_t total = static_cast<std::size_t>(m_dirty.cols) * static_cast<std::size_t>(m_dirty.rows);
+            if (k >= 2 && m_mask_view.empty() && m_channel_view < 0 && !qm_flag && owed.size() >= 16 && owed.size() * 2 >= total) {
+                if (!m_reduce) m_reduce = std::make_shared<core::ReduceCache>();
+                m_reduce->prune(*shared);
+                m_renders.push_back(m_jobs.submit("Preview", [this, im, shared, k, cache = m_reduce](core::Jobs::Token& t) -> core::Jobs::Landing {
+                    const auto stop = [&t] { return t.cancelled(); };
+                    const auto r = core::reduced(im, *shared, k, cache.get(), stop);
+                    if (!r) return [] {};
+                    auto px = std::make_shared<std::vector<std::uint32_t>>();
+                    if (!core::composite_reduced_argb(*r, *px, stop)) return [] {};
+                    return [this, px, k, w = r->image.width, h = r->image.height] {
+                        std::vector<std::pair<int, int>> still;   // only where the tile itself hasn't landed
+                        for (int row = 0; row < m_dirty.rows; ++row)
+                            for (int col = 0; col < m_dirty.cols; ++col)
+                                if (m_dirty.has(col, row)) still.emplace_back(col, row);
+                        if (!still.empty()) m_canvas.set_preview(k, w, h, *px, still);
+                        if (auto lg = log::get(log::Area::Shell)) lg->info("preview: 1/{} on {} tiles still owed", 1 << k, still.size());
+                    };
+                }));
+            }
+        }
         constexpr std::size_t kBatch = 12;
         for (std::size_t i = 0; i < owed.size(); i += kBatch) {
             std::vector<std::pair<int, int>> batch;

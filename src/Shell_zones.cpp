@@ -369,6 +369,11 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     ls_do->append("Rasterize Layer Style", "win.style-rasterize");
     ls->append_section(ls_do);
     layer->append_submenu("Layer Style", ls);
+    {   // s046: type
+        auto ty = Gio::Menu::create();
+        ty->append("Rasterize Type", "win.text-rasterize");
+        layer->append_section(ty);
+    }
     // s008: the Select menu, and Fill / Delete beside Undo.
     auto sel = Gio::Menu::create();
     sel->append("All", "win.select-all");

@@ -398,6 +398,7 @@ void PropertiesPanel::paint() {
                     : l->kind == core::Kind::Adjustment ? std::string("adjustment layer")
                     : l->kind == core::Kind::Filter ? std::string("filter layer")   // s030
                     : l->kind == core::Kind::Path ? std::string("path layer")       // s035
+                    : l->kind == core::Kind::Text ? std::string("text layer")       // s046
                     : std::string("pixel layer");
     if (m_sel.size() > 1) sub += " · +" + std::to_string(m_sel.size() - 1) + " more";
     m_subtitle.set_text(sub);
@@ -465,7 +466,7 @@ void PropertiesPanel::paint() {
     paint_edges(*l);  // s036
     paint_live(*l);   // s018
     // s019: one pixel layer picked: its styles.
-    const bool styled = (l->kind == core::Kind::Pixel || l->kind == core::Kind::Group) && m_sel.size() == 1;   // s024: groups too
+    const bool styled = (core::draws_pixels(l->kind) || l->kind == core::Kind::Group) && m_sel.size() == 1;   // s024: groups too; s046: type
     m_styles.set_visible(styled);
     if (styled) {
         m_styles.set_sensitive(!m_doc.locked_all(primary()));

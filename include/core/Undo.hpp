@@ -107,6 +107,18 @@ public:
              const std::string& merge_key = {}, Clock::time_point now = Clock::now()) {
         // Inside a gesture, undo or redo: just write. The gesture's commit (or
         // the step being applied) is the step.
+        // s046: inside a GESTURE, a write to a record the press didn't name
+        // joins the step (its before taken now) -- a layer made mid-gesture,
+        // the siblings renumbered around it -- so the commit, the cancel and
+        // its undo carry it like the rest.
+        if (m_gesture) {
+            for (const auto& id : ids)
+                if (!has(m_open, id)) m_open.entries.push_back({id, m_store.get(id), std::nullopt});
+            const std::vector<Id> made = call(op, ids);
+            for (const auto& id : made)
+                if (!has(m_open, id)) m_open.entries.push_back({id, std::nullopt, std::nullopt});
+            return false;
+        }
         if (m_depth > 0) { call(op, ids); return false; }
 
         Step st;
@@ -157,6 +169,9 @@ public:
         for (const auto& id : ids) m_open.entries.push_back({id, m_store.get(id), std::nullopt});
     }
     bool in_gesture() const { return m_gesture; }
+    // s046: the open gesture's name, set once its end is known (a text visit
+    // becomes "Type “Hello”" or "New Text Layer “Hello”").
+    void relabel(const std::string& label) { if (m_gesture) m_open.label = label; }
     // Release: keep the step if anything changed.
     bool commit(Clock::time_point now = Clock::now()) {
         if (!m_gesture) return false;

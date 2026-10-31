@@ -1,4 +1,5 @@
 #include "core/Canvas.hpp"
+#include "core/Text.hpp"   // s046: type goes with the picture
 #include "core/Selection.hpp"
 #include "formats/Formats.hpp"   // kMaxSide
 
@@ -579,7 +580,32 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
     if (r.path_map)
         for (const auto& [id, l] : d.snapshot())
             if (l.kind == Kind::Path && (l.path || l.hints)) { path_ids.push_back(id); ids.push_back(id); }
+    // s046: TEXT LAYERS go with the picture and stay live -- the plan's map
+    // (affine for every canvas verb) composed into the type, set again at
+    // the new image.
+    std::array<double, 6> tm{1, 0, 0, 1, 0, 0};
+    if (r.path_map) {
+        const path::P o = r.path_map({0, 0}), ex = r.path_map({1, 0}), ey = r.path_map({0, 1});
+        tm = {ex.x - o.x, ex.y - o.y, ey.x - o.x, ey.y - o.y, o.x, o.y};
+    }
+    std::vector<std::pair<Id, Layer>> typed;
+    for (const auto& [id, l] : d.snapshot())
+        if (l.kind == Kind::Text && l.text) {
+            Layer v = l;
+            v.text = std::make_shared<const text::Spec>(text::mapped(*l.text, tm));
+            v.pixels = text_pixels(*r.image, *v.text);
+            if (const auto m = r.masks.find(id); m != r.masks.end()) v.mask = m->second;
+            typed.emplace_back(id, std::move(v));
+            if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+        }
     return j.run(label, ids, [&] {
+        for (const auto& [id, v] : typed) {   // s046 (its mask, filter mask: the loops below, as for any layer)
+            auto l = d.get(id);
+            if (!l) continue;
+            l->text = v.text;
+            l->pixels = v.pixels;
+            d.put(id, *l);
+        }
         for (const auto& id : path_ids) {   // s035: the outlines go with the picture
             auto l = d.get(id);
             if (!l) continue;

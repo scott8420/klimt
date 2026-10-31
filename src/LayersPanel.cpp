@@ -325,8 +325,10 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
     const bool adj = l.kind == core::Kind::Adjustment || flt;   // s013 (a filter layer: alike -- no pixels, a mask)
     const Id target = mask_target();
     const bool pth = l.kind == core::Kind::Path;   // s035
+    const bool txt = l.kind == core::Kind::Text;   // s046
     kind->set_from_icon_name(group ? "folder-symbolic" : pth ? "klimt-tool-pen-symbolic" : flt ? "klimt-filter-layer-symbolic"
-                             : adj ? "klimt-adjustment-symbolic" : "image-x-generic-symbolic");
+                             : adj ? "klimt-adjustment-symbolic" : txt ? "klimt-tool-text-symbolic" : "image-x-generic-symbolic");
+    if (txt) kind->set_tooltip_text("A text layer -- live type: the Text tool (T) edits it; Layer > Rasterize Type makes it pixels");
     if (pth) kind->set_tooltip_text("A path layer -- the Pen (P) edits it; in Properties: mask what's below it in its group, "
                                     "be the selection, Isolate what it goes round");
     if (flt && !l.filters.empty())

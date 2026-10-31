@@ -1,4 +1,8 @@
 #include "core/Composite.hpp"
+#include "core/Path.hpp"   // s046: the pyramid scales outlines
+#include <set>
+#include <cstring>
+#include <array>
 #include "core/Adjust.hpp"
 #include "core/Live.hpp"   // s018
 
@@ -600,6 +604,193 @@ bool composite_argb(const Image& im, const Layers& layers, std::vector<std::uint
                 }
             }
             if (progress) progress(static_cast<double>(r * cols + c + 1) / (rows * cols));
+        }
+    return true;
+}
+
+// ── s046: the view pyramid ──────────────────────────────────────────────────
+
+pixel::TileMap reduced_map(const pixel::TileMap& m, int k) {
+    k = std::clamp(k, 1, 6);
+    const int f = 1 << k;
+    const int W = m.width(), H = m.height();
+    const int ow = (W + f - 1) / f, oh = (H + f - 1) / f;
+    const pixel::Format& fmt = m.format();
+    const int n = fmt.channels();
+    const auto nn = static_cast<std::size_t>(n);
+    const bool alpha = fmt.alpha;
+    const auto ai = static_cast<std::size_t>(n - 1);
+    pixel::TileMap out(fmt, ow, oh);
+    const int ocols = out.cols(), orows = out.rows();
+    const int scols = m.cols(), srows = m.rows();
+    static const auto u8 = [] {
+        std::array<float, 256> t{};
+        for (int i = 0; i < 256; ++i) t[static_cast<std::size_t>(i)] = static_cast<float>(i) / 255.f;
+        return t;
+    }();
+    // One stored pixel, premultiplied, ADDED into d (straight -> premultiplied as it goes).
+    const auto add_px = [&](const std::uint8_t* in, float* d) {
+        float v[pixel::kMaxChannels];
+        switch (fmt.depth) {
+            case pixel::Depth::U8:  for (int c = 0; c < n; ++c) v[c] = u8[in[c]]; break;
+            case pixel::Depth::U16: for (int c = 0; c < n; ++c) { std::uint16_t q; std::memcpy(&q, in + 2 * c, 2); v[c] = q / 65535.f; } break;
+            case pixel::Depth::F32: std::memcpy(v, in, nn * 4); break;
+        }
+        if (alpha) { const float a = v[ai]; for (std::size_t c = 0; c < ai; ++c) d[c] += v[c] * a; d[ai] += a; }
+        else for (std::size_t c = 0; c < nn; ++c) d[c] += v[c];
+    };
+    const std::size_t bpp = static_cast<std::size_t>(fmt.bytes_per_pixel());
+    std::vector<float> acc;
+    std::vector<pixel::TileMap::TileRef> grid(static_cast<std::size_t>(ocols) * static_cast<std::size_t>(orows));
+    // 8-bit RGBA sums integers (c * a, a * 255): units of 255 * 255, undone with the mean.
+    const bool u8rgba = fmt.depth == pixel::Depth::U8 && alpha && n == 4;
+    const float unit = u8rgba ? 1.f / (255.f * 255.f) : 1.f;
+    for (int orow = 0; orow < orows; ++orow)
+        for (int ocol = 0; ocol < ocols; ++ocol) {
+            bool any = false;
+            acc.assign(static_cast<std::size_t>(kTile) * kTile * nn, 0.f);
+            for (int sr = orow * f; sr < std::min(srows, (orow + 1) * f); ++sr)
+                for (int sc = ocol * f; sc < std::min(scols, (ocol + 1) * f); ++sc) {
+                    const auto t = m.tile(sc, sr);
+                    if (!t) continue;
+                    any = true;
+                    const int bx = (sc - ocol * f) * kTile, by = (sr - orow * f) * kTile;   // the source tile's place in the block
+                    const int sw = std::min(kTile, W - sc * kTile), sh = std::min(kTile, H - sr * kTile);
+                    if (t->is_uniform()) {   // one value, times how many of its pixels each output pixel takes
+                        float v[pixel::kMaxChannels] = {};
+                        add_px(t->data(), v);
+                        if (u8rgba) for (std::size_t c = 0; c < nn; ++c) v[c] *= 255.f * 255.f;   // the fast path's units
+                        for (int oy = by / f; oy <= (by + sh - 1) / f; ++oy) {
+                            const int ry = std::min(by + sh, (oy + 1) * f) - std::max(by, oy * f);
+                            float* row = acc.data() + static_cast<std::size_t>(oy) * kTile * nn;
+                            for (int ox = bx / f; ox <= (bx + sw - 1) / f; ++ox) {
+                                const float w = static_cast<float>(ry * (std::min(bx + sw, (ox + 1) * f) - std::max(bx, ox * f)));
+                                float* d = row + static_cast<std::size_t>(ox) * nn;
+                                for (std::size_t c = 0; c < nn; ++c) d[c] += v[c] * w;
+                            }
+                        }
+                        continue;
+                    }
+                    const std::uint8_t* data = t->data();
+                    if (u8rgba) {   // the common case, unrolled: 8-bit RGBA
+                        for (int y = 0; y < sh; ++y) {
+                            const std::uint8_t* sp = data + static_cast<std::size_t>(y) * kTile * 4;
+                            float* arow = acc.data() + static_cast<std::size_t>((by + y) >> k) * kTile * 4 + static_cast<std::size_t>(bx >> k) * 4;
+                            for (int ox = 0; ox < (sw + f - 1) >> k; ++ox) {   // integers per run of f, one float add per output pixel
+                                std::uint32_t r = 0, g = 0, b = 0, aa = 0;
+                                const int run = std::min(f, sw - (ox << k));
+                                for (int i = 0; i < run; ++i, sp += 4) {
+                                    const std::uint32_t a = sp[3];
+                                    r += sp[0] * a; g += sp[1] * a; b += sp[2] * a; aa += a;
+                                }
+                                float* d = arow + static_cast<std::size_t>(ox) * 4;
+                                d[0] += static_cast<float>(r);
+                                d[1] += static_cast<float>(g);
+                                d[2] += static_cast<float>(b);
+                                d[3] += static_cast<float>(aa * 255u);
+                            }
+                        }
+                        continue;   // in units of 255 * 255: scaled with the mean below
+                    }
+                    for (int y = 0; y < sh; ++y) {
+                        const std::uint8_t* srow = data + static_cast<std::size_t>(y) * kTile * bpp;
+                        float* arow = acc.data() + static_cast<std::size_t>((by + y) >> k) * kTile * nn + static_cast<std::size_t>(bx >> k) * nn;
+                        int x = 0;
+                        for (; x + f <= sw; x += f, arow += nn)   // whole runs of f into one output pixel
+                            for (int i = 0; i < f; ++i) add_px(srow + static_cast<std::size_t>(x + i) * bpp, arow);
+                        for (; x < sw; ++x) add_px(srow + static_cast<std::size_t>(x) * bpp, arow);   // the edge's part
+                    }
+                }
+            if (!any) continue;
+            // The mean: over the in-image pixels each output pixel covers.
+            for (int y = 0; y < kTile; ++y) {
+                const int gy = orow * kTile + y;
+                const int cy = std::clamp(H - gy * f, 0, f);
+                if (!cy) break;
+                for (int x = 0; x < kTile; ++x) {
+                    const int gx = ocol * kTile + x;
+                    const int cx = std::clamp(W - gx * f, 0, f);
+                    if (!cx) break;
+                    const float inv = unit / static_cast<float>(cx * cy);
+                    float* d = acc.data() + (static_cast<std::size_t>(y) * kTile + static_cast<std::size_t>(x)) * nn;
+                    for (std::size_t c = 0; c < nn; ++c) d[c] *= inv;
+                }
+            }
+            pixel::TileWriter w(fmt, pixel::transparent());
+            w.set_premultiplied(acc);
+            auto t = w.freeze();
+            if (alpha && t->is_uniform() && t->get(0, 0).c[ai] <= 0.f) continue;   // all clear: absent
+            grid[static_cast<std::size_t>(orow) * static_cast<std::size_t>(ocols) + static_cast<std::size_t>(ocol)] = std::move(t);
+        }
+    return pixel::TileMap::from_tiles(fmt, ow, oh, std::move(grid));
+}
+
+std::shared_ptr<const pixel::TileMap> ReduceCache::get(const std::shared_ptr<const pixel::TileMap>& m, int k) {
+    if (!m) return nullptr;
+    const auto key = std::make_pair(m.get(), k);
+    {
+        std::lock_guard lock(m_mu);
+        if (const auto it = m_map.find(key); it != m_map.end()) return it->second.to;
+    }
+    auto r = std::make_shared<const pixel::TileMap>(reduced_map(*m, k));   // outside the lock: two threads may both make it (same result)
+    std::lock_guard lock(m_mu);
+    m_map[key] = {m, r};
+    return r;
+}
+
+void ReduceCache::prune(const Layers& keep) {
+    std::set<const pixel::TileMap*> live;
+    for (const auto& [id, l] : keep)
+        for (const auto* p : {l.pixels.get(), l.mask.get(), l.filter_mask.get()}) if (p) live.insert(p);
+    std::lock_guard lock(m_mu);
+    for (auto it = m_map.begin(); it != m_map.end();) it = live.count(it->first.first) ? std::next(it) : m_map.erase(it);
+}
+
+std::size_t ReduceCache::size() const {
+    std::lock_guard lock(m_mu);
+    return m_map.size();
+}
+
+std::optional<Reduced> reduced(const Image& im, const Layers& layers, int k, ReduceCache* cache,
+                               const std::function<bool()>& cancelled) {
+    k = std::clamp(k, 1, 6);
+    const int f = 1 << k;
+    Reduced r;
+    r.image = im;
+    r.image.width = (im.width + f - 1) / f;
+    r.image.height = (im.height + f - 1) / f;
+    r.image.guides.clear();
+    const auto red = [&](const std::shared_ptr<const pixel::TileMap>& m) -> std::shared_ptr<const pixel::TileMap> {
+        if (!m) return nullptr;
+        return cache ? cache->get(m, k) : std::make_shared<const pixel::TileMap>(reduced_map(*m, k));
+    };
+    const double s = 1.0 / f;
+    for (const auto& [id, l0] : layers) {
+        if (cancelled && cancelled()) return std::nullopt;
+        Layer l = l0;
+        l.pixels = red(l0.pixels);
+        l.mask = red(l0.mask);
+        l.filter_mask = red(l0.filter_mask);
+        if (l.path) l.path = std::make_shared<const path::Path>(path::mapped(*l.path, [s](path::P q) { return path::P{q.x * s, q.y * s}; }));
+        if (l.hints) l.hints = nullptr;   // Isolate's strokes draw nothing
+        r.layers.emplace(id, std::move(l));
+    }
+    return r;
+}
+
+bool composite_reduced_argb(const Reduced& r, std::vector<std::uint32_t>& out, const std::function<bool()>& cancelled) {
+    const int W = r.image.width, H = r.image.height;
+    out.assign(static_cast<std::size_t>(W) * static_cast<std::size_t>(H), 0u);
+    const int cols = (W + kTile - 1) / kTile, rows = (H + kTile - 1) / kTile;
+    std::vector<std::uint32_t> t;
+    for (int row = 0; row < rows; ++row)
+        for (int col = 0; col < cols; ++col) {
+            if (cancelled && cancelled()) return false;
+            int w = 0, h = 0;
+            composite_tile_argb(r.image, r.layers, col, row, t, w, h);
+            for (int y = 0; y < h; ++y)
+                std::copy_n(t.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(w), w,
+                            out.data() + static_cast<std::size_t>(row * kTile + y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(col * kTile));
         }
     return true;
 }

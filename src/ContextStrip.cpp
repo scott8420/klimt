@@ -24,6 +24,9 @@
 #include <gtkmm/drawingarea.h>
 #include <gtkmm/listbox.h>
 #include <gtkmm/scrolledwindow.h>
+#include <gtkmm/colordialogbutton.h>
+#include <gtkmm/colordialog.h>
+#include "text/Text.hpp"   // s046: the font families
 #include <cairomm/context.h>
 #include <glibmm/main.h>
 
@@ -420,6 +423,7 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
                      [this] { return m_wand.tolerance; }, [this](int v) { m_wand.tolerance = v; });
     }
 
+    if (t.id == "text") text_strip();   // s046
     if (t.id == "pen") {   // s035 m5: the picked point -- corner or smooth
         auto pt = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
         pt->add_css_class("linked");
@@ -906,6 +910,148 @@ void ContextStrip::save_tool_default(const std::string& t) {
     else if (t == "clone" || t == "heal")
         m_defaults.others["source"] = {{"aligned", m_clone.aligned}, {"all_layers", m_clone.all_layers}};
     if (!m_defaults_file.empty()) core::save_tool_defaults(m_defaults_file, m_defaults);
+}
+
+// ── s046: the Text tool ─────────────────────────────────────────────────────
+
+void ContextStrip::show_text(const TextOpts& o) {
+    if (o == m_text) return;
+    m_text = o;
+    refresh_strip("text");
+}
+
+void ContextStrip::text_strip() {
+    // The family: every installed one, searchable (type to find).
+    static const std::vector<std::string> fams = [] {
+        auto f = text::families();
+        if (f.empty()) f = {"Sans", "Serif", "Monospace"};
+        return f;
+    }();
+    std::vector<Glib::ustring> names(fams.begin(), fams.end());
+    auto fam = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(names));
+    fam->set_name("strip.text.family");
+    gtk_drop_down_set_expression(fam->gobj(), gtk_property_expression_new(GTK_TYPE_STRING_OBJECT, nullptr, "string"));
+    fam->set_enable_search(true);
+    fam->set_tooltip_text("The font family (type to search)");
+    guint at = GTK_INVALID_LIST_POSITION;
+    for (std::size_t i = 0; i < fams.size(); ++i)
+        if (g_ascii_strcasecmp(fams[i].c_str(), m_text.family.c_str()) == 0) { at = static_cast<guint>(i); break; }
+    if (at == GTK_INVALID_LIST_POSITION) {   // not installed here: say so, keep it
+        for (std::size_t i = 0; i < fams.size(); ++i)
+            if (fams[i] == "Sans" || fams[i] == "DejaVu Sans" || fams[i] == "Cantarell") { at = static_cast<guint>(i); break; }
+        fam->set_tooltip_text("“" + m_text.family + "” isn't installed here -- the type shows as it was saved until it's edited");
+    }
+    if (at != GTK_INVALID_LIST_POSITION) fam->set_selected(at);
+    fam->property_selected().signal_changed().connect([this, fam] {
+        const auto i = fam->get_selected();
+        if (i == GTK_INVALID_LIST_POSITION || i >= fams.size() || fams[i] == m_text.family) return;
+        m_text.family = fams[i];
+        m_text_signal.emit("family");
+    });
+    append(*fam);
+
+    // The weight, and italic beside it.
+    static const std::vector<std::pair<int, const char*>> weights = {
+        {100, "Thin"}, {200, "Extra Light"}, {300, "Light"}, {400, "Regular"}, {500, "Medium"},
+        {600, "Semibold"}, {700, "Bold"}, {800, "Extra Bold"}, {900, "Black"}};
+    std::vector<Glib::ustring> wn;
+    guint wat = 3;
+    for (std::size_t i = 0; i < weights.size(); ++i) {
+        wn.emplace_back(weights[i].second);
+        if (weights[i].first == m_text.weight) wat = static_cast<guint>(i);
+    }
+    auto style = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+    style->add_css_class("linked");
+    auto wt = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(wn));
+    wt->set_name("strip.text.weight");
+    wt->set_tooltip_text("The weight (the font's nearest face is used)");
+    wt->set_selected(wat);
+    wt->property_selected().signal_changed().connect([this, wt] {
+        const auto i = wt->get_selected();
+        if (i >= weights.size() || weights[i].first == m_text.weight) return;
+        m_text.weight = weights[i].first;
+        m_text_signal.emit("weight");
+    });
+    style->append(*wt);
+    auto it = Gtk::make_managed<Gtk::ToggleButton>();
+    it->set_name("strip.text.italic");
+    it->set_icon_name("format-text-italic-symbolic");
+    it->set_tooltip_text("Italic");
+    it->set_focus_on_click(false);
+    it->set_active(m_text.italic);
+    it->signal_toggled().connect([this, it] {
+        if (it->get_active() == m_text.italic) return;
+        m_text.italic = it->get_active();
+        m_text_signal.emit("italic");
+    });
+    style->append(*it);
+    append(*style);
+
+    number_field(*this, "Size", 1, 5000, m_text.size, "px", "The type's size (the em), image pixels",
+                 [this] { return m_text.size; }, [this](int v) { if (v == m_text.size) return; m_text.size = v; m_text_signal.emit("size"); });
+
+    // The colour: the type's own (a new layer starts from the foreground).
+    auto col = Gtk::make_managed<Gtk::ColorDialogButton>(Gtk::ColorDialog::create());
+    col->set_name("strip.text.colour");
+    col->set_tooltip_text("The type's colour");
+    {
+        Gdk::RGBA c;
+        c.set_rgba(m_text.colour[0], m_text.colour[1], m_text.colour[2], m_text.colour[3]);
+        col->set_rgba(c);
+    }
+    col->property_rgba().signal_changed().connect([this, col] {
+        const auto c = col->get_rgba();
+        const std::array<float, 4> v{static_cast<float>(c.get_red()), static_cast<float>(c.get_green()),
+                                     static_cast<float>(c.get_blue()), static_cast<float>(c.get_alpha())};
+        if (v == m_text.colour) return;
+        m_text.colour = v;
+        m_text_signal.emit("colour");
+    });
+    append(*col);
+
+    // The alignment: one linked group.
+    auto al = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+    al->add_css_class("linked");
+    static const char* icons[] = {"format-justify-left-symbolic", "format-justify-center-symbolic", "format-justify-right-symbolic", "format-justify-fill-symbolic"};
+    static const char* tips[] = {"Align left", "Centre", "Align right", "Justify (box type)"};
+    Gtk::ToggleButton* first = nullptr;
+    for (int i = 0; i < 4; ++i) {
+        auto b = Gtk::make_managed<Gtk::ToggleButton>();
+        b->set_name(std::string("strip.text.align.") + std::to_string(i));
+        b->set_icon_name(icons[i]);
+        b->set_tooltip_text(tips[i]);
+        b->set_focus_on_click(false);
+        if (first) b->set_group(*first); else first = b;
+        if (i == m_text.align) b->set_active(true);
+        b->signal_toggled().connect([this, b, i] {
+            if (!b->get_active() || i == m_text.align) return;
+            m_text.align = i;
+            m_text_signal.emit("align");
+        });
+        al->append(*b);
+    }
+    append(*al);
+
+    // Tracking and leading -- less often: one button, a small panel.
+    auto mb = Gtk::make_managed<Gtk::MenuButton>();
+    mb->set_name("strip.text.spacing");
+    mb->set_label("Spacing");
+    mb->set_tooltip_text("Tracking (between letters) and leading (between lines)");
+    auto pop = Gtk::make_managed<Gtk::Popover>();
+    auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
+    box->set_margin(10);
+    number_field(*box, "Tracking", -1000, 5000, m_text.tracking, "", "Between letters, in thousandths of an em (Photoshop's tracking); 0 is the font's own",
+                 [this] { return m_text.tracking; }, [this](int v) { if (v == m_text.tracking) return; m_text.tracking = v; m_text_signal.emit("tracking"); });
+    number_field(*box, "Leading", 0, 10000, m_text.leading, "px", "Line to line, image pixels; 0 is the font's own (auto)",
+                 [this] { return m_text.leading; }, [this](int v) { if (v == m_text.leading) return; m_text.leading = v; m_text_signal.emit("leading"); });
+    auto hint = Gtk::make_managed<Gtk::Label>("Click to set point type; drag for a box.\nEsc or Ctrl+Enter ends the editing.");
+    hint->add_css_class("dim-label");
+    hint->add_css_class("caption");
+    hint->set_xalign(0.f);
+    box->append(*hint);
+    pop->set_child(*box);
+    mb->set_popover(*pop);
+    append(*mb);
 }
 
 }  // namespace klimt

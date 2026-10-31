@@ -13,6 +13,7 @@
 #include "core/Fade.hpp"       // s020: Edit > Fade
 #include "core/Paths.hpp"      // s035: paths
 #include "core/Refine.hpp"     // s038: Refine to Edges, the Refine brush
+#include "core/Text.hpp"       // s046: text layers
 #include "CanvasView.hpp"
 #include "RulerView.hpp"     // s031
 #include "ContextStrip.hpp"
@@ -25,6 +26,7 @@
 #include "ToolRail.hpp"
 
 #include <gtkmm/applicationwindow.h>
+#include <gtkmm/eventcontrollerkey.h>   // s046
 #include <giomm/menu.h>
 #include <giomm/simpleaction.h>
 #include <glibmm/dispatcher.h>
@@ -366,6 +368,42 @@ private:
     // s020: the live tab's file (the .klimt it saves to, its name, its saved
     // mark) lives in m_tabs.live_info(); these name it.
     std::string&       path_() { return m_tabs.live_info().path; }
+
+    std::shared_ptr<core::ReduceCache> m_reduce;   // s046: the view pyramid's reduced layers
+    // ── text (s046) ── src/Shell_text.cpp ──────────────────────────────────
+    // The Text tool. A VISIT is one step: the journal's gesture opens when
+    // the editing starts (a click on type, or a new point / box) and closes
+    // when it ends (Esc, Ctrl+Enter, a click away, another tool or layer,
+    // Undo, a save, a tab switch). Keys reach the type through an input
+    // method (dead keys, compose, CJK) while a visit is open, and only then.
+    void on_text(CanvasView::TextAt at, double x, double y, bool shift);   // category: text: the tool's press / drag / release
+    void text_open(const std::string& id, bool made);   // category: text: a visit starts on this layer
+    void text_close();                                  // category: text: the visit ends -- one step, or nothing
+    bool text_key(guint keyval, Gdk::ModifierType state);   // category: text: the editor's keys (false: not ours)
+    void text_insert(const std::string& s);             // category: text: typed / pasted text replaces the selection
+    void text_erase(int a, int b);                      // category: text: [a, b) out
+    void text_show();                                   // category: text: the overlay -- frame, selection, caret
+    void on_text_style(const std::string& what);        // category: text: the strip changed -> the type it applies to
+    void text_follow();                                 // category: text: the strip shows the edited / picked type
+    std::string text_hit(double x, double y) const;     // category: text: the topmost shown type whose frame holds the point
+    void text_ime(bool on);                             // category: text: the input method attached / detached
+    struct TextEdit {
+        bool        on = false;
+        std::string id;                   // the layer
+        bool        made = false;         // made in this visit (empty at the end: nothing kept)
+        int         caret = 0, anchor = 0;   // byte indices; the selection is [min, max)
+        bool        blink = true;
+        bool        selecting = false;    // a drag over the type
+        bool        pressing = false;     // a press that may become a new point / box
+        bool        boxing = false;
+        double      px = 0, py = 0;       // the press, image px
+        std::int64_t last_ms = 0;         // double / triple click
+        int          clicks = 0;
+    };
+    TextEdit         m_te;
+    sigc::connection m_te_blink;
+    GtkIMContext*    m_im = nullptr;               // a GtkIMMulticontext (gtkmm doesn't wrap it)
+    Glib::RefPtr<Gtk::EventControllerKey> m_te_keys;
     std::string&       name_() { return m_tabs.live_info().name; }
     std::string        m_folder;               // where the last chooser was (view state)
     core::Jobs::Id     m_file_job = 0;         // the open / save / export in flight

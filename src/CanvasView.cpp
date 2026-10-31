@@ -183,6 +183,15 @@ CanvasView::CanvasView() {
                 crop_press(x, y);
                 return;
             }
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "text" && m_iw > 0) {   // s046: the Text tool
+                m_texting = true;
+                m_press_x = x;
+                m_press_y = y;
+                grab_focus();   // the keys go to the type
+                m_text_signal.emit(TextAt::Press, to_image_x(x), to_image_y(y),
+                                   (drag->get_current_event_state() & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{});
+                return;
+            }
             // s032: the Move tool on a guide drags the guide.
             if (!m_panning && button == GDK_BUTTON_PRIMARY && m_tool == "move" && m_iw > 0 && !m_xf.on) {
                 const int g = guide_near(x, y);
@@ -290,6 +299,11 @@ CanvasView::CanvasView() {
                 int ox = 0, oy = 0;
                 offset(dx, dy, ox, oy);
                 (m_patching ? m_patch_signal : m_move_signal).emit(MoveAt::Move, ox, oy);
+                return;
+            }
+            if (m_texting) {   // s046
+                m_text_signal.emit(TextAt::Drag, to_image_x(m_press_x + dx), to_image_y(m_press_y + dy),
+                                   (drag->get_current_event_state() & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{});
                 return;
             }
             if (m_line) {
@@ -419,6 +433,12 @@ CanvasView::CanvasView() {
                     Glib::signal_idle().connect_once([this] { m_zoom_box_shown = false; queue_draw(); });
                 }
                 queue_draw();
+                return;
+            }
+            if (m_texting) {   // s046
+                m_texting = false;
+                m_text_signal.emit(TextAt::Release, to_image_x(m_press_x + dx), to_image_y(m_press_y + dy),
+                                   (drag->get_current_event_state() & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{});
                 return;
             }
             if (m_moving || m_patching) {
@@ -562,6 +582,32 @@ void CanvasView::set_document(int width, int height) {
     queue_draw();
 }
 
+void CanvasView::set_preview(int level, int w, int h, const std::vector<std::uint32_t>& argb, const std::vector<std::pair<int, int>>& tiles) {
+    if (level < 1 || level > 6 || w <= 0 || h <= 0 || argb.size() < static_cast<std::size_t>(w) * static_cast<std::size_t>(h)) return;
+    const int side = kTile >> level;
+    for (const auto& [col, row] : tiles) {
+        if (col < 0 || row < 0 || col >= m_cols || row >= m_rows) continue;
+        const int tw = std::min(kTile, m_iw - col * kTile), th = std::min(kTile, m_ih - row * kTile);
+        const int x0 = col * side, y0 = row * side;
+        const int pw = std::min((tw + (1 << level) - 1) >> level, w - x0), ph = std::min((th + (1 << level) - 1) >> level, h - y0);
+        if (pw <= 0 || ph <= 0) continue;
+        auto surf = Cairo::ImageSurface::create(Cairo::Surface::Format::ARGB32, pw, ph);
+        surf->flush();
+        unsigned char* dst = surf->get_data();
+        const int stride = surf->get_stride();
+        for (int y = 0; y < ph; ++y)
+            std::memcpy(dst + static_cast<std::size_t>(y) * static_cast<std::size_t>(stride),
+                        argb.data() + static_cast<std::size_t>(y0 + y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x0),
+                        static_cast<std::size_t>(pw) * 4);
+        surf->mark_dirty();
+        Held& hd = m_grid[static_cast<std::size_t>(row) * static_cast<std::size_t>(m_cols) + static_cast<std::size_t>(col)];
+        hd.w = tw;
+        hd.h = th;
+        hd.preview = surf;
+    }
+    queue_draw();
+}
+
 void CanvasView::set_tiles(const std::vector<Tile>& tiles) {
     for (const auto& t : tiles) {
         if (t.col < 0 || t.row < 0 || t.col >= m_cols || t.row >= m_rows || !t.argb || t.w <= 0 || t.h <= 0 ||
@@ -585,6 +631,7 @@ void CanvasView::set_tiles(const std::vector<Tile>& tiles) {
         h.w = t.w;
         h.h = t.h;
         h.surface = surface_of(*t.argb, t.w, t.h);
+        h.preview = {};   // s046: the tile itself now
         h.mips.clear();
         for (const auto& m : t.mips)
             if (m.argb && m.w > 0 && m.h > 0 && m.argb->size() >= static_cast<std::size_t>(m.w) * static_cast<std::size_t>(m.h))
@@ -743,6 +790,59 @@ void CanvasView::pen_modifiers() {
     m_pen_mode_signal.emit(shown);
 }
 
+// s046: the Text tool's overlay -- the edited layer's frame (a thin dashed
+// line, light over dark), the selected text (the accent, translucent), the
+// caret (a crisp line in the inverse of the picture: CAIRO difference), the
+// box being dragged out.
+void CanvasView::draw_text_overlay(const Cairo::RefPtr<Cairo::Context>& cr) {
+    if (!m_text_ov.on) return;
+    const auto quad = [&](const TextQuad& q) {
+        cr->move_to(to_screen_x(q.c[0].x), to_screen_y(q.c[0].y));
+        for (int k = 1; k < 4; ++k) cr->line_to(to_screen_x(q.c[static_cast<std::size_t>(k)].x), to_screen_y(q.c[static_cast<std::size_t>(k)].y));
+        cr->close_path();
+    };
+    cr->save();
+    for (const auto& q : m_text_ov.sel) quad(q);
+    cr->set_source_rgba(0.21, 0.52, 0.89, 0.38);
+    cr->fill();
+    if (m_text_ov.frame_on || m_text_ov.box) {
+        if (m_text_ov.box) {
+            const double x0 = to_screen_x(m_text_ov.b0.x), y0 = to_screen_y(m_text_ov.b0.y);
+            const double x1 = to_screen_x(m_text_ov.b1.x), y1 = to_screen_y(m_text_ov.b1.y);
+            cr->rectangle(std::round(std::min(x0, x1)) + 0.5, std::round(std::min(y0, y1)) + 0.5, std::round(std::abs(x1 - x0)), std::round(std::abs(y1 - y0)));
+        } else quad(m_text_ov.frame);
+        cr->set_line_width(1);
+        cr->set_source_rgba(0, 0, 0, 0.7);
+        cr->stroke_preserve();
+        cr->set_dash(std::vector<double>{4, 4}, 0);
+        cr->set_source_rgba(1, 1, 1, 0.9);
+        cr->stroke();
+        cr->unset_dash();
+    }
+    if (m_text_ov.frame_on && m_text_ov.overflow && !m_text_ov.box) {   // Photoshop's overflow mark: a boxed plus at the corner
+        const double x = std::round(to_screen_x(m_text_ov.frame.c[2].x)) + 0.5, y = std::round(to_screen_y(m_text_ov.frame.c[2].y)) + 0.5;
+        cr->rectangle(x - 10, y - 10, 9, 9);
+        cr->set_source_rgb(1, 1, 1);
+        cr->fill_preserve();
+        cr->set_source_rgb(0.75, 0.1, 0.1);
+        cr->set_line_width(1);
+        cr->stroke();
+        cr->move_to(x - 8, y - 5.5); cr->line_to(x - 3, y - 5.5);
+        cr->move_to(x - 5.5, y - 8); cr->line_to(x - 5.5, y - 3);
+        cr->stroke();
+    }
+    if (m_text_ov.caret) {
+        cairo_set_operator(cr->cobj(), CAIRO_OPERATOR_DIFFERENCE);   // cairomm 1.16 has no name for it
+        cr->set_source_rgb(1, 1, 1);
+        const double len = m_zoom * std::hypot(m_text_ov.c1.x - m_text_ov.c0.x, m_text_ov.c1.y - m_text_ov.c0.y);   // the line's height on screen
+        cr->set_line_width(std::clamp(len / 30, 1.5, 4.0));
+        cr->move_to(to_screen_x(m_text_ov.c0.x), to_screen_y(m_text_ov.c0.y));
+        cr->line_to(to_screen_x(m_text_ov.c1.x), to_screen_y(m_text_ov.c1.y));
+        cr->stroke();
+    }
+    cr->restore();
+}
+
 void CanvasView::update_cursor() {
     if (m_panning) set_cursor("grabbing");
     else if (m_point_pick) set_cursor("crosshair");   // s039 m2: Set Focal Point
@@ -750,6 +850,7 @@ void CanvasView::update_cursor() {
     else if (m_hint_mode) set_cursor("crosshair");   // s037: painting Isolate strokes (the ring shows the size)
     else if (m_tool == "zoom") set_cursor("zoom-in");
     else if (m_tool == "move") set_cursor("move");
+    else if (m_tool == "text") set_cursor("text");   // s046
     else if (m_tool == "pen" && (m_variant == 1 || (m_variant == 0 && m_pen_ctrl))) set_cursor("default");    // s035: Select (or Ctrl held): the arrow
     else if (m_tool == "pen" && (m_variant == 2 || (m_variant == 0 && m_pen_alt))) set_cursor("pointer");     // Convert (or Alt held): the hand
     else if (m_tool == "crop" || m_tool == "gradient" || m_tool == "pen") set_cursor("crosshair");
@@ -1228,7 +1329,7 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     for (int row = r0; row <= r1; ++row)
         for (int col = c0; col <= c1; ++col) {
             const Held& t = m_grid[static_cast<std::size_t>(row) * static_cast<std::size_t>(m_cols) + static_cast<std::size_t>(col)];
-            if (!t.surface) continue;
+            if (!t.surface && !t.preview) continue;
             const double tx0 = std::round(to_screen_x(col * kTile)), ty0 = std::round(to_screen_y(row * kTile));
             const double tx1 = std::round(to_screen_x(col * kTile + t.w)), ty1 = std::round(to_screen_y(row * kTile + t.h));
             if (tx1 <= tx0 || ty1 <= ty0) continue;
@@ -1236,7 +1337,11 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
             // scaled down more than 2x), not the whole tile.
             Cairo::RefPtr<Cairo::ImageSurface> src = t.surface;
             int sw = t.w, sh = t.h;
-            if (level > 0 && !t.mips.empty()) {
+            if (t.preview) {   // s046: the pyramid's likeness -- newer than the held tile
+                src = t.preview;
+                sw = src->get_width();
+                sh = src->get_height();
+            } else if (level > 0 && !t.mips.empty()) {
                 src = t.mips[static_cast<std::size_t>(std::min<int>(level, static_cast<int>(t.mips.size())) - 1)];
                 sw = src->get_width();
                 sh = src->get_height();
@@ -1264,6 +1369,7 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     draw_path(cr);   // s035 -- under the ants, so a path loaded as the selection still shows its ants
     draw_ants(cr, w, h);
     draw_rubber(cr);
+    draw_text_overlay(cr);   // s046
     if (m_zoom_box && m_zoom_box_shown) {   // s030: the Zoom tool's box (while dragging)
         const double x0 = std::round(std::min(m_press_x, m_zbx)) + 0.5, y0 = std::round(std::min(m_press_y, m_zby)) + 0.5;
         const double x1 = std::round(std::max(m_press_x, m_zbx)) + 0.5, y1 = std::round(std::max(m_press_y, m_zby)) + 0.5;

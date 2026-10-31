@@ -37,7 +37,7 @@ void Shell::on_shape(const CanvasView::Shape& shape) {
         const int x = static_cast<int>(std::floor(at.x)), y = static_cast<int>(std::floor(at.y));
         if (x < 0 || y < 0 || x >= im.width || y >= im.height) return;
         const auto l = m_doc.get(m_layers.primary());
-        if (!w.all_layers && (!l || l->kind != core::Kind::Pixel)) { toast("Magic Wand: pick a layer (or tick All layers)"); return; }
+        if (!w.all_layers && (!l || !core::draws_pixels(l->kind))) { toast("Magic Wand: pick a layer (or tick All layers)"); return; }   // s046: type reads as pixels
         const auto layers = m_doc.snapshot();
         const auto src = w.all_layers ? nullptr : l->pixels;
         const auto blank = m_doc.blank();

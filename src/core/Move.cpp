@@ -1,4 +1,5 @@
 #include "core/Move.hpp"
+#include "core/Text.hpp"   // s046
 #include "core/Selection.hpp"
 #include "core/Canvas.hpp"
 
@@ -28,7 +29,7 @@ std::vector<Id> targets(const Document& d, const std::vector<Id>& selected) {
     std::set<Id> want;
     for (const auto& s : selected)
         for (const auto& id : d.subtree(s))
-            if (const auto l = d.get(id); l && l->kind == Kind::Pixel) want.insert(id);
+            if (const auto l = d.get(id); l && draws_pixels(l->kind)) want.insert(id);   // s046: type too
     std::vector<Id> out;
     for (const auto& id : d.walk())
         if (want.count(id)) out.push_back(id);
@@ -66,6 +67,7 @@ std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, con
         const auto l = *d.get(id);
         p.original[id] = l.pixels;
         if (l.mask) p.masks[id] = l.mask;
+        if (l.kind == Kind::Text && l.text) { p.texts[id] = l.text; continue; }   // s046: moves whole
         if (p.mask) {
             const pixel::TileMap src = l.pixels ? *l.pixels : d.blank();
             auto c = select::cleared(src, p.mask.get(), background);
@@ -107,9 +109,22 @@ std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function
     Result r;
     const auto stop = [&] { return cancelled && cancelled(); };
     const pixel::TileMap blank(p.format, p.width, p.height);
+    // s046: type slides as type -- its Spec moved, set again (pure; any thread).
+    for (const auto& [id, t] : p.texts) {
+        if (stop()) return std::nullopt;
+        if (dx == 0 && dy == 0) { r.texts[id] = t; r.pixels[id] = p.original.at(id); continue; }
+        auto moved = std::make_shared<const text::Spec>(text::mapped(*t, {1, 0, 0, 1, double(dx), double(dy)}));
+        Image im;
+        im.width = p.width;
+        im.height = p.height;
+        im.format = p.format;
+        r.pixels[id] = text_pixels(im, *moved);
+        r.texts[id] = std::move(moved);
+    }
     if (!p.mask) {
         for (const auto& id : p.ids) {
             if (stop()) return std::nullopt;
+            if (p.texts.count(id)) continue;   // s046: set above
             const auto& o = p.original.at(id);
             if (!o) { r.pixels[id] = nullptr; continue; }
             if (dx == 0 && dy == 0) { r.pixels[id] = o; continue; }
@@ -134,6 +149,7 @@ std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function
     const pixel::Rect land = pixel::Rect{ext.x + dx, ext.y + dy, ext.w, ext.h}.intersect({0, 0, p.width, p.height});
     for (const auto& id : p.ids) {
         if (stop()) return std::nullopt;
+        if (p.texts.count(id)) continue;   // s046: set above (whole)
         const auto& b = p.base.at(id);
         const auto& o = p.original.at(id);
         pixel::TileMap out = b ? *b : blank;
@@ -159,6 +175,7 @@ void put(Document& d, const Plan& p, const Result& r) {
         const auto it = r.pixels.find(id);
         if (!l || it == r.pixels.end()) continue;
         l->pixels = it->second;
+        if (const auto t = r.texts.find(id); t != r.texts.end() && l->kind == Kind::Text) l->text = t->second;   // s046
         if (const auto m = r.masks.find(id); m != r.masks.end()) l->mask = m->second;   // s012
         d.put(id, *l);
     }

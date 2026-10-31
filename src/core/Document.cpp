@@ -8,6 +8,7 @@
 #include "core/Paint.hpp"       // s008 m4: and the brush
 #include "core/Move.hpp"        // s009 m1: and the Move tool
 #include "core/Canvas.hpp"      // s009 m2: Crop, Canvas Size, Image Size
+#include "core/Text.hpp"        // s046: text layers
 #include "core/Rulers.hpp"      // s031: the zero point
 #include "core/Transform.hpp"   // s011: Free Transform, flips, rotations
 #include "core/Gradient.hpp"    // s012: the Gradient tool
@@ -293,8 +294,12 @@ std::string Document::check() const {
             return id + ": a path where there is no path layer, or none where there is";
         if (l.kind == Kind::Adjustment && !adjust::refusal(l.adjust).empty())
             return id + ": an adjustment out of range (" + adjust::refusal(l.adjust) + ")";
+        if ((l.kind == Kind::Text) != (l.text != nullptr))   // s046
+            return id + ": type where there is no text layer, or none where there is";
+        if (l.text && !text::refusal(*l.text).empty())
+            return id + ": type out of range (" + text::refusal(*l.text) + ")";
         if (l.pixels) {
-            if (l.kind != Kind::Pixel) return id + ": a group or an adjustment layer with pixels";
+            if (!draws_pixels(l.kind)) return id + ": a group or an adjustment layer with pixels";
             if (!(l.pixels->format() == m_image.format) || l.pixels->width() != m_image.width ||
                 l.pixels->height() != m_image.height)
                 return id + ": pixels not at the image's size and format";
@@ -412,7 +417,8 @@ Id add_kind(DocJournal& j, Document& d, Kind kind, const std::string& name, cons
     sibs.insert(sibs.begin() + static_cast<long>(at), made);
     place(d, next, parent, sibs);
     const std::string label = !label_in.empty() ? label_in : kind == Kind::Group ? "New Group" : "New Layer";
-    return apply(j, d, label + " " + "“" + name + "”", diff(d, next)) ? made : Id{};
+    const bool kept = apply(j, d, label + " " + "“" + name + "”", diff(d, next));
+    return kept || (j.in_gesture() && d.get(made)) ? made : Id{};   // s046: inside a gesture the commit is the step
 }
 
 // Set one field on one layer through the door.
@@ -525,6 +531,17 @@ bool add_path_stroke(DocJournal& j, Document& d, const Id& id, const path::Strok
     return set_path_hints(j, d, id, h, s.figure ? "Figure Stroke" : "Background Stroke");
 }
 
+// s046: a TEXT LAYER, set, as one step (core/Text.hpp).
+Id add_text(DocJournal& j, Document& d, const text::Spec& s, const Id& above, const std::string& label) {
+    if (!text::refusal(s).empty()) return {};
+    auto spec = std::make_shared<const text::Spec>(s);
+    auto px = text_pixels(d.image(), s);
+    return add_kind(j, d, Kind::Text, text_name(s.text), above, [&](Layer& l) {
+        l.text = spec;
+        l.pixels = px;
+    }, label);
+}
+
 // s030: a filter layer, with its mask, as one step.
 Id add_filter_layer(DocJournal& j, Document& d, const Filter& f_in, const Id& above) {
     const Filter f = filter::normalised(f_in);
@@ -592,6 +609,7 @@ std::string not_pixels(const Document& d, const Id& id) {
     if (l->kind == Kind::Adjustment) return q + " is an adjustment layer -- it has no pixels";
     if (l->kind == Kind::Filter) return q + " is a filter layer -- it has no pixels";   // s030
     if (l->kind == Kind::Path) return q + " is a path layer -- edit it with the Pen (P); it has no pixels";   // s035
+    if (l->kind == Kind::Text) return q + " is a text layer -- edit it with the Text tool (T), or Layer > Rasterize Type to paint on it";   // s046
     return {};
 }
 
@@ -1113,6 +1131,23 @@ void load_path_layer(Document& d, const path::Path& p, bool mask, bool select) {
     d.put("L6", l);
 }
 
+void load_text_layer(Document& d, const std::string& words, double size, bool box) {   // s046
+    Document::Loading load(d);
+    text::Spec t;
+    t.text = words;
+    t.size = size;
+    t.x = 40;
+    t.y = box ? 40 : 100;
+    if (box) { t.box_w = 220; t.box_h = 160; }
+    Layer l;
+    l.kind = Kind::Text;
+    l.name = text_name(words);
+    l.pos = 4;
+    l.text = std::make_shared<const text::Spec>(t);
+    l.pixels = text_pixels(d.image(), t);
+    d.put("L6", l);
+}
+
 void load_filter_layer(Document& d, FilterKind k) {   // s030
     Document::Loading load(d);
     Layer l;
@@ -1424,6 +1459,49 @@ const std::vector<Verb>& verbs() {
              }},
         {"crop_paths",      [](DocJournal& j, Document& d) { canvas::crop(j, d, {50, 40, 400, 300}, pixel::rgba(1, 1, 1, 1)); },
              [](Document& d) { load_path_layer(d, paths::ellipse_path(100, 100, 50, 40), true); }},
+        // s046: text layers.
+        {"text_new",        [](DocJournal& j, Document& d) {
+             text::Spec t; t.text = "Klimt"; t.x = 60; t.y = 120; t.size = 40; add_text(j, d, t, "L4"); }},
+        {"text_new_empty",  [](DocJournal& j, Document& d) { text::Spec t; t.x = 10; t.y = 50; add_text(j, d, t); }},
+        {"text_set",        [](DocJournal& j, Document& d) {
+             text::Spec t = *d.get("L6")->text; t.text = "The Kiss"; t.colour = {0.8f, 0.6f, 0.1f, 1}; set_text(j, d, "L6", t); },
+             [](Document& d) { load_text_layer(d, "Dancer", 36, false); }},
+        {"text_style",      [](DocJournal& j, Document& d) {
+             set_text_on(j, d, {"L6", "L4"}, [](text::Spec& t) { t.weight = 700; t.italic = true; t.size = 30; }, "Font"); },
+             [](Document& d) { load_text_layer(d, "Adele\nBloch-Bauer", 28, true); }},
+        {"text_typing",     [](DocJournal& j, Document& d) {   // a visit: one step
+             text_begin(j, d, "L6");
+             text::Spec t = *d.get("L6")->text;
+             for (const char* w : {"D", "Da", "Dan", "Danae"}) { t.text = w; set_text(j, d, "L6", t); }
+             text_end(j, d, "L6", false); },
+             [](Document& d) { load_text_layer(d, "", 40, false); }},
+        {"text_new_visit",  [](DocJournal& j, Document& d) {   // click, type: one step that made the layer
+             text_begin(j, d, {});
+             text::Spec t; t.x = 30; t.y = 200; t.size = 50;
+             const Id id = add_text(j, d, t, "L3");
+             for (const char* w : {"J", "Ju", "Judith"}) { t.text = w; set_text(j, d, id, t); }
+             text_end(j, d, id, true); }},
+        {"text_move",       [](DocJournal& j, Document& d) { move::by(j, d, {"L6"}, 25, -15, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_text_layer(d, "Mäda Primavesi", 30, false); }},
+        {"text_move_selection", [](DocJournal& j, Document& d) { move::by(j, d, {"L6", "L4"}, -500, 20, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_text_layer(d, "Fritza", 30, true); load_selection(d, {40, 40, 120, 120}); }},
+        {"text_transform",  [](DocJournal& j, Document& d) {
+             xform::apply(j, d, {"L6"}, xform::Affine::about({100, 100}, xform::Affine::rotate(0.4)), "Free Transform", pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_text_layer(d, "Goldfish", 40, false); }},
+        {"text_transform_selection", [](DocJournal& j, Document& d) {
+             xform::apply(j, d, {"L6", "L4"}, xform::Affine::scale(1.5, 1.2), "Free Transform", pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_text_layer(d, "Danaë", 40, true); load_selection(d, {100, 100, 120, 100}); }},
+        {"text_rasterize",  [](DocJournal& j, Document& d) { rasterize_text(j, d, "L6"); },
+             [](Document& d) { load_text_layer(d, "Water Serpents", 30, false); }},
+        {"text_styles",     [](DocJournal& j, Document& d) {
+             Styles s; s.stroke.on = true; s.stroke.size = 3; set_styles(j, d, "L6", s); },
+             [](Document& d) { load_text_layer(d, "Beethoven Frieze", 30, false); }},
+        {"text_crop",       [](DocJournal& j, Document& d) { canvas::crop(j, d, {20, 20, 400, 300}, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_text_layer(d, "Tree of Life", 40, true); }},
+        {"text_image_size", [](DocJournal& j, Document& d) { canvas::image_size(j, d, d.image().width / 2, d.image().height / 2, 72, canvas::Filter::Smooth); },
+             [](Document& d) { load_text_layer(d, "Hope", 60, false); }},
+        {"text_turn",       [](DocJournal& j, Document& d) { xform::turn(j, d, xform::Turn::Clockwise); },
+             [](Document& d) { load_text_layer(d, "Judith", 48, false); }},
         // s032: guides.
         {"add_guide",    [](DocJournal& j, Document& d) { canvas::add_guide(j, d, {true, 150.4}); }},
         {"move_guide",   [](DocJournal& j, Document& d) { canvas::move_guide(j, d, 0, 120); },

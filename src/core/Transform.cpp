@@ -1,4 +1,5 @@
 #include "core/Transform.hpp"
+#include "core/Text.hpp"   // s046: type transforms as type
 #include "core/Canvas.hpp"
 
 #include <algorithm>
@@ -329,6 +330,7 @@ std::optional<move::Result> compute(const Plan& pl, const Affine& m, Quality q, 
     move::Result r;
     if (m.identity()) {
         for (const auto& id : p.ids) r.pixels[id] = p.original.at(id);
+        for (const auto& [id, t] : p.texts) r.texts[id] = t;   // s046
         r.mask = p.mask;
         return r;
     }
@@ -340,7 +342,21 @@ std::optional<move::Result> compute(const Plan& pl, const Affine& m, Quality q, 
         std::abs(std::abs(m.a * m.d - m.b * m.c) - 1) < 1e-9)
         q = Quality::Fast;
     const pixel::TileMap blank(p.format, p.width, p.height);
+    // s046: TYPE transforms as type -- the map composed into its Spec's
+    // matrix and set again, so a scaled, turned or slanted text layer stays
+    // live and sharp (and a selection doesn't cut it: it goes whole).
+    for (const auto& [id, t] : p.texts) {
+        if (cancelled && cancelled()) return std::nullopt;
+        auto mapped = std::make_shared<const text::Spec>(text::mapped(*t, {m.a, m.b, m.c, m.d, m.e, m.f}));
+        Image im;
+        im.width = p.width;
+        im.height = p.height;
+        im.format = p.format;
+        r.pixels[id] = text_pixels(im, *mapped);
+        r.texts[id] = std::move(mapped);
+    }
     for (const auto& id : p.ids) {
+        if (p.texts.count(id)) continue;   // s046: above
         const auto& o = p.original.at(id);
         if (!o) { r.pixels[id] = p.mask ? p.base.at(id) : nullptr; continue; }
         pixel::TileMap base = blank;

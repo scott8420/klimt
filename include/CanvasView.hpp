@@ -50,6 +50,12 @@ public:
     };
     static constexpr int kMips = 5;                               // down to 1/32 (8 px a tile)
     void set_tiles(const std::vector<Tile>& tiles);
+    // s046: THE VIEW PYRAMID -- the whole picture at 1/2^level (Cairo ARGB32,
+    // w x h = the image's size divided, rounded up), shown on the listed
+    // tiles in place of what they hold until their own tile lands
+    // (set_tiles drops the likeness). Newer than a held tile, so it shows
+    // over one: the held tile is the picture BEFORE the change.
+    void set_preview(int level, int w, int h, const std::vector<std::uint32_t>& argb, const std::vector<std::pair<int, int>>& tiles);
     int  tiles_shown() const;                                     // tiles holding a picture
 
     // ── the view ────────────────────────────────────────────────────────────
@@ -172,6 +178,26 @@ public:
     // (A plain struct, never std::pair<double, double> by value: Scott's GCC 16
     // prints the psabi note for it -- RULES.)
     struct Cross { double x = 0, y = 0; };
+    // s046: THE TEXT TOOL. A press, its drag and its release, in image px
+    // (doubles -- type sits between pixels); bool: Shift held. The Shell
+    // decides (edit the type under it, a new point, a new box) and hands
+    // back what to draw: the layer's frame, the selected text, the caret,
+    // the box being dragged out. Everything in image px.
+    enum class TextAt { Press, Drag, Release };
+    sigc::signal<void(TextAt, double, double, bool)>& signal_text() { return m_text_signal; }
+    struct TextQuad { std::array<Cross, 4> c{}; };
+    struct TextOverlay {
+        bool on = false;               // anything at all
+        bool frame_on = false;
+        TextQuad frame;                // the edited layer's frame (dashed)
+        bool overflow = false;         // box type with lines that don't fit: a marked corner
+        std::vector<TextQuad> sel;     // the selected characters
+        bool caret = false;            // the caret, this blink
+        Cross c0, c1;                  // its ends
+        bool box = false;              // a box being dragged out
+        Cross b0, b1;
+    };
+    void set_text_overlay(const TextOverlay& o) { m_text_ov = o; queue_draw(); }
     void set_cross(std::optional<Cross> at) { m_cross = at; queue_draw(); }
     bool dark() const { return m_dark; }
     // s032: GUIDES -- drawn over the picture (when shown); with the Move
@@ -260,6 +286,10 @@ private:
     void update_cursor();
     void draw_ants(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     void draw_rubber(const Cairo::RefPtr<Cairo::Context>& cr);
+    void draw_text_overlay(const Cairo::RefPtr<Cairo::Context>& cr);   // s046
+    sigc::signal<void(TextAt, double, double, bool)> m_text_signal;    // s046
+    TextOverlay m_text_ov;
+    bool m_texting = false;
     bool selecting() const { return m_tool == "select" && m_variant <= 3; }   // Rectangle, Ellipse, Lasso, Wand
     bool painting() const { return m_tool == "brush" || m_tool == "eraser" || m_tool == "clone" || m_tool == "heal" || m_tool == "smudge"; }
     // s015 m4: the tools that take from a source point (Alt- / Ctrl-click).
@@ -279,6 +309,7 @@ private:
         int w = 0, h = 0;
         Cairo::RefPtr<Cairo::ImageSurface> surface;
         std::vector<Cairo::RefPtr<Cairo::ImageSurface>> mips;   // s010 m4: 1/2, 1/4, ...
+        Cairo::RefPtr<Cairo::ImageSurface> preview;             // s046: the pyramid's likeness, until the tile lands
     };
     std::vector<Held> m_grid;                            // cols * rows
     Cairo::RefPtr<Cairo::ImageSurface> m_checker;        // the transparency pattern, one cell pair

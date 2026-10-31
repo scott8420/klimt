@@ -11,6 +11,7 @@
 
 #include <gtkmm/popover.h>
 
+#include <array>
 #include <functional>
 #include <map>
 #include <sigc++/signal.h>
@@ -97,12 +98,35 @@ public:
     bool has_saved_default(const std::string& tool) const;
     static bool is_brush_tool(const std::string& tool);
     static std::string tip_label(const BrushOpts& o);   // "Round 45% · jitter"
+    // s046: the TEXT tool's options -- what new type is set with, and (while
+    // type is edited, or text layers are picked) their style: the strip
+    // follows the layer (show_text, no signal) and a change made on it is
+    // told (signal_text, with what changed: "family", "weight", "italic",
+    // "size", "colour", "align", "tracking", "leading") for the Shell to
+    // apply to the layers.
+    struct TextOpts {
+        std::string family = "Sans";
+        int  weight = 400;
+        bool italic = false;
+        int  size = 48;                       // px
+        std::array<float, 4> colour{0, 0, 0, 1};
+        int  align = 0;                       // text::Align
+        int  tracking = 0;                    // 1/1000 em
+        int  leading = 0;                     // px; 0 auto
+        bool operator==(const TextOpts&) const = default;
+    };
+    const TextOpts& text() const { return m_text; }
+    void show_text(const TextOpts& o);
+    sigc::signal<void(const std::string&)>& signal_text() { return m_text_signal; }
     // s008: told when the user picks a variant (tool id, index).
     sigc::signal<void(const std::string&, int)>& signal_variant() { return m_variant_signal; }
     // s035 m5: the Pen's Corner / Smooth buttons (true: Smooth).
     sigc::signal<void(bool)>& signal_pen_point() { return m_pen_point; }
 
 private:
+    TextOpts m_text;                                       // s046
+    sigc::signal<void(const std::string&)> m_text_signal;
+    void text_strip();                                     // s046: the Text tool's row
     sigc::signal<void(bool)> m_pen_point;
     sigc::signal<void()> m_refine_overlay;   // s039 m3
     std::vector<Gtk::ToggleButton*> m_variant_buttons;   // the shown tool's (managed by the strip)

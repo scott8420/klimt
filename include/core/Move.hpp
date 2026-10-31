@@ -33,6 +33,7 @@ using MapPtr = std::shared_ptr<const pixel::TileMap>;
 
 // The pixel layers a move of `selected` acts on: each selected pixel layer,
 // and every pixel layer inside a selected group, once each, in walk order.
+// s046: text layers too.
 std::vector<Id> targets(const Document& d, const std::vector<Id>& selected);
 // May they move? "" yes, else why not (for a toast): nothing to move, a
 // Position or All lock (on the layer or a group above it).
@@ -50,6 +51,10 @@ struct Plan {
     std::vector<Id>     groups;      // s024: groups in the move whose masks move with them
     int                 width = 0, height = 0;
     pixel::Format       format;
+    // s046: TEXT LAYERS among the targets -- their type at the press. Type
+    // always moves whole (a selection lifts pixels, not letters) and stays
+    // live: its Spec slides and is set again, so nothing is lost off the edge.
+    std::map<Id, std::shared_ptr<const text::Spec>> texts;
 };
 // nullopt when refused.
 std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, const pixel::Px& background);
@@ -61,6 +66,7 @@ struct Result {
     std::map<Id, MapPtr> pixels;
     MapPtr              mask;
     std::map<Id, MapPtr> masks;      // s012: layer masks that moved (absent: unchanged)
+    std::map<Id, std::shared_ptr<const text::Spec>> texts;   // s046: type, slid
 };
 std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function<bool()>& cancelled = {});
 

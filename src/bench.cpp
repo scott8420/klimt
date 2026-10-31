@@ -70,6 +70,25 @@ int main(int argc, char** argv) {
     const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     std::printf("%d x %d, %d-bit RGBA, 8 layers, %d tiles: %.0f ms -- %.2f ms a tile (one thread)\n", W, H, depth,
                 cols * rows, ms, ms / (cols * rows));
+    // s046: THE VIEW PYRAMID -- what a zoomed-out view waits for before the
+    // first whole picture: every tile at full size (above), or a preview at
+    // 1/2^k -- the layers reduced (once: a second run hits the cache) and the
+    // small document composited.
+    for (int k = 1; k <= 3; ++k) {
+        core::ReduceCache cache;
+        std::vector<std::uint32_t> prev;
+        const auto a = std::chrono::steady_clock::now();
+        auto r = core::reduced(im, layers, k, &cache);
+        const auto b = std::chrono::steady_clock::now();
+        core::composite_reduced_argb(*r, prev);
+        const auto c = std::chrono::steady_clock::now();
+        auto r2 = core::reduced(im, layers, k, &cache);   // cached
+        core::composite_reduced_argb(*r2, prev);
+        const auto d2 = std::chrono::steady_clock::now();
+        const auto msd = [](auto x, auto y) { return std::chrono::duration<double, std::milli>(y - x).count(); };
+        std::printf("preview at 1/%d (%d x %d): reduce %.0f ms + composite %.0f ms = %.0f ms (%.1fx sooner); cached %.0f ms (%.0fx)\n",
+                    1 << k, r->image.width, r->image.height, msd(a, b), msd(b, c), msd(a, c), ms / msd(a, c), msd(c, d2), ms / msd(c, d2));
+    }
     // A checksum so a faster compositor can be seen to give the same picture.
     std::uint64_t sum = 0;
     core::composite_tile_argb(im, layers, 5, 5, out, w, h);

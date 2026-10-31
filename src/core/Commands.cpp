@@ -181,6 +181,7 @@ const std::vector<Command>& commands() {
             {"Paste Layer Style", "Layer", "win.style-paste", "", "effect fx styles", ""},
             {"Clear Layer Style", "Layer", "win.style-clear", "", "effect fx styles remove", ""},
             {"Rasterize Layer Style", "Layer", "win.style-rasterize", "", "effect fx styles bake flatten pixels", ""},
+            {"Rasterize Type", "Layer", "win.text-rasterize", "", "text type font letters words pixels flatten", ""},   // s046
             // s012: layer masks.
             {"Add Layer Mask", "Layer", "win.mask-add", "", "mask reveal selection hide", ""},
             {"Layer Mask: Reveal All", "Layer", "win.mask-reveal-all", "", "mask add white", ""},

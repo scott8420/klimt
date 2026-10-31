@@ -67,6 +67,23 @@ void Shell::bind_actions() {  // bindings
     // s012: layer masks (Shell_masks.cpp).
     m_layers.signal_mask_view().connect(sigc::mem_fun(*this, &Shell::on_mask_view));
     m_canvas.signal_gradient().connect(sigc::mem_fun(*this, &Shell::on_gradient));   // s012 m4
+    // s046: the Text tool -- the canvas's gesture, the strip's style, the
+    // keys (CAPTURE on the canvas, before the window's own; an input method
+    // attached only while a visit is open), Layer > Rasterize Type.
+    m_canvas.signal_text().connect(sigc::mem_fun(*this, &Shell::on_text));
+    m_strip.signal_text().connect(sigc::mem_fun(*this, &Shell::on_text_style));
+    m_te_keys = Gtk::EventControllerKey::create();
+    m_te_keys->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+    m_te_keys->signal_key_pressed().connect([this](guint k, guint, Gdk::ModifierType st) { return text_key(k, st); }, false);
+    m_canvas.add_controller(m_te_keys);
+    text_ime(false);
+    m_layer_acts["text-rasterize"] = add_action("text-rasterize", [this] {
+        text_close();
+        const auto id = m_layers.primary();
+        if (!core::layers::rasterize_text(m_journal, m_doc, id)) { toast("Rasterize Type: pick a text layer"); return; }
+        update_layer_actions();
+        m_properties.show(m_layers.selection());
+    });
     // s015: the Clone Stamp's source (Shell_paint.cpp).
     m_canvas.signal_source().connect(sigc::mem_fun(*this, &Shell::on_clone_source));
     m_canvas.signal_patch().connect(sigc::mem_fun(*this, &Shell::on_patch));   // s016
@@ -422,6 +439,7 @@ void Shell::bind_actions() {  // bindings
     tab->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
     tab->signal_key_pressed().connect([this](guint keyval, guint, Gdk::ModifierType state) {
         if (keyval != GDK_KEY_Tab) return false;
+        if (m_te.on) return false;   // s046: typing -- the type's (a tab)
         if ((state & (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK |
                       Gdk::ModifierType::ALT_MASK)) != Gdk::ModifierType{}) return false;
         on_toggle_panels();
@@ -434,6 +452,7 @@ void Shell::bind_actions() {  // bindings
     auto arrows = Gtk::EventControllerKey::create();
     arrows->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
     arrows->signal_key_pressed().connect([this](guint keyval, guint, Gdk::ModifierType state) {
+        if (m_te.on) return false;   // s046: typing -- the type's keys
         // s011: in a transform, Enter / Escape / the arrows are the box's.
         if (m_xform.active) {
             const auto m2 = state & (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK | Gdk::ModifierType::ALT_MASK);

@@ -33,6 +33,7 @@ void Shell::on_about() {
 // panel selects it and takes the keyboard, so the next Ctrl+Z lands.
 void Shell::on_undo() {
     if (m_stroke.active) return;   // s008: mid-stroke, the stroke finishes first
+    text_close();   // s046: a visit is a step first -- Ctrl+Z then takes it back whole
     if (m_xform.active) { xform_cancel(); toast("Free Transform cancelled"); return; }   // s011: nothing was written
     const auto r = m_journal.undo();
     if (!r.done) return;
@@ -42,6 +43,7 @@ void Shell::on_undo() {
 }
 
 void Shell::on_redo() {
+    text_close();   // s046
     if (m_stroke.active || m_xform.active) return;
     const auto r = m_journal.redo();
     if (!r.done) return;
@@ -87,6 +89,7 @@ void Shell::on_job_cancel() {  // leaves nothing behind
 }
 
 void Shell::on_tool(const std::string& id) {  // view state: not a step
+    if (id != "text") text_close();   // s046: another tool ends the editing
     if (m_xform.active) xform_commit();   // s011: another tool applies the transform (Photoshop asks; we apply)
     if (const auto* t = core::find_tool(id)) {
         m_strip.show_tool(*t);
@@ -127,6 +130,7 @@ void Shell::set_rail(bool open) {
 // A History row: walk the journal to that point, one undo / redo at a time
 // (the one door), then select what the last step hands back.
 void Shell::on_history_go(std::size_t position) {
+    text_close();   // s046
     core::DocJournal::Result last;
     while (m_journal.position() > position) last = m_journal.undo();
     while (m_journal.position() < position) last = m_journal.redo();

@@ -190,6 +190,7 @@ bool Shell::doc_busy(bool say) {
 bool Shell::tab_reusable() const { return !has_image() && !m_tabs.dirty(m_tabs.live()); }
 
 void Shell::remember_tab() {
+    text_close();   // s046: a visit ends with its tab
     auto& tv = m_tab_views[m_tabs.live_info().key];
     tv.view = m_canvas.view();
     tv.selection = m_layers.selection();

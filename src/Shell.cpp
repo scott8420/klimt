@@ -32,6 +32,8 @@ Shell::Shell()
 }
 
 Shell::~Shell() {
+    m_te_blink.disconnect();   // s046
+    if (m_im) { g_signal_handlers_disconnect_by_data(m_im, this); g_object_unref(m_im); m_im = nullptr; }
     // s014 m4: a divider dragged just before quitting is still remembered.
     if (m_prefs_soon.connected()) {
         m_prefs_soon.disconnect();

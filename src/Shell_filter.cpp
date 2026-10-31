@@ -293,8 +293,9 @@ void Shell::on_filter_last(bool dialog) {
 void Shell::on_style(const std::string& verb) {
     const auto id = m_layers.primary();
     const auto l = m_doc.get(id);
-    if (!l || (l->kind != core::Kind::Pixel && l->kind != core::Kind::Group)) { toast("Layer Style: pick a pixel layer or a group"); return; }   // s024
+    if (!l || (!core::draws_pixels(l->kind) && l->kind != core::Kind::Group)) { toast("Layer Style: pick a pixel layer, a text layer or a group"); return; }   // s024; s046
     if (verb == "rasterize" && l->kind == core::Kind::Group) { toast("Rasterize Layer Style: pixel layers only (Merge the group first)"); return; }
+    if (verb == "rasterize" && l->kind == core::Kind::Text) { toast("Rasterize Layer Style: Rasterize the type first (Layer > Rasterize Type)"); return; }   // s046
     if (verb == "copy") {
         m_style_clip = l->styles;
         update_layer_actions();

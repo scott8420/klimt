@@ -14,6 +14,9 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <vector>
 
 namespace klimt::core {
@@ -90,5 +93,43 @@ void argb_half(const std::vector<std::uint32_t>& in, int w, int h, std::vector<s
 void mask_tile_argb(const pixel::TileMap& mask, int col, int row, std::vector<std::uint32_t>& out, int& w, int& h);
 void composite_tile_argb(const Image& im, const Layers& layers, int col, int row,
                          std::vector<std::uint32_t>& out, int& w, int& h);
+
+// ── s046: THE VIEW PYRAMID (WEAKNESSES 13; docs/speed.md) ───────────────────
+// Zoomed out, a whole document is owed before anything shows: every tile
+// composited at full size. A PREVIEW goes first -- the document at 1/2^k,
+// each layer's pixels (masks too) box-averaged to that size, composited
+// whole, cut into the canvas's tiles at mip level k -- and the full tiles
+// replace it as they land. A preview is a likeness, not the picture: layer
+// styles, live filters and filter layers work in pixels and are drawn at
+// their full-size settings on the reduced pixels.
+//
+// A map at 1/2^k (k 1..6): each output pixel the PREMULTIPLIED mean of the
+// f x f block it covers (f = 2^k), counting only pixels inside the map --
+// so an edge is as solid as its pixels. ceil(w / f) x ceil(h / f), the same
+// format; nothing beyond the image (outside tiles) is kept.
+pixel::TileMap reduced_map(const pixel::TileMap& m, int k);
+// Reductions already made, by the map they came from (immutable maps: the
+// same pointer is the same pixels). Thread-safe; prune() drops what `keep`
+// no longer holds. The Shell keeps one, so an unchanged layer is reduced once.
+class ReduceCache {
+public:
+    std::shared_ptr<const pixel::TileMap> get(const std::shared_ptr<const pixel::TileMap>& m, int k);
+    void prune(const Layers& keep);
+    std::size_t size() const;
+private:
+    struct Entry { std::shared_ptr<const pixel::TileMap> from, to; };
+    mutable std::mutex m_mu;
+    std::map<std::pair<const pixel::TileMap*, int>, Entry> m_map;
+};
+// The document at 1/2^k: the image's size divided (rounded up), every
+// layer's pixels, mask and filter mask reduced (through `cache` when given),
+// path layers' outlines scaled. `cancelled` asked between layers; nullopt
+// when it says so.
+struct Reduced { Image image; Layers layers; };
+std::optional<Reduced> reduced(const Image& im, const Layers& layers, int k, ReduceCache* cache = nullptr,
+                               const std::function<bool()>& cancelled = {});
+// The reduced composite as Cairo ARGB32 (premultiplied), rows of
+// r.image.width -- what the canvas cuts into preview tiles.
+bool composite_reduced_argb(const Reduced& r, std::vector<std::uint32_t>& out, const std::function<bool()>& cancelled = {});
 
 }  // namespace klimt::core

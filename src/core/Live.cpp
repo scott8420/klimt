@@ -178,7 +178,7 @@ pixel::TileMap masked(const pixel::TileMap& raw, const pixel::TileMap& filtered,
 }
 
 bool active(const Layer& l) {
-    if (l.kind != Kind::Pixel || !l.pixels) return false;
+    if (!draws_pixels(l.kind) || !l.pixels) return false;   // s046: type too
     if (l.styles.any()) return true;   // s019
     for (const auto& f : l.filters) if (f.on && f.f.kind != FilterKind::None) return true;
     return false;
@@ -367,7 +367,7 @@ Layers filter_source(const Layers& ls, const Document::Id& id) {
         Document::Id bid;
         for (const auto& [oid, o] : ls)
             if (o.parent == f.parent && o.pos < f.pos && !o.clipped && (!base || o.pos > base->pos)) { base = &o; bid = oid; }
-        if (base && base->kind == Kind::Pixel) {
+        if (base && draws_pixels(base->kind)) {
             Layer b = *base;
             b.parent.clear();
             b.clipped = false;
@@ -716,7 +716,7 @@ std::string named(const Layer& l, const char* what) { return std::string(what) +
 namespace {
 std::optional<Layer> styled_layer(const Document& d, const Id& id, const Styles& s) {
     const auto l = d.get(id);
-    if (!l || (l->kind != Kind::Pixel && l->kind != Kind::Group) || d.locked_all(id) || l->styles == s) return std::nullopt;   // s024: groups too
+    if (!l || (!draws_pixels(l->kind) && l->kind != Kind::Group) || d.locked_all(id) || l->styles == s) return std::nullopt;   // s024: groups too; s046: type
     Layer v = *l;
     v.styles = s;
     return v;
@@ -743,7 +743,7 @@ bool set_styles_on(DocJournal& j, Document& d, const std::vector<Id>& ids, const
 
 void styles_begin(DocJournal& j, Document& d, const Id& id) {
     const auto l = d.get(id);
-    if (l && (l->kind == Kind::Pixel || l->kind == Kind::Group) && !d.locked_all(id)) j.begin("Layer Style on “" + l->name + "”", {id});
+    if (l && (draws_pixels(l->kind) || l->kind == Kind::Group) && !d.locked_all(id)) j.begin("Layer Style on “" + l->name + "”", {id});
 }
 
 void styles_to(DocJournal& j, Document& d, const Id& id, const Styles& s) {

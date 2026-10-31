@@ -71,6 +71,7 @@ bool Shell::file_job_busy() {
 // The document becomes `c`: a LOAD (Document::Loading), so no step; the
 // journal starts again and the file is "saved" as it stands.
 void Shell::adopt(core::file::Contents c, const std::string& path, const std::string& name, const std::string& source) {
+    text_close();   // s046: a visit ends before its document goes
     {
         core::Document::Loading load(m_doc);
         m_doc.replace(c.image, std::move(c.layers), c.next_id);
@@ -135,6 +136,7 @@ void Shell::ask_unsaved(const std::string& doing, std::function<void()> go) {
 
 // s020: every tab with unsaved changes asks, in turn (each shown first).
 bool Shell::on_close_request() {
+    text_close();   // s046
     if (m_closing) { save_session(); return false; }   // s023: the tabs, for next time
     if (file_job_busy()) return true;
     bool any = false;
@@ -186,6 +188,7 @@ bool Shell::restore_session() {
 // s009: Help > Open Demo -- the demo document in place of this one.
 void Shell::open_demo() {
     if (file_job_busy()) return;
+    text_close();   // s046
     // s020: in a tab of its own (the live one when it is empty).
     if (!tab_reusable() && !new_tab()) return;
     {
@@ -395,6 +398,7 @@ void Shell::place_paths(const std::vector<std::string>& paths) {
 
 // ── Save ────────────────────────────────────────────────────────────────────
 void Shell::on_save() {
+    text_close();   // s046: the visit is a step before it is saved
     if (!has_image()) { toast("No image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     if (path_().empty()) { on_save_as(); return; }
     if (file_job_busy()) return;
@@ -402,6 +406,7 @@ void Shell::on_save() {
 }
 
 void Shell::on_save_as() {
+    text_close();   // s046: the visit is a step before it is saved
     if (!has_image()) { toast("No image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     if (file_job_busy()) return;
     auto dlg = Gtk::FileDialog::create();
@@ -461,6 +466,7 @@ void Shell::save_to(const std::string& path, std::function<void()> then) {
 
 // ── Export ──────────────────────────────────────────────────────────────────
 void Shell::on_export() {
+    text_close();   // s046: the visit is a step before it is saved
     if (!has_image()) { toast("No image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     if (file_job_busy()) return;
     auto dlg = Gtk::FileDialog::create();

@@ -2,6 +2,7 @@
 #include "core/Patterns.hpp"   // s028 m4
 #include "core/Transfer.hpp"   // s022: converted()
 #include "core/Composite.hpp"
+#include "core/Text.hpp"   // s046
 
 #include <zip.h>
 #include "json.hpp"
@@ -288,6 +289,37 @@ Styles styles_from(const json& o) {
 }
 
 // s035: a path -- its subpaths, each anchor [x, y, in x, in y, out x, out y, smooth].
+// s046: a text layer's type.
+json text_json(const text::Spec& t) {
+    const char* al = t.align == text::Align::Center ? "center" : t.align == text::Align::Right ? "right"
+                   : t.align == text::Align::Justify ? "justify" : "left";
+    return {{"text", t.text}, {"family", t.family}, {"weight", t.weight}, {"italic", t.italic}, {"size", t.size},
+            {"colour", {t.colour[0], t.colour[1], t.colour[2], t.colour[3]}}, {"align", al},
+            {"tracking", t.tracking}, {"leading", t.leading}, {"x", t.x}, {"y", t.y},
+            {"box_w", t.box_w}, {"box_h", t.box_h}, {"m", {t.m[0], t.m[1], t.m[2], t.m[3], t.m[4], t.m[5]}}};
+}
+text::Spec text_from(const json& j) {
+    text::Spec t;
+    t.text = j.value("text", std::string{});
+    t.family = j.value("family", std::string("Sans"));
+    t.weight = j.value("weight", 400);
+    t.italic = j.value("italic", false);
+    t.size = j.value("size", 48.0);
+    if (j.contains("colour") && j.at("colour").is_array() && j.at("colour").size() == 4)
+        for (std::size_t k = 0; k < 4; ++k) t.colour[k] = j.at("colour")[k].get<float>();
+    const std::string al = j.value("align", std::string("left"));
+    t.align = al == "center" ? text::Align::Center : al == "right" ? text::Align::Right : al == "justify" ? text::Align::Justify : text::Align::Left;
+    t.tracking = j.value("tracking", 0.0);
+    t.leading = j.value("leading", 0.0);
+    t.x = j.value("x", 0.0);
+    t.y = j.value("y", 0.0);
+    t.box_w = j.value("box_w", 0.0);
+    t.box_h = j.value("box_h", 0.0);
+    if (j.contains("m") && j.at("m").is_array() && j.at("m").size() == 6)
+        for (std::size_t k = 0; k < 6; ++k) t.m[k] = j.at("m")[k].get<double>();
+    return text::normalised(t);   // a damaged value comes in range, never refused
+}
+
 json path_json(const path::Path& p) {
     json subs = json::array();
     for (const auto& sb : p.subs) {
@@ -636,6 +668,10 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                     if (!h.empty()) L.hints = std::make_shared<const path::Hints>(std::move(h));
                 }
             }
+            else if (kind == "text") {   // s046: its type; its pixels in "tiles" (set when it was saved)
+                L.kind = Kind::Text;
+                L.text = std::make_shared<const text::Spec>(text_from(l.value("text", json::object())));
+            }
             else if (kind == "adjustment") {   // s013
                 L.kind = Kind::Adjustment;
                 const auto a = adjust_from(l.at("adjust"));
@@ -649,7 +685,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                     if (!lf) { error = "a live filter this Klimt doesn't know"; return std::nullopt; }
                     L.filters.push_back(*lf);
                 }
-            if (l.contains("styles") && L.kind == Kind::Pixel) L.styles = styles_from(l.at("styles"));   // s019
+            if (l.contains("styles") && (draws_pixels(L.kind) || L.kind == Kind::Group)) L.styles = styles_from(l.at("styles"));   // s019; s046: text, and groups' (s024) were dropped
             if (L.styles.pattern.on && l.contains("styles") && l.at("styles").contains("pattern_overlay")) {   // s033: yours
                 const auto& po = l.at("styles").at("pattern_overlay");
                 const int pw = po.value("width", 0), ph = po.value("height", 0);
@@ -676,11 +712,15 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             if (!blend) { error = "a blend mode this Klimt doesn't know"; return std::nullopt; }
             L.blend = *blend;
             L.clipped = l.value("clipped", false);
-            if ((l.contains("tiles") || l.contains("outside")) && L.kind == Kind::Pixel) {
+            if ((l.contains("tiles") || l.contains("outside")) && draws_pixels(L.kind)) {
                 P::TileMap m;
                 if (!read_map(l, "tiles", "outside", f, m)) return std::nullopt;
                 L.pixels = std::make_shared<const P::TileMap>(std::move(m));
             }
+            // s046: type saved without its pixels (a hand-made file): set it now.
+            // Saved WITH them, they are kept as they were -- a font missing on
+            // this machine shows as it looked until the type is edited.
+            if (L.kind == Kind::Text && !L.pixels && L.text && !L.text->text.empty()) L.pixels = text_pixels(c.image, *L.text);
             // s012: the layer mask (stored as what it hides), and whether it's on.
             if (l.contains("mask")) {   // s024: groups too
                 P::TileMap m;
@@ -870,11 +910,12 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         return true;
     };
     for (const auto& [id, L] : c.layers) {
-        json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : L.kind == Kind::Adjustment ? "adjustment" : L.kind == Kind::Filter ? "filter" : L.kind == Kind::Path ? "path" : "pixel"}, {"name", L.name},
+        json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : L.kind == Kind::Adjustment ? "adjustment" : L.kind == Kind::Filter ? "filter" : L.kind == Kind::Path ? "path" : L.kind == Kind::Text ? "text" : "pixel"}, {"name", L.name},
                   {"parent", L.parent}, {"pos", L.pos}, {"visible", L.visible}, {"locks", L.locks},
                   {"opacity", L.opacity}, {"fill", L.fill}, {"blend", std::string(blend_key(L.blend))},
                   {"clipped", L.clipped}};
-        if (L.pixels && L.kind == Kind::Pixel && !write_map(l, *L.pixels, "tiles", "outside")) return false;
+        if (L.pixels && draws_pixels(L.kind) && !write_map(l, *L.pixels, "tiles", "outside")) return false;
+        if (L.kind == Kind::Text && L.text) l["text"] = text_json(*L.text);   // s046
         if (L.kind == Kind::Adjustment) l["adjust"] = adjust_json(L.adjust);   // s013
         if (L.kind == Kind::Path && L.path) {   // s035
             l["path"] = path_json(*L.path);
@@ -887,7 +928,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
             for (const auto& lf : L.filters) fs.push_back(live_json(lf));
             l["filters"] = std::move(fs);
         }
-        if (L.kind == Kind::Pixel && L.styles.any()) l["styles"] = styles_json(L.styles);   // s019
+        if ((draws_pixels(L.kind) || L.kind == Kind::Group) && L.styles.any()) l["styles"] = styles_json(L.styles);   // s019; s046: text, and groups' (s024)
         if (L.styles.pattern.on && L.styles.pattern.image && l.contains("styles") && l["styles"].contains("pattern_overlay"))   // s033
             if (!write_map(l["styles"]["pattern_overlay"], *L.styles.pattern.image, "tiles", "outside")) return false;
         if (L.kind == Kind::Pixel && !L.filters.empty()) {                      // s018: live filters
