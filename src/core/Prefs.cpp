@@ -50,6 +50,8 @@ Prefs load_prefs(const std::string& file) {
         flag("webp_lossless", o.webp_lossless);
         flag("tiff_deflate", o.tiff_deflate);
     }
+    if (j.contains("export_format") && j["export_format"].is_string() && formats::export_format(j["export_format"].get<std::string>()))
+        p.export_format = j["export_format"].get<std::string>();   // s051
     return p;
 }
 
@@ -70,6 +72,7 @@ bool save_prefs(const std::string& file, const Prefs& p) {
     const auto& o = p.export_options;          // s050
     j["export"] = {{"jpeg_quality", o.jpeg_quality}, {"webp_quality", o.webp_quality}, {"webp_lossless", o.webp_lossless},
                    {"png_level", o.png_level}, {"tiff_deflate", o.tiff_deflate}};
+    j["export_format"] = p.export_format;   // s051
     std::ofstream f(file);
     if (!f) return false;
     f << j.dump(2) << "\n";

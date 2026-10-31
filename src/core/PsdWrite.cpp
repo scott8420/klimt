@@ -149,28 +149,30 @@ std::vector<Bytes> planes_of(const P::TileMap& m, const Box& b, int bps, bool in
     const int ch = m.format().channels();
     const auto px_bytes = static_cast<std::size_t>(m.format().bytes_per_pixel());
     std::vector<Bytes> out(static_cast<std::size_t>(ch));
-    const std::size_t n = static_cast<std::size_t>(std::max(0, b.w())) * static_cast<std::size_t>(std::max(0, b.h())) * static_cast<std::size_t>(bps);
+    const std::size_t w = static_cast<std::size_t>(std::max(0, b.w()));
+    const std::size_t n = w * static_cast<std::size_t>(std::max(0, b.h())) * static_cast<std::size_t>(bps);
     for (auto& pl : out) pl.resize(n);
     std::vector<std::uint8_t> row(static_cast<std::size_t>(m.width()) * px_bytes);
-    std::size_t at = 0;
+    // s052: a row at a time, channel by channel (Responsive).
     for (int y = b.top; y < b.bottom; ++y) {
         m.row_bytes(y, row.data());
-        for (int x = b.left; x < b.right; ++x) {
-            const std::uint8_t* px = row.data() + static_cast<std::size_t>(x) * px_bytes;
-            for (int k = 0; k < ch; ++k) {
-                auto& pl = out[static_cast<std::size_t>(k)];
-                if (bps == 1) {
-                    const std::uint8_t v = px[k];
-                    pl[at] = invert ? static_cast<std::uint8_t>(255 - v) : v;
-                } else {
+        const std::size_t at = static_cast<std::size_t>(y - b.top) * w * static_cast<std::size_t>(bps);
+        const std::uint8_t* r0 = row.data() + static_cast<std::size_t>(b.left) * px_bytes;
+        for (int k = 0; k < ch; ++k) {
+            std::uint8_t* o = out[static_cast<std::size_t>(k)].data() + at;
+            if (bps == 1) {
+                const std::uint8_t* sp = r0 + k;
+                if (invert) for (std::size_t x = 0; x < w; ++x) o[x] = static_cast<std::uint8_t>(255 - sp[x * px_bytes]);
+                else        for (std::size_t x = 0; x < w; ++x) o[x] = sp[x * px_bytes];
+            } else {
+                for (std::size_t x = 0; x < w; ++x) {
                     std::uint16_t v;
-                    std::memcpy(&v, px + 2 * k, 2);
+                    std::memcpy(&v, r0 + x * px_bytes + 2 * static_cast<std::size_t>(k), 2);
                     if (invert) v = static_cast<std::uint16_t>(65535 - v);
-                    pl[at] = static_cast<std::uint8_t>(v >> 8);
-                    pl[at + 1] = static_cast<std::uint8_t>(v);
+                    o[2 * x] = static_cast<std::uint8_t>(v >> 8);
+                    o[2 * x + 1] = static_cast<std::uint8_t>(v);
                 }
             }
-            at += static_cast<std::size_t>(bps);
         }
     }
     return out;

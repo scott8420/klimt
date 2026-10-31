@@ -25,6 +25,23 @@ namespace klimt::formats {
 enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA, PSD, PDF };   // s049: WebP, OpenRaster; s050: Photoshop; s051: PDF (written only, never sniffed)
 // By the file's first bytes, not its name (a .png that is a JPEG opens).
 Kind sniff(const std::string& path);
+// s051 (Scott: changing the chooser's format didn't change the name's
+// extension -- a file could be saved as the wrong type): the formats Export
+// writes, in the Export dialog's order, each with its extension.
+struct ExportFormat {
+    Kind        kind;
+    const char* key;     // the prefs' word: "png", "jpeg", "tiff", "webp", "ora", "psd", "pdf"
+    const char* label;   // the dialog's: "PNG", "OpenRaster (.ora) -- layers, for Krita"
+    const char* ext;     // ".png", ".jpg", ...
+};
+const std::vector<ExportFormat>& export_formats();
+const ExportFormat* export_format(Kind k);              // nullptr: not one Export writes
+const ExportFormat* export_format(const std::string& key);
+// The format a file name says (".jpeg" and ".JPG" too); nullptr: none.
+const ExportFormat* export_format_of_name(const std::string& name);
+// The name with the format's extension: a known export extension replaced,
+// anything else kept and the extension added ("photo.v2" -> "photo.v2.png").
+std::string with_extension(const std::string& name, Kind k);
 // "PNG", "JPEG", "TIFF", "Klimt", "WebP", "OpenRaster", "" -- for messages.
 const char* kind_name(Kind k);
 

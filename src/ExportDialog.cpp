@@ -1,5 +1,7 @@
 // ExportDialog -- the format's own settings (s050). See ExportDialog.hpp.
 #include "ExportDialog.hpp"
+
+#include <filesystem>
 #include "Registry.hpp"
 
 #include <gtkmm/box.h>
@@ -15,13 +17,24 @@
 namespace klimt {
 
 namespace {
+// s051 (Scott: "Trying to measure export ... for height of 235, but it needs
+// at least 252"): a wrapping label's minimum width is one word, its natural
+// width the whole line -- the window, sized for one, was asked to fit the
+// other. Fixed at one width (width_chars == max), its height for that width
+// is the only one there is.
+void fixed_wrap(Gtk::Label& l, int chars = 46) {
+    l.set_wrap(true);
+    l.set_wrap_mode(Pango::WrapMode::WORD_CHAR);
+    l.set_width_chars(chars);
+    l.set_max_width_chars(chars);
+}
+
 Gtk::Label* dim(const std::string& text, bool hint = false) {
     auto* l = Gtk::make_managed<Gtk::Label>(text);
     l->add_css_class("dim-label");
     l->set_xalign(hint ? 0.0f : 1.0f);
     if (hint) {
-        l->set_wrap(true);
-        l->set_max_width_chars(46);
+        fixed_wrap(*l);
         l->add_css_class("caption");
     }
     return l;
@@ -56,6 +69,7 @@ int as_int(const Gtk::Scale& s) { return static_cast<int>(std::lround(s.get_valu
 
 ExportDialog::ExportDialog(Gtk::Window& parent)
     : m_heading("export.heading"),
+      m_exists(widgets::unregistered, "export.exists"),
       m_pages("export.pages"),
       m_jpeg_quality("export.jpeg.quality"),
       m_webp_quality("export.webp.quality"),
@@ -91,6 +105,12 @@ ExportDialog::ExportDialog(Gtk::Window& parent)
     m_heading.set_max_width_chars(40);
     m_heading.add_css_class("heading");
     box->append(m_heading);
+    m_exists.add_css_class("warning");   // s051
+    m_exists.add_css_class("caption");
+    m_exists.set_xalign(0);
+    fixed_wrap(m_exists);
+    m_exists.set_visible(false);
+    box->append(m_exists);
     m_pages.set_transition_type(Gtk::StackTransitionType::NONE);
     m_pages.set_vhomogeneous(false);
     m_pages.set_hhomogeneous(true);
@@ -114,8 +134,7 @@ ExportDialog::ExportDialog(Gtk::Window& parent)
         scale_row(*g, 1, "", m_webp_quality, m_webp_value, 0, 100);   // "Quality" or "Effort": m_webp_what
         m_webp_hint.add_css_class("dim-label");
         m_webp_hint.add_css_class("caption");
-        m_webp_hint.set_wrap(true);
-        m_webp_hint.set_max_width_chars(46);
+        fixed_wrap(m_webp_hint);
         m_webp_hint.set_xalign(0);
         g->attach(m_webp_hint, 0, 2, 3, 1);
         m_pages.add(*g, "webp");
@@ -153,7 +172,7 @@ ExportDialog::ExportDialog(Gtk::Window& parent)
     m_ok_button.signal_clicked().connect([this] {
         const auto o = read();
         close();
-        m_ok.emit(o);
+        m_ok.emit(o, m_kind, m_path);
     });
     auto keys = Gtk::EventControllerKey::create();
     keys->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
@@ -188,8 +207,7 @@ void ExportDialog::fill_ora(const core::ora::Plan& plan, formats::Kind kind) {
         for (const auto& s : lines) {
             auto* l = Gtk::make_managed<Gtk::Label>("\u2022  " + s);
             l->set_xalign(0);
-            l->set_wrap(true);
-            l->set_max_width_chars(46);
+            fixed_wrap(*l);
             m_ora_list.append(*l);
         }
     };
@@ -213,10 +231,8 @@ void ExportDialog::fill_ora(const core::ora::Plan& plan, formats::Kind kind) {
                                : "Layers for Krita, GIMP and MyPaint. Your .klimt keeps everything.", true));
 }
 
-void ExportDialog::ask(formats::Kind kind, const std::string& file_name, const formats::WriteOptions& o,
-                       const core::ora::Plan& plan) {
+void ExportDialog::show_kind(formats::Kind kind) {   // s051
     m_kind = kind;
-    m_base = o;
     const char* page = "png";
     const char* what = "PNG";
     switch (kind) {
@@ -229,15 +245,37 @@ void ExportDialog::ask(formats::Kind kind, const std::string& file_name, const f
         default: break;
     }
     set_title(std::string("Export ") + what);
-    m_heading.set_text("“" + file_name + "”");
+    m_heading.set_text("\u201c" + std::filesystem::path(m_path).filename().string() + "\u201d");
+    std::error_code ec;
+    const bool other = std::filesystem::exists(m_path, ec) && m_path != m_chosen_existing;
+    m_exists.set_text(other ? "There's already a file of this name here. Replace it?" : "");
+    m_exists.set_visible(other);
+    // s051: the chooser couldn't ask (it saw the name without its extension) -- this does.
+    m_ok_button.set_label(other ? "Replace" : "Export");
+    if (other) { m_ok_button.remove_css_class("suggested-action"); m_ok_button.add_css_class("destructive-action"); }
+    else { m_ok_button.remove_css_class("destructive-action"); m_ok_button.add_css_class("suggested-action"); }
+    if ((kind == formats::Kind::ORA || kind == formats::Kind::PSD || kind == formats::Kind::PDF) && m_plan_for)
+        fill_ora(m_plan_for(kind), kind);
+    m_pages.set_visible_child(page);
+    sync();
+    set_default_size(-1, -1);   // s051: measure this page afresh
+}
+
+void ExportDialog::ask(formats::Kind kind, const std::string& path, const std::string& chosen, const formats::WriteOptions& o,
+                       PlanFor plan_for) {
+    m_base = o;
+    m_plan_for = std::move(plan_for);
+    m_path = path;   // as the Shell made it (the extension added, or as typed)
+    m_chosen = chosen;
+    // The chooser asked "replace?" itself only when the name it saw already had the extension.
+    std::error_code ec0;
+    m_chosen_existing = (chosen == m_path && std::filesystem::exists(chosen, ec0)) ? chosen : std::string{};
     m_jpeg_quality.set_value(o.jpeg_quality);
     m_webp_quality.set_value(o.webp_quality);
     m_webp_lossless.set_active(o.webp_lossless);
     m_png_level.set_value(o.png_level);
     m_tiff_compression.set_selected(o.tiff_deflate ? 0 : 1);
-    if (kind == formats::Kind::ORA || kind == formats::Kind::PSD || kind == formats::Kind::PDF) fill_ora(plan, kind);
-    m_pages.set_visible_child(page);
-    sync();
+    show_kind(kind);
     present();
     m_ok_button.grab_focus();
 }

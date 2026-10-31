@@ -5,6 +5,7 @@
 #include "core/Transfer.hpp"   // s022: place
 #include "core/Session.hpp"    // s023
 #include "core/Ora.hpp"
+#include <gtkmm/filelauncher.h>
 #include "core/Pdf.hpp"        // s051: Export as PDF
 #include "core/Psd.hpp"        // s049: Export as OpenRaster
 #include <glibmm/miscutils.h>
@@ -476,53 +477,98 @@ void Shell::on_export() {
     text_close();   // s046: the visit is a step before it is saved
     if (!has_image()) { toast("No image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     if (file_job_busy()) return;
-    auto dlg = Gtk::FileDialog::create();
-    dlg->set_title("Export");
-    auto filters = Gio::ListStore<Gtk::FileFilter>::create();
-    auto any = filter("PNG, JPEG, TIFF, WebP, OpenRaster, Photoshop or PDF", {"png", "jpg", "jpeg", "tif", "tiff", "webp", "ora", "psd", "pdf"});
-    filters->append(any);
-    filters->append(filter("PNG", {"png"}));
-    filters->append(filter("JPEG", {"jpg", "jpeg"}));
-    filters->append(filter("TIFF", {"tif", "tiff"}));
-    filters->append(filter("WebP", {"webp"}));                              // s049
-    filters->append(filter("OpenRaster -- layers, for Krita (.ora)", {"ora"}));   // s049
-    filters->append(filter("Photoshop -- layers (.psd)", {"psd"}));             // s051
-    filters->append(filter("PDF -- the picture, type kept as type (.pdf)", {"pdf"}));   // s051
-    dlg->set_filters(filters);
-    dlg->set_default_filter(any);
-    dlg->set_initial_name(stem_of(name_()) + ".png");
-    if (!m_folder.empty()) dlg->set_initial_folder(Gio::File::create_for_path(m_folder));
-    dlg->save(*this, [this, dlg](Glib::RefPtr<Gio::AsyncResult>& res) {
-        Glib::RefPtr<Gio::File> f;
-        try { f = dlg->save_finish(res); } catch (const Glib::Error&) { return; }
-        if (!f) return;
-        std::string path = f->get_path();
-        const auto ext = lower_ext(path);
-        formats::Kind kind = formats::Kind::PNG;
-        if (ext == ".jpg" || ext == ".jpeg") kind = formats::Kind::JPEG;
-        else if (ext == ".tif" || ext == ".tiff") kind = formats::Kind::TIFF;
-        else if (ext == ".webp") kind = formats::Kind::WebP;   // s049
-        else if (ext == ".ora") kind = formats::Kind::ORA;      // s049: the layers, not a flat image
-        else if (ext == ".psd") kind = formats::Kind::PSD;      // s051: the layers, for Photoshop and the rest
-        else if (ext == ".pdf") kind = formats::Kind::PDF;      // s051: for Composix and print
-        else if (ext != ".png") path += ".png";
-        // s050: the format's own settings, asked now; the export starts on OK.
-        const std::string name = fs::path(path).filename().string();
-        if (!m_export_dialog) {
-            m_export_dialog = std::make_unique<ExportDialog>(*this);
-            m_export_dialog->signal_ok().connect([this](formats::WriteOptions o) {
-                m_prefs.export_options = o;   // remembered per format
-                core::save_prefs(m_prefs_file, m_prefs);
-                export_to(m_export_path, m_export_kind, o);
-            });
+    // s051 (Scott: "I expect that the dropdown in the save dlg have the file
+    // types"): the chooser's type menu IS the format -- one type per format,
+    // starting on the last one exported; the type picked decides the format
+    // and adds the extension. GtkFileChooserNative is deprecated in GTK 4.10
+    // but whole, and the only API that reports the type picked.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    // s051 (Scott: "remove all extension and when saved it auto adds" --
+    // "show extensions removed on purpose"): GNOME's portal chooser never
+    // says its type changed, so the name goes in WITHOUT an extension, the
+    // title says why, and the type picked adds it on Export. Its own
+    // "replace?" can't see the real name, so the settings dialog asks
+    // (its OK becomes Replace).
+    GtkFileChooserNative* n = gtk_file_chooser_native_new("Export \u2014 the extension comes from the type below",
+                                                          GTK_WINDOW(gobj()), GTK_FILE_CHOOSER_ACTION_SAVE, "_Export", "_Cancel");
+    auto* fc = GTK_FILE_CHOOSER(n);
+    const auto* last = formats::export_format(m_prefs.export_format);
+    if (!last) last = formats::export_format(formats::Kind::PNG);
+    for (const auto& ef : formats::export_formats()) {
+        GtkFileFilter* f = gtk_file_filter_new();
+        gtk_file_filter_set_name(f, (std::string(ef.label) + "  (" + ef.ext + ")").c_str());
+        gtk_file_filter_add_suffix(f, ef.ext + 1);
+        if (ef.kind == formats::Kind::JPEG) gtk_file_filter_add_suffix(f, "jpeg");
+        if (ef.kind == formats::Kind::TIFF) gtk_file_filter_add_suffix(f, "tiff");
+        g_object_set_data(G_OBJECT(f), "klimt-kind", GINT_TO_POINTER(static_cast<int>(ef.kind) + 1));
+        gtk_file_chooser_add_filter(fc, f);
+        if (&ef == last) gtk_file_chooser_set_filter(fc, f);
+        g_object_unref(f);
+    }
+    gtk_file_chooser_set_current_name(fc, stem_of(name_()).c_str());   // no extension: the type adds it
+    // Scott: "as a hint or an info bubble" -- the portal takes no hint in its
+    // name box, but it shows an app's CHOICES: a ticked box saying so, inside
+    // the dialog, which also lets a name be written exactly as typed.
+    gtk_file_chooser_add_choice(fc, "klimt-ext", "Add the extension from the type (.png, .pdf ...)", nullptr, nullptr);
+    gtk_file_chooser_set_choice(fc, "klimt-ext", "true");
+    if (!m_folder.empty()) {
+        GFile* dir = g_file_new_for_path(m_folder.c_str());
+        gtk_file_chooser_set_current_folder(fc, dir, nullptr);
+        g_object_unref(dir);
+    }
+    struct Ctx { Shell* self; };
+    g_signal_connect(n, "response", G_CALLBACK(+[](GtkNativeDialog* d, int response, gpointer data) {
+        auto* self = static_cast<Ctx*>(data)->self;
+        auto* fc = GTK_FILE_CHOOSER(d);
+        std::string path;
+        formats::Kind kind = formats::Kind::Unknown;
+        bool as_typed = false;
+        if (response == GTK_RESPONSE_ACCEPT) {
+            if (GFile* f = gtk_file_chooser_get_file(fc)) {
+                if (char* p = g_file_get_path(f)) { path = p; g_free(p); }
+                g_object_unref(f);
+            }
+            if (GtkFileFilter* flt = gtk_file_chooser_get_filter(fc))
+                kind = static_cast<formats::Kind>(GPOINTER_TO_INT(g_object_get_data(G_OBJECT(flt), "klimt-kind")) - 1);
+            const char* c = gtk_file_chooser_get_choice(fc, "klimt-ext");
+            as_typed = c && std::string(c) == "false";
         }
-        m_export_path = path;
-        m_export_kind = kind;
-        const auto plan = kind == formats::Kind::ORA   ? core::ora::plan(m_doc.image(), m_doc.snapshot())
-                          : kind == formats::Kind::PSD ? core::psd::plan(m_doc.image(), m_doc.snapshot())
-                          : kind == formats::Kind::PDF ? core::pdf::plan(m_doc.image(), m_doc.snapshot()).list
-                                                       : core::ora::Plan{};
-        m_export_dialog->ask(kind, name, m_prefs.export_options, plan);
+        g_object_unref(d);
+        delete static_cast<Ctx*>(data);
+        if (!path.empty()) self->export_asked(path, kind, as_typed);
+    }), new Ctx{this});
+    gtk_native_dialog_set_modal(GTK_NATIVE_DIALOG(n), TRUE);
+    gtk_native_dialog_show(GTK_NATIVE_DIALOG(n));
+#pragma GCC diagnostic pop
+}
+
+// s051: the chooser answered -- its type picked (Unknown: it didn't say; the
+// name's extension, else the last format), the name's extension set to it.
+void Shell::export_asked(const std::string& chosen, formats::Kind kind, bool as_typed) {
+    if (!formats::export_format(kind)) {
+        const auto* by_name = formats::export_format_of_name(chosen);
+        const auto* last = formats::export_format(m_prefs.export_format);
+        kind = by_name ? by_name->kind : last ? last->kind : formats::Kind::PNG;
+    }
+    // The box unticked: the name exactly as typed (the type still picks the format).
+    const std::string path = as_typed ? chosen : formats::with_extension(chosen, kind);
+    if (!m_export_dialog) {
+        m_export_dialog = std::make_unique<ExportDialog>(*this);
+        m_export_dialog->signal_ok().connect([this](formats::WriteOptions o, formats::Kind k, std::string p) {
+            m_prefs.export_options = o;   // remembered per format
+            if (const auto* ef = formats::export_format(k)) m_prefs.export_format = ef->key;   // s051
+            core::save_prefs(m_prefs_file, m_prefs);
+            export_to(p, k, o);
+        });
+    }
+    m_export_dialog->ask(kind, path, chosen, m_prefs.export_options, [this](formats::Kind k) {
+        const auto im = m_doc.image();
+        const auto ls = m_doc.snapshot();
+        return k == formats::Kind::ORA   ? core::ora::plan(im, ls)
+             : k == formats::Kind::PSD   ? core::psd::plan(im, ls)
+             : k == formats::Kind::PDF   ? core::pdf::plan(im, ls).list
+                                         : core::ora::Plan{};
     });
 }
 
@@ -545,7 +591,26 @@ void Shell::export_to(const std::string& path, formats::Kind kind, const formats
         }
         std::string said;
         for (const auto& n : notes) said += (said.empty() ? " -- " : ", ") + n;
-        return [this, name, said] { toast("Exported \u201c" + name + "\u201d" + said); };
+        // s051 (Scott): a final word -- the name and where it went, as a dialog.
+        return [this, name, said, path, notes] {
+            toast("Exported \u201c" + name + "\u201d" + said);
+            std::string detail = "Saved as \u201c" + name + "\u201d\nin " + fs::path(path).parent_path().string();
+            for (const auto& n : notes) detail += "\n\u2022 " + n;
+            auto a = Gtk::AlertDialog::create("Exported");
+            a->set_detail(detail);
+            a->set_buttons({"Show in Folder", "OK"});
+            a->set_default_button(1);
+            a->set_cancel_button(1);
+            a->choose(*this, [this, a, path](Glib::RefPtr<Gio::AsyncResult>& r) {
+                int b = 1;
+                try { b = a->choose_finish(r); } catch (const Glib::Error&) {}
+                if (b != 0) return;
+                auto l = Gtk::FileLauncher::create(Gio::File::create_for_path(path));
+                l->open_containing_folder(*this, [l](Glib::RefPtr<Gio::AsyncResult>& rr) {
+                    try { l->open_containing_folder_finish(rr); } catch (const Glib::Error&) {}
+                });
+            });
+        };
     });
 }
 

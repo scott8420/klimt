@@ -21,6 +21,7 @@ struct Prefs {
     bool show_guides = true, lock_guides = false, snap = true;   // s032
     double path_tolerance = 2.0;   // s035: Make Work Path's tolerance, 0.5 .. 10 px
     formats::WriteOptions export_options;   // s050: the Export dialog's last choice, per format
+    std::string           export_format = "png";   // s051: the format last exported (formats::export_format key)
     bool operator==(const Prefs&) const = default;
 };
 

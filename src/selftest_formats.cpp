@@ -641,4 +641,25 @@ void selftest_dirty(const Check& check) {
         check("argb tile: an edge tile is cropped to the image", w == 88 && h == 144 && out.size() == 88u * 144u,
               std::to_string(w) + " x " + std::to_string(h));
     }
+    // s051 (Scott): the format and the name's extension never disagree.
+    {
+        namespace F = klimt::formats;
+        const auto kind_of = [](const std::string& n) { const auto* f = F::export_format_of_name(n); return f ? f->kind : F::Kind::Unknown; };
+        check("export formats: seven, each its own extension, found by key and kind",
+              F::export_formats().size() == 7 && F::export_format(F::Kind::PDF) && std::string(F::export_format(F::Kind::PDF)->ext) == ".pdf" &&
+                  F::export_format("psd") && F::export_format("psd")->kind == F::Kind::PSD && !F::export_format("exe") &&
+                  !F::export_format(F::Kind::Klimt), "");
+        check("export formats: the name says the format -- .jpeg / .JPG / .tiff too; none or another: nothing",
+              kind_of("/a/b/photo.JPG") == F::Kind::JPEG && kind_of("x.jpeg") == F::Kind::JPEG && kind_of("x.tiff") == F::Kind::TIFF &&
+                  kind_of("x.pdf") == F::Kind::PDF && kind_of("photo") == F::Kind::Unknown && kind_of("photo.v2") == F::Kind::Unknown &&
+                  kind_of("/dir.d/photo") == F::Kind::Unknown, "");
+        check("export formats: the extension follows the format -- replaced, or added to a name without one",
+              F::with_extension("/home/s/photo.png", F::Kind::PDF) == "/home/s/photo.pdf" &&
+                  F::with_extension("photo.jpeg", F::Kind::PSD) == "photo.psd" &&
+                  F::with_extension("photo", F::Kind::WebP) == "photo.webp" &&
+                  F::with_extension("photo.v2", F::Kind::PNG) == "photo.v2.png" &&
+                  F::with_extension("/dir.d/photo", F::Kind::ORA) == "/dir.d/photo.ora" &&
+                  F::with_extension("photo.pdf", F::Kind::PDF) == "photo.pdf",
+              F::with_extension("photo.v2", F::Kind::PNG));
+    }
 }

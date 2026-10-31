@@ -16,6 +16,10 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <functional>
+#include <thread>
+#include <mutex>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -48,6 +52,26 @@ const std::set<std::string> kAdjustKeys = {
     "blwh", "phfl", "mixr", "clrL", "nvrt", "post", "thrs", "grdm", "selc"};
 
 std::string plural(int n, const char* one, const char* many) { return std::to_string(n) + " " + (n == 1 ? one : many); }
+
+// s052 (Responsive): `n` items over the cores, taken as each frees up.
+// `f(i)` returns false to stop the rest (a damaged channel, a cancel).
+bool on_cores(std::size_t n, const std::function<bool(std::size_t)>& f) {
+    std::atomic<std::size_t> next{0};
+    std::atomic<bool> ok{true};
+    const auto work = [&] {
+        for (;;) {
+            const std::size_t i = next++;
+            if (i >= n || !ok) return;
+            if (!f(i)) ok = false;
+        }
+    };
+    const unsigned nt = static_cast<unsigned>(std::min<std::size_t>(std::max<std::size_t>(n, 1), std::max(1u, std::thread::hardware_concurrency())));
+    std::vector<std::thread> pool;
+    for (unsigned t = 1; t < nt; ++t) pool.emplace_back(work);
+    work();
+    for (auto& t : pool) t.join();
+    return ok;
+}
 
 // A bounds-checked big-endian cursor over the whole file.
 struct Reader {
@@ -267,6 +291,7 @@ struct LayerInfo {
 // The layer info block, [r.at, end): the records, then their channels' data.
 LayerInfo read_layer_info(Reader& r, std::size_t end, int bps, std::string& why, const formats::Progress& p) {
     LayerInfo li;
+    const auto main_id = std::this_thread::get_id();   // only this thread reports progress
     int count = r.i16();
     if (count < 0) count = -count;   // negative: the first alpha is the merged picture's transparency
     li.records.resize(static_cast<std::size_t>(count));
@@ -335,12 +360,12 @@ LayerInfo read_layer_info(Reader& r, std::size_t end, int bps, std::string& why,
         r.seek(extra_end);
         if (r.bad) { why = "a damaged layer record"; return li; }
     }
-    // The channels' pixels, record by record.
-    std::size_t n = 0, done = 0;
-    for (const auto& rec : li.records) n += rec.channels.size();
+    // The channels' pixels: where each one's bytes are (in file order), then
+    // decoded on the cores (s052 -- each channel is independent).
+    struct Job { Channel* c; const std::uint8_t* s; int w, h; };
+    std::vector<Job> jobs;
     for (auto& rec : li.records) {
         for (auto& c : rec.channels) {
-            if (p.stop()) { why = "cancelled"; return li; }
             if (c.len > end - std::min(r.at, end)) { why = "a damaged layer's pixels"; return li; }
             const std::uint8_t* s = r.d + r.at;
             r.at += c.len;
@@ -352,10 +377,21 @@ LayerInfo read_layer_info(Reader& r, std::size_t end, int bps, std::string& why,
             const Rect& b = masky ? rec.mask_box : rec.box;
             const std::uint64_t area = static_cast<std::uint64_t>(b.w()) * static_cast<std::uint64_t>(b.h());
             if (area > formats::kMaxPixels) { why = "a layer too big to hold"; return li; }
-            if (!decode(s, c.len, b.w(), b.h(), bps, c.plane, why)) return li;
-            p.at(0.05 + 0.85 * static_cast<double>(++done) / static_cast<double>(std::max<std::size_t>(1, n)));
+            jobs.push_back({&c, s, b.w(), b.h()});
         }
     }
+    std::atomic<std::size_t> done{0};
+    std::mutex why_mx;
+    const bool ok = on_cores(jobs.size(), [&](std::size_t i) {
+        if (p.stop()) { std::lock_guard lk(why_mx); why = "cancelled"; return false; }
+        const auto& j = jobs[i];
+        std::string w;
+        if (!decode(j.s, j.c->len, j.w, j.h, bps, j.c->plane, w)) { std::lock_guard lk(why_mx); why = w; return false; }
+        const std::size_t d = ++done;
+        if (std::this_thread::get_id() == main_id) p.at(0.05 + 0.6 * static_cast<double>(d) / static_cast<double>(std::max<std::size_t>(1, jobs.size())));
+        return true;
+    });
+    if (!ok) return li;
     li.ok = true;
     return li;
 }
@@ -372,30 +408,41 @@ void put(std::uint8_t* d, double v, int bps) {
     std::memcpy(d, &u, 2);
 }
 
-// A layer's channels as a W x H canvas, straight RGBA.
+// A layer's channels as a W x H canvas, straight RGBA. s052: a row at a
+// time, sample by sample without the per-sample helpers (Responsive).
 P::TileMap pixels_of(const Record& rec, const P::Format& f, int W, int H, int bps) {
     const Channel* ch[4] = {};   // R G B A
     for (const auto& c : rec.channels) {
         if (c.id >= 0 && c.id <= 2) ch[c.id] = &c;
         else if (c.id == -1) ch[3] = &c;
     }
-    const int ss = bps;   // stored sample bytes: the doc's depth is the file's
-    formats::BandBuilder band(f, W, H);
     const Rect& b = rec.box;
+    const std::size_t need = static_cast<std::size_t>(std::max(0, b.w())) * static_cast<std::size_t>(std::max(0, b.h())) * static_cast<std::size_t>(bps);
+    const std::uint8_t* src[4] = {};
+    for (int k = 0; k < 4; ++k)
+        if (ch[k] && ch[k]->plane.size() >= need) src[k] = ch[k]->plane.data();
+    formats::BandBuilder band(f, W, H);
     const int x0 = std::max(0, b.left), x1 = std::min(W, b.right);
     for (int y = 0; y < H; ++y) {
         std::uint8_t* d = band.row(y);
         std::memset(d, 0, band.row_bytes());
         if (y >= b.top && y < b.bottom && x1 > x0) {
-            const std::size_t base = static_cast<std::size_t>(y - b.top) * static_cast<std::size_t>(b.w());
-            for (int x = x0; x < x1; ++x) {
-                const std::size_t i = base + static_cast<std::size_t>(x - b.left);
-                std::uint8_t* px = d + static_cast<std::size_t>(x) * 4 * static_cast<std::size_t>(ss);
+            const std::size_t base = static_cast<std::size_t>(y - b.top) * static_cast<std::size_t>(b.w()) + static_cast<std::size_t>(x0 - b.left);
+            const int n = x1 - x0;
+            if (bps == 1) {
+                std::uint8_t* o = d + static_cast<std::size_t>(x0) * 4;
                 for (int k = 0; k < 4; ++k) {
-                    const Channel* c = ch[k];
-                    const double v = (c && c->plane.size() >= (i + 1) * static_cast<std::size_t>(bps)) ? sample(c->plane, i, bps)
-                                                                                                        : (k == 3 ? 1.0 : 0.0);
-                    put(px + k * ss, v, bps);
+                    const std::uint8_t* sp = src[k] ? src[k] + base : nullptr;
+                    const std::uint8_t fill = k == 3 ? 255 : 0;
+                    for (int x = 0; x < n; ++x) o[x * 4 + k] = sp ? sp[x] : fill;
+                }
+            } else {
+                auto* o = reinterpret_cast<std::uint16_t*>(d) + static_cast<std::size_t>(x0) * 4;
+                for (int k = 0; k < 4; ++k) {
+                    const std::uint8_t* sp = src[k] ? src[k] + base * 2 : nullptr;
+                    const std::uint16_t fill = k == 3 ? 65535 : 0;
+                    for (int x = 0; x < n; ++x)
+                        o[x * 4 + k] = sp ? static_cast<std::uint16_t>((sp[2 * x] << 8) | sp[2 * x + 1]) : fill;
                 }
             }
         }
@@ -560,13 +607,36 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
         r.seek(end);
     }
 
+    // s052 (Responsive): each layer's pixels and mask made into Klimt's maps on
+    // the cores before the tree is built (the planes go as each is done).
+    std::vector<std::shared_ptr<const P::TileMap>> made_px(li.records.size()), made_mask(li.records.size());
+    {
+        const auto main_id = std::this_thread::get_id();
+        std::atomic<std::size_t> made{0};
+        on_cores(li.records.size(), [&](std::size_t i) {
+            if (p.stop()) return false;
+            auto& rec = li.records[i];
+            const bool group = rec.section == 1 || rec.section == 2;
+            if (rec.section == 3 || (rec.adjust && !group)) return true;
+            if (!group) made_px[i] = std::make_shared<const P::TileMap>(pixels_of(rec, c.image.format, Wi, Hi, bps));
+            if (rec.has_mask && rec.mask_box.w() > 0 && rec.mask_box.h() > 0)
+                made_mask[i] = std::make_shared<const P::TileMap>(mask_of(rec, Wi, Hi, bps, c.image.format.depth));
+            rec.channels.clear();   // the planes: done with
+            const std::size_t d = ++made;
+            if (std::this_thread::get_id() == main_id) p.at(0.65 + 0.3 * static_cast<double>(d) / static_cast<double>(std::max<std::size_t>(1, li.records.size())));
+            return true;
+        });
+        if (p.stop()) { error = "cancelled"; return std::nullopt; }
+    }
+
     int next = 1;
     int n_adjust = 0, n_effects = 0, n_vector = 0, n_text = 0, n_smart = 0, n_unknown_blend = 0, n_beyond = 0;
     // Records bottom first. A context is a group being filled: its children,
     // bottom first; a type-3 divider opens one, the group's own record closes it.
     struct Ctx { std::string id; std::vector<std::string> kids; };
     std::vector<Ctx> stack{{"", {}}};
-    for (auto& rec : li.records) {
+    for (std::size_t ri = 0; ri < li.records.size(); ++ri) {
+        auto& rec = li.records[ri];
         if (p.stop()) { error = "cancelled"; return std::nullopt; }
         if (rec.section == 3) { stack.push_back({"L" + std::to_string(next++), {}}); continue; }
         Layer L;
@@ -585,8 +655,8 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
             if (!sb) ++n_unknown_blend;
             L.blend = sb.value_or(Blend::PassThrough);
             L.clipped = rec.clipping == 1;
-            if (rec.has_mask && rec.mask_box.w() > 0 && rec.mask_box.h() > 0) {
-                L.mask = std::make_shared<const P::TileMap>(mask_of(rec, Wi, Hi, bps, c.image.format.depth));
+            if (made_mask[ri]) {
+                L.mask = made_mask[ri];
                 L.mask_on = !(rec.mask_flags & 2);
             }
             for (std::size_t i = 0; i < ctx.kids.size(); ++i) {
@@ -608,12 +678,11 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
         L.fill = percent(rec.fill);
         L.clipped = rec.clipping == 1;
         if (rec.box.left < 0 || rec.box.top < 0 || rec.box.right > Wi || rec.box.bottom > Hi) ++n_beyond;
-        L.pixels = std::make_shared<const P::TileMap>(pixels_of(rec, c.image.format, Wi, Hi, bps));
-        if (rec.has_mask && rec.mask_box.w() > 0 && rec.mask_box.h() > 0) {
-            L.mask = std::make_shared<const P::TileMap>(mask_of(rec, Wi, Hi, bps, c.image.format.depth));
+        L.pixels = made_px[ri];
+        if (made_mask[ri]) {
+            L.mask = made_mask[ri];
             L.mask_on = !(rec.mask_flags & 2);
         }
-        rec.channels.clear();   // the planes: done with
         const std::string id = "L" + std::to_string(next++);
         c.layers[id] = std::move(L);
         stack.back().kids.push_back(id);

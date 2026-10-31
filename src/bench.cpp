@@ -9,6 +9,8 @@
 //                                  drawn (Cairo, as the canvas does), before
 //                                  (every segment, full size) and after (the
 //                                  view's level, its cells only) -- WEAKNESSES 25
+//   ./build/klimt_bench files [16]   s052: a 4000 x 3000, 8-layer document saved
+//                                  and opened as .klimt and PSD, and written as PDF
 //
 // Composites every tile once, on ONE thread (the app spreads tiles over the
 // workers), and prints milliseconds per tile. A Debug build is several times
@@ -17,6 +19,9 @@
 #include "core/Composite.hpp"
 #include "core/Document.hpp"
 #include "core/Selection.hpp"   // s049
+#include "core/File.hpp"        // s052: files
+#include "core/Pdf.hpp"
+#include "core/Psd.hpp"
 
 #include <cairo.h>
 
@@ -24,6 +29,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <thread>
@@ -142,13 +148,11 @@ int bench_ants() {
 }
 }  // namespace
 
-int main(int argc, char** argv) {
-    if (argc > 1 && std::string(argv[1]) == "size") return bench_size();
-    if (argc > 1 && std::string(argv[1]) == "ants") return bench_ants();   // s049
-    const int depth = argc > 1 ? std::atoi(argv[1]) : 8;
-    const P::Format f{depth == 16 ? P::Depth::U16 : depth == 32 ? P::Depth::F32 : P::Depth::U8, P::Mode::RGB, true};
-    const int W = 4000, H = 3000;
-    core::Image im{.width = W, .height = H, .format = f};
+namespace {
+// The bench's document: 8 layers -- a flat background, a full-frame gradient
+// (no two pixels alike), two soft discs, a half-transparent band, a Multiply
+// wash, a Screen glow and a small sticker (uniform, sparse and dense tiles).
+core::Layers demo_layers(const P::Format& f, int W, int H) {
     core::Layers layers;
     const auto add = [&](const std::string& id, double pos, P::TileMap m, P::Blend b = P::Blend::Normal, int op = 100) {
         core::Layer l;
@@ -160,9 +164,6 @@ int main(int argc, char** argv) {
         layers[id] = l;
     };
     const P::TileMap blank(f, W, H);
-    // A flat background, a full-frame gradient (no two pixels alike), two
-    // soft discs, a half-transparent band, a Multiply wash, a Screen glow and
-    // a small sticker -- a mix of uniform, sparse and dense tiles.
     add("bg", 1, blank.fill({0, 0, W, H}, P::rgba(0.9f, 0.88f, 0.85f)));
     add("grad", 2, blank.paint({0, 0, W, H}, [&](int x, int y, const P::Px&) {
         return P::rgba(static_cast<float>(x) / W, static_cast<float>(y) / H, 0.5f, 1);
@@ -184,6 +185,51 @@ int main(int argc, char** argv) {
     add("glow", 7, disc(2000, 1500, 1200, P::rgba(1, 0.9f, 0.6f)), P::Blend::Screen, 40);
     add("sticker", 8, blank.fill({300, 300, 200, 200}, P::rgba(1, 0, 0)));
 
+    return layers;
+}
+
+// s052: opening and writing a big layered document -- the .klimt, PSD, PDF.
+int bench_files(int depth) {
+    namespace fs = std::filesystem;
+    const P::Format f{depth == 16 ? P::Depth::U16 : P::Depth::U8, P::Mode::RGB, true};
+    const int W = 4000, H = 3000;
+    core::file::Contents c;
+    c.image = core::Image{.width = W, .height = H, .format = f};
+    c.layers = demo_layers(f, W, H);
+    c.next_id = 100;
+    const auto dir = fs::temp_directory_path() / "klimt_bench_files";
+    fs::create_directories(dir);
+    const auto ms = [](auto t0) { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); };
+    std::string err;
+    std::vector<std::string> notes;
+    std::printf("%d x %d, %d-bit, 8 layers (%u cores)\n", W, H, depth, std::thread::hardware_concurrency());
+    auto t = std::chrono::steady_clock::now();
+    const bool k = core::file::save_klimt((dir / "big.klimt").string(), c, err);
+    std::printf("  save .klimt  %7.0f ms %s\n", ms(t), k ? "" : err.c_str());
+    t = std::chrono::steady_clock::now();
+    auto kk = core::file::open((dir / "big.klimt").string(), err);
+    std::printf("  open .klimt  %7.0f ms %s\n", ms(t), kk ? "" : err.c_str());
+    t = std::chrono::steady_clock::now();
+    const bool p = core::psd::save((dir / "big.psd").string(), c.image, c.layers, err, notes);
+    std::printf("  save .psd    %7.0f ms %s\n", ms(t), p ? "" : err.c_str());
+    t = std::chrono::steady_clock::now();
+    auto pp = core::file::open((dir / "big.psd").string(), err);
+    std::printf("  open .psd    %7.0f ms %s\n", ms(t), pp ? "" : err.c_str());
+    t = std::chrono::steady_clock::now();
+    const bool d = core::pdf::save((dir / "big.pdf").string(), c.image, c.layers, "big", err, notes);
+    std::printf("  save .pdf    %7.0f ms %s\n", ms(t), d ? "" : err.c_str());
+    return k && kk && p && pp && d ? 0 : 1;
+}
+}  // namespace
+int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "files") return bench_files(argc > 2 ? std::atoi(argv[2]) : 8);   // s052
+    if (argc > 1 && std::string(argv[1]) == "size") return bench_size();
+    if (argc > 1 && std::string(argv[1]) == "ants") return bench_ants();   // s049
+    const int depth = argc > 1 ? std::atoi(argv[1]) : 8;
+    const P::Format f{depth == 16 ? P::Depth::U16 : depth == 32 ? P::Depth::F32 : P::Depth::U8, P::Mode::RGB, true};
+    const int W = 4000, H = 3000;
+    core::Image im{.width = W, .height = H, .format = f};
+    core::Layers layers = demo_layers(f, W, H);
     const int cols = (W + P::kTile - 1) / P::kTile, rows = (H + P::kTile - 1) / P::kTile;
     std::vector<std::uint32_t> out;
     int w = 0, h = 0;

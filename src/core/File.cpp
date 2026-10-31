@@ -10,6 +10,8 @@
 #include "json.hpp"
 
 #include <algorithm>
+#include <thread>
+#include <atomic>
 #include <bit>
 #include <cstdio>
 #include <cstring>
@@ -1131,17 +1133,33 @@ std::optional<P::TileMap> flatten(const Image& im, const std::map<Document::Id, 
     const P::Format f{im.format.depth, P::Mode::RGB, true};
     P::TileMap blank(f, im.width, im.height);
     std::vector<P::TileMap::TileRef> grid(static_cast<std::size_t>(blank.cols()) * static_cast<std::size_t>(blank.rows()));
-    std::vector<float> tile;
+    // s052 (Responsive): the tiles on the cores, taken as each frees up --
+    // every export (PNG ... PDF) waits on this.
     const std::size_t n = grid.size();
-    for (int row = 0; row < blank.rows(); ++row)
-        for (int col = 0; col < blank.cols(); ++col) {
-            if (p.stop()) return std::nullopt;
-            composite_tile(im, layers, col, row, tile);
+    const int cols = blank.cols();
+    std::atomic<std::size_t> next{0}, done{0};
+    std::atomic<bool> stop{false};
+    const auto main_id = std::this_thread::get_id();
+    const auto work = [&] {
+        std::vector<float> tile;
+        for (;;) {
+            const std::size_t i = next++;
+            if (i >= n || stop) return;
+            if (p.stop()) { stop = true; return; }
+            composite_tile(im, layers, static_cast<int>(i) % cols, static_cast<int>(i) / cols, tile);
             P::TileWriter w(f, P::transparent());
             w.set_premultiplied(tile);
-            grid[static_cast<std::size_t>(row) * static_cast<std::size_t>(blank.cols()) + static_cast<std::size_t>(col)] = w.freeze();
-            p.at(static_cast<double>(row * blank.cols() + col + 1) / static_cast<double>(n) * 0.5);
+            grid[i] = w.freeze();
+            const std::size_t d = ++done;
+            if (std::this_thread::get_id() == main_id) p.at(static_cast<double>(d) / static_cast<double>(n) * 0.5);
         }
+    };
+    const unsigned nt = static_cast<unsigned>(std::min<std::size_t>(std::max<std::size_t>(n, 1), std::max(1u, std::thread::hardware_concurrency())));
+    std::vector<std::thread> pool;
+    for (unsigned t = 1; t < nt; ++t) pool.emplace_back(work);
+    work();
+    for (auto& t : pool) t.join();
+    if (stop) return std::nullopt;
     return P::TileMap::from_tiles(f, im.width, im.height, std::move(grid));
 }
 

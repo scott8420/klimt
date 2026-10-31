@@ -1,5 +1,6 @@
 #include "formats/Formats.hpp"
 
+#include <cctype>
 #include <cstring>
 #include <fstream>
 
@@ -66,6 +67,51 @@ std::optional<Raster> read_image(const std::string& path, std::string& error, co
     std::ifstream in(path, std::ios::binary);
     error = in ? "not a PNG, JPEG, TIFF or WebP file" : "can't be read";
     return std::nullopt;
+}
+
+// s051: the formats Export writes.
+const std::vector<ExportFormat>& export_formats() {
+    static const std::vector<ExportFormat> f{
+        {Kind::PNG, "png", "PNG", ".png"},
+        {Kind::JPEG, "jpeg", "JPEG", ".jpg"},
+        {Kind::TIFF, "tiff", "TIFF", ".tif"},
+        {Kind::WebP, "webp", "WebP", ".webp"},
+        {Kind::ORA, "ora", "OpenRaster (.ora) -- layers, for Krita", ".ora"},
+        {Kind::PSD, "psd", "Photoshop (.psd) -- layers", ".psd"},
+        {Kind::PDF, "pdf", "PDF -- type kept as type", ".pdf"},
+    };
+    return f;
+}
+const ExportFormat* export_format(Kind k) {
+    for (const auto& f : export_formats()) if (f.kind == k) return &f;
+    return nullptr;
+}
+const ExportFormat* export_format(const std::string& key) {
+    for (const auto& f : export_formats()) if (key == f.key) return &f;
+    return nullptr;
+}
+namespace {
+std::string lower_ext_of(const std::string& name) {
+    const auto slash = name.find_last_of('/');
+    const auto dot = name.find_last_of('.');
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash) || dot + 1 == name.size()) return {};
+    std::string e = name.substr(dot);
+    for (auto& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return e;
+}
+}  // namespace
+const ExportFormat* export_format_of_name(const std::string& name) {
+    std::string e = lower_ext_of(name);
+    if (e == ".jpeg") e = ".jpg";
+    if (e == ".tiff") e = ".tif";
+    for (const auto& f : export_formats()) if (e == f.ext) return &f;
+    return nullptr;
+}
+std::string with_extension(const std::string& name, Kind k) {
+    const auto* f = export_format(k);
+    if (!f) return name;
+    if (export_format_of_name(name)) return name.substr(0, name.find_last_of('.')) + f->ext;
+    return name + f->ext;
 }
 
 }  // namespace klimt::formats

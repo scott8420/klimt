@@ -291,6 +291,14 @@ void selftest_filter(const Check& check) {
         p.dock_split = 512;
         check("prefs: saved (making the folder)", core::save_prefs(file, p), "");
         check("prefs: round trip", core::load_prefs(file) == p, "");
+        {   // s051: the format last exported comes back; a word that isn't one is ignored
+            core::Prefs e = p;
+            e.export_format = "pdf";
+            core::save_prefs(file, e);
+            const bool back = core::load_prefs(file).export_format == "pdf";
+            { std::ofstream f(file); f << "{\"export_format\": \"exe\"}"; }
+            check("prefs: the last export format kept (s051); an unknown one -> PNG", back && core::load_prefs(file).export_format == "png", "");
+        }
         {   // s050: the Export dialog's settings, per format
             core::Prefs e = p;
             e.export_options.jpeg_quality = 77;
