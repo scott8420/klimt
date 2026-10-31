@@ -819,17 +819,33 @@ bool composite_reduced_argb(const Reduced& r, std::vector<std::uint32_t>& out, c
     const int W = r.image.width, H = r.image.height;
     out.assign(static_cast<std::size_t>(W) * static_cast<std::size_t>(H), 0u);
     const int cols = (W + kTile - 1) / kTile, rows = (H + kTile - 1) / kTile;
-    std::vector<std::uint32_t> t;
-    for (int row = 0; row < rows; ++row)
-        for (int col = 0; col < cols; ++col) {
-            if (cancelled && cancelled()) return false;
+    const int n = cols * rows;
+    // s050 (WEAKNESSES 13's remainder): the tiles on all the cores, each core
+    // taking the next as it frees up; every tile writes its own rectangle of
+    // `out`, so no two threads touch the same pixel. composite_tile_argb keeps
+    // its scratch thread_local -- the canvas's workers already call it at once.
+    std::atomic<int> take{0};
+    std::atomic<bool> stop{false};
+    const auto work = [&] {
+        std::vector<std::uint32_t> t;
+        for (int i = take++; i < n; i = take++) {
+            if (stop || (cancelled && cancelled())) { stop = true; return; }
+            const int row = i / cols, col = i % cols;
             int w = 0, h = 0;
             composite_tile_argb(r.image, r.layers, col, row, t, w, h);
             for (int y = 0; y < h; ++y)
                 std::copy_n(t.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(w), w,
                             out.data() + static_cast<std::size_t>(row * kTile + y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(col * kTile));
         }
-    return true;
+    };
+    const unsigned nt = static_cast<unsigned>(std::min(n, static_cast<int>(std::max(1u, std::thread::hardware_concurrency()))));
+    if (nt <= 1) work();
+    else {
+        std::vector<std::thread> pool;
+        for (unsigned i = 0; i < nt; ++i) pool.emplace_back(work);
+        for (auto& th : pool) th.join();
+    }
+    return !stop;
 }
 
 }  // namespace klimt::core

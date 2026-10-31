@@ -508,6 +508,42 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
 }
 
 // ── writing ───────────────────────────────────────────────────────────────
+// s050: the rules save() follows, counted without writing.
+Plan plan(const Image& im, const std::map<Document::Id, Layer>& layers) {
+    int n_adjust = 0, n_paths = 0, n_clip = 0, n_group_fx = 0;
+    int n_mask = 0, n_filters = 0, n_styles = 0, n_text = 0, n_fill = 0;
+    const bool rgb = im.format.mode == P::Mode::RGB;
+    for (const auto& [id, L] : layers) {
+        if (id.empty() || id[0] == '@') continue;
+        if (L.kind == Kind::Group) {
+            if ((L.mask && L.mask_on) || L.styles.any()) ++n_group_fx;
+            if (L.clipped) ++n_clip;
+            continue;
+        }
+        if (L.kind == Kind::Adjustment || L.kind == Kind::Filter) { ++n_adjust; continue; }
+        if (!draws_pixels(L.kind)) { ++n_paths; continue; }
+        if (L.clipped) ++n_clip;
+        if (L.mask && L.mask_on) ++n_mask;
+        if (!L.filters.empty()) ++n_filters;
+        if (L.styles.any()) ++n_styles;
+        if (L.kind == Kind::Text) ++n_text;
+        const bool plain = L.kind == Kind::Pixel && rgb && !(L.mask && L.mask_on) && L.filters.empty() && !L.styles.any();
+        if (!plain && L.fill < 100) ++n_fill;
+    }
+    Plan pl;
+    if (n_mask) pl.baked.push_back(plural(n_mask, "layer mask", "layer masks"));
+    if (n_filters) pl.baked.push_back(plural(n_filters, "layer's live filters", "layers' live filters"));
+    if (n_styles) pl.baked.push_back(plural(n_styles, "layer's styles", "layers' styles"));
+    if (n_fill) pl.baked.push_back(plural(n_fill, "layer's Fill", "layers' Fill"));
+    if (n_text) pl.baked.push_back(plural(n_text, "text layer", "text layers") + " as pixels");
+    if (n_adjust) pl.left_out.push_back(plural(n_adjust, "adjustment / filter layer", "adjustment / filter layers") + " left out (ORA has none)");
+    if (n_paths) pl.left_out.push_back(plural(n_paths, "path layer", "path layers") + " left out");
+    if (n_clip) pl.left_out.push_back(plural(n_clip, "clipped layer", "clipped layers") + " written unclipped");
+    if (n_group_fx) pl.left_out.push_back(plural(n_group_fx, "group's mask / styles", "groups' masks / styles") + " left out");
+    if (!rgb) pl.left_out.push_back("written as RGB");
+    return pl;
+}
+
 bool save(const std::string& path, const Image& im, const std::map<Document::Id, Layer>& layers,
           std::string& error, std::vector<std::string>& notes, const formats::Progress& p) {
     if (im.width < 1 || im.height < 1) { error = "an empty image"; return false; }
@@ -540,7 +576,7 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
     int drawn = 0;
     for (const auto& [id, L] : layers) if (draws_pixels(L.kind)) ++drawn;
 
-    int n_png = 0, n_adjust = 0, n_paths = 0, n_clip = 0, n_group_fx = 0, done = 0;
+    int n_png = 0, done = 0;
     const bool rgb = im.format.mode == P::Mode::RGB;
     formats::Progress cancel_only;
     cancel_only.cancelled = p.cancelled;
@@ -556,8 +592,6 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
             const Layer& L = layers.at(id);
             const std::string common = " name=\"" + escape(L.name) + "\" visibility=\"" + (L.visible ? "visible" : "hidden") + "\"";
             if (L.kind == Kind::Group) {
-                if ((L.mask && L.mask_on) || L.styles.any()) ++n_group_fx;
-                if (L.clipped) ++n_clip;
                 const bool pass = L.blend == Blend::PassThrough;
                 xml << ind << "<stack" << common << " opacity=\"" << fmt_num(L.opacity / 100.0) << "\" composite-op=\""
                     << composite_op(pass ? Blend::Normal : L.blend) << "\" isolation=\"" << (pass ? "auto" : "isolate")
@@ -566,9 +600,8 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
                 xml << ind << "</stack>\n";
                 continue;
             }
-            if (L.kind == Kind::Adjustment || L.kind == Kind::Filter) { ++n_adjust; continue; }
-            if (!draws_pixels(L.kind)) { ++n_paths; continue; }
-            if (L.clipped) ++n_clip;
+            if (L.kind == Kind::Adjustment || L.kind == Kind::Filter) continue;   // plan(): left out
+            if (!draws_pixels(L.kind)) continue;
             // Its pixels as ORA holds them: straight RGBA. A plain RGB pixel
             // layer goes as it is; anything with a look of its own (a mask,
             // live filters, styles, text, another mode) is drawn alone, at
@@ -646,11 +679,7 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
     std::error_code ec;
     std::filesystem::rename(tmp, path, ec);
     if (ec) { std::remove(tmp.c_str()); error = "can't be written: " + ec.message(); return false; }
-    if (n_adjust) notes.push_back(plural(n_adjust, "adjustment / filter layer", "adjustment / filter layers") + " left out (ORA has none)");
-    if (n_paths) notes.push_back(plural(n_paths, "path layer", "path layers") + " left out");
-    if (n_clip) notes.push_back(plural(n_clip, "clipped layer", "clipped layers") + " written unclipped");
-    if (n_group_fx) notes.push_back(plural(n_group_fx, "group's mask / styles", "groups' masks / styles") + " left out");
-    if (!rgb) notes.push_back("written as RGB");
+    for (auto& n : plan(im, layers).left_out) notes.push_back(std::move(n));   // s050: what the dialog said
     p.at(1);
     return true;
 }

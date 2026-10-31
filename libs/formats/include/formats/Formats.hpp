@@ -22,7 +22,7 @@
 
 namespace klimt::formats {
 
-enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA };   // s049: WebP, OpenRaster
+enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA, PSD };   // s049: WebP, OpenRaster; s050: Photoshop
 // By the file's first bytes, not its name (a .png that is a JPEG opens).
 Kind sniff(const std::string& path);
 // "PNG", "JPEG", "TIFF", "Klimt", "WebP", "OpenRaster", "" -- for messages.
@@ -68,8 +68,11 @@ struct WriteOptions {
     bool tiff_deflate = true;        // else uncompressed
     int  webp_quality = 90;          // s049: 0..100, lossy
     bool webp_lossless = false;      // s049: exact pixels (quality then sets the effort)
+    int  png_level = 6;              // s050: zlib 0..9 (lossless at every level)
+    bool operator==(const WriteOptions&) const = default;
 };
-bool write_png (const std::string& path, const Raster& r, std::string& error, const Progress& p = {});
+bool write_png (const std::string& path, const Raster& r, std::string& error, const Progress& p = {},
+                const WriteOptions& o = {});
 bool write_jpeg(const std::string& path, const Raster& r, std::string& error, const Progress& p = {},
                 const WriteOptions& o = {});
 bool write_tiff(const std::string& path, const Raster& r, std::string& error, const Progress& p = {},

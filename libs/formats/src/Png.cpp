@@ -216,11 +216,11 @@ std::optional<Raster> read_png_bytes(const std::uint8_t* data, std::size_t n, st
     return read_png_io(nullptr, &m, error, p);
 }
 
-bool write_png(const std::string& path, const Raster& r, std::string& error, const Progress& p) {
+bool write_png(const std::string& path, const Raster& r, std::string& error, const Progress& p, const WriteOptions& o) {
     if (r.pixels.width() <= 0 || r.pixels.height() <= 0) { error = "an empty image"; return false; }
     File file(path, "wb");
     if (!file.f) { error = "can't be written"; return false; }
-    return write_png_io(file.f, nullptr, path, r, error, p, 6);
+    return write_png_io(file.f, nullptr, path, r, error, p, std::clamp(o.png_level, 0, 9));
 }
 
 bool write_png_bytes(const Raster& r, std::vector<std::uint8_t>& out, std::string& error, const Progress& p, int level) {

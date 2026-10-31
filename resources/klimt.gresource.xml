@@ -2,7 +2,7 @@
 <!-- Cairn resource bundle. The resource-pipeline paradigm: an app asset carried
      the symbolic way (a currentColor SVG under the freedesktop icon-theme shape)
      so set_icon_name("klimt-logo-symbolic") resolves it out of the compiled-in
-     binary and GTK recolours it to the theme foreground -- no icon installed on
+     binary and GTK recolours it to the theme foreground ; no icon installed on
      the user's disk.
 
      Gotcha the shape encodes: GTK's icon lookup is RIGID about the trailing
@@ -13,7 +13,7 @@
 <gresources>
   <gresource prefix="/io/github/scott8420/Klimt/icons/scalable/apps">
     <file preprocess="xml-stripblanks" alias="klimt-logo-symbolic.svg">icons/scalable/apps/klimt-logo-symbolic.svg</file>
-    <!-- s005: the tool rail's icons -- made from scripts/icons-src/ by
+    <!-- s005: the tool rail's icons ; made from scripts/icons-src/ by
          scripts/make_icons.sh (strokes -> filled outlines, so GTK can recolour) -->
     <file preprocess="xml-stripblanks" alias="klimt-layer-mask-symbolic.svg">icons/scalable/apps/klimt-layer-mask-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-adjustment-symbolic.svg">icons/scalable/apps/klimt-adjustment-symbolic.svg</file>
@@ -35,11 +35,11 @@
     <file preprocess="xml-stripblanks" alias="klimt-tool-text-symbolic.svg">icons/scalable/apps/klimt-tool-text-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-zoom-symbolic.svg">icons/scalable/apps/klimt-tool-zoom-symbolic.svg</file>
   </gresource>
-  <!-- s027: the About window's painting panel -- Klimt's The Dancer, made with the app
+  <!-- s027: the About window's painting panel ; Klimt's The Dancer, made with the app
        icons by scripts/make_app_icon.py. Not an icon, so its own prefix. -->
   <gresource prefix="/io/github/scott8420/Klimt/images">
     <file alias="klimt-about-panel.jpg">images/klimt-about-panel.jpg</file>
-    <!-- s049: the About button -- The Dancer's face, in colour (Scott), made
+    <!-- s049: the About button ; The Dancer's face, in colour (Scott), made
          by scripts/make_about_button.py: 24 px for 1x screens, 48 for 2x. -->
     <file alias="klimt-about-button-24.png">images/klimt-about-button-24.png</file>
     <file alias="klimt-about-button-48.png">images/klimt-about-button-48.png</file>

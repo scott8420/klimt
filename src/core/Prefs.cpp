@@ -37,6 +37,19 @@ Prefs load_prefs(const std::string& file) {
         if (j.contains(k) && j[k].is_boolean()) p.*f = j[k].get<bool>();
     if (j.contains("path_tolerance") && j["path_tolerance"].is_number())   // s035
         p.path_tolerance = std::clamp(j["path_tolerance"].get<double>(), 0.5, 10.0);
+    if (j.contains("export") && j["export"].is_object()) {   // s050
+        const auto& e = j["export"];
+        auto& o = p.export_options;
+        const auto num = [&](const char* k, int& v, int lo, int hi) {
+            if (e.contains(k) && e[k].is_number_integer()) v = std::clamp(e[k].get<int>(), lo, hi);
+        };
+        const auto flag = [&](const char* k, bool& v) { if (e.contains(k) && e[k].is_boolean()) v = e[k].get<bool>(); };
+        num("jpeg_quality", o.jpeg_quality, 1, 100);
+        num("webp_quality", o.webp_quality, 0, 100);
+        num("png_level", o.png_level, 0, 9);
+        flag("webp_lossless", o.webp_lossless);
+        flag("tiff_deflate", o.tiff_deflate);
+    }
     return p;
 }
 
@@ -54,6 +67,9 @@ bool save_prefs(const std::string& file, const Prefs& p) {
     j["lock_guides"] = p.lock_guides;
     j["snap"] = p.snap;
     j["path_tolerance"] = p.path_tolerance;   // s035
+    const auto& o = p.export_options;          // s050
+    j["export"] = {{"jpeg_quality", o.jpeg_quality}, {"webp_quality", o.webp_quality}, {"webp_lossless", o.webp_lossless},
+                   {"png_level", o.png_level}, {"tiff_deflate", o.tiff_deflate}};
     std::ofstream f(file);
     if (!f) return false;
     f << j.dump(2) << "\n";

@@ -291,6 +291,21 @@ void selftest_filter(const Check& check) {
         p.dock_split = 512;
         check("prefs: saved (making the folder)", core::save_prefs(file, p), "");
         check("prefs: round trip", core::load_prefs(file) == p, "");
+        {   // s050: the Export dialog's settings, per format
+            core::Prefs e = p;
+            e.export_options.jpeg_quality = 77;
+            e.export_options.webp_quality = 55;
+            e.export_options.webp_lossless = true;
+            e.export_options.png_level = 9;
+            e.export_options.tiff_deflate = false;
+            core::save_prefs(file, e);
+            check("prefs: the export settings round trip, every format's", core::load_prefs(file) == e, "");
+            { std::ofstream f(file); f << "{\"export\": {\"jpeg_quality\": 400, \"png_level\": -3, \"webp_lossless\": 1}}"; }
+            const auto o = core::load_prefs(file).export_options;
+            check("prefs: export settings clamped, a wrong type ignored",
+                  o.jpeg_quality == 100 && o.png_level == 0 && !o.webp_lossless, "");
+            core::save_prefs(file, p);
+        }
         { std::ofstream f(file); f << "{\"dock_split\": 9, \"future\": [1, 2]}"; }
         check("prefs: clamped on load", core::load_prefs(file).dock_split == 120, "");
         core::save_prefs(file, p);

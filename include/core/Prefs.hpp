@@ -1,4 +1,6 @@
 #pragma once
+#include "formats/Formats.hpp"
+
 #include <string>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -18,6 +20,7 @@ struct Prefs {
     std::string ruler_unit = "px";  // s031: core::rulers key
     bool show_guides = true, lock_guides = false, snap = true;   // s032
     double path_tolerance = 2.0;   // s035: Make Work Path's tolerance, 0.5 .. 10 px
+    formats::WriteOptions export_options;   // s050: the Export dialog's last choice, per format
     bool operator==(const Prefs&) const = default;
 };
 

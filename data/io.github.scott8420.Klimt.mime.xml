@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- s049: the .klimt type, so the desktop knows a Klimt document from any
      other zip (and runs klimt-thumbnailer for its preview). The file's first
-     zip entry is "mimetype", stored, holding "image/x-klimt" -- OpenRaster's
-     trick -- so the magic is the local header at 0 and the name + data at 30. -->
+     zip entry is "mimetype", stored, holding "image/x-klimt" ; OpenRaster's
+     trick ; so the magic is the local header at 0 and the name + data at 30. -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="image/x-klimt">
     <comment>Klimt image</comment>

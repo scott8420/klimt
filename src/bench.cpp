@@ -210,8 +210,11 @@ int main(int argc, char** argv) {
         core::composite_reduced_argb(*r2, prev);
         const auto d2 = std::chrono::steady_clock::now();
         const auto msd = [](auto x, auto y) { return std::chrono::duration<double, std::milli>(y - x).count(); };
-        std::printf("preview at 1/%d (%d x %d): reduce %.0f ms + composite %.0f ms = %.0f ms (%.1fx sooner); cached %.0f ms (%.0fx)\n",
-                    1 << k, r->image.width, r->image.height, msd(a, b), msd(b, c), msd(a, c), ms / msd(a, c), msd(c, d2), ms / msd(c, d2));
+        std::uint64_t psum = 0;   // s050: the preview's own checksum -- the threaded composite gives the same picture
+        for (auto v : prev) psum = psum * 1000003u + v;
+        std::printf("preview at 1/%d (%d x %d): reduce %.0f ms + composite %.0f ms = %.0f ms (%.1fx sooner); cached %.0f ms (%.0fx)  [%016llx]\n",
+                    1 << k, r->image.width, r->image.height, msd(a, b), msd(b, c), msd(a, c), ms / msd(a, c), msd(c, d2), ms / msd(c, d2),
+                    static_cast<unsigned long long>(psum));
     }
     // A checksum so a faster compositor can be seen to give the same picture.
     std::uint64_t sum = 0;

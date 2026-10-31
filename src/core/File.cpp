@@ -4,6 +4,7 @@
 #include "core/Composite.hpp"
 #include "core/Text.hpp"   // s046
 #include "core/Ora.hpp"    // s049
+#include "core/Psd.hpp"   // s050
 
 #include <zip.h>
 #include "json.hpp"
@@ -877,6 +878,7 @@ std::optional<Contents> open(const std::string& path, std::string& error, const 
         return k;
     }
     if (kind == formats::Kind::ORA) return ora::open(path, error, p);   // s049
+    if (kind == formats::Kind::PSD) return psd::open(path, error, p);   // s050
     auto r = formats::read_image(path, error, p);
     if (!r) return std::nullopt;
     Contents c;
@@ -1171,7 +1173,7 @@ bool export_image(const std::string& path, formats::Kind kind, const Image& im,
     formats::Progress rest = p;
     rest.progress = [&p](double f) { p.at(0.5 + f * 0.5); };
     switch (kind) {
-        case formats::Kind::PNG:  return formats::write_png(path, r, error, rest);
+        case formats::Kind::PNG:  return formats::write_png(path, r, error, rest, o);   // s050: its level
         case formats::Kind::JPEG: return formats::write_jpeg(path, r, error, rest, o);
         case formats::Kind::TIFF: return formats::write_tiff(path, r, error, rest, o);
         case formats::Kind::WebP: return formats::write_webp(path, r, error, rest, o);   // s049

@@ -98,6 +98,7 @@ class AboutWindow;
 class CommandPalette;
 class NewDialog;
 class NumberDialog;
+class ExportDialog;
 class AdjustDialog;
 class FilterDialog;
 class FadeDialog;
@@ -145,6 +146,7 @@ private:
     void on_save();                              // category: files: Save -- Save As when never saved
     void on_save_as();                           // category: files: Save As (.klimt)
     void on_export();                            // category: files: Export (PNG / JPEG / TIFF)
+    void export_to(const std::string& path, formats::Kind kind, const formats::WriteOptions& o);   // s050: after the dialog
     bool on_close_request() override;            // category: files: unsaved changes ask first
     void save_to(const std::string& path, std::function<void()> then = {});   // category: files: a save JOB
     void adopt(core::file::Contents c, const std::string& path, const std::string& name, const std::string& source = {});   // category: files: the document becomes c
@@ -353,6 +355,9 @@ private:
     std::unique_ptr<CommandPalette>  m_palette;   // same lifetime stone as About
     std::unique_ptr<NewDialog>       m_new;       // s007: same again
     std::unique_ptr<NumberDialog>    m_feather;   // s008
+    std::unique_ptr<ExportDialog>    m_export_dialog;               // s050: after Export's file name
+    std::string                      m_export_path;
+    formats::Kind                    m_export_kind = formats::Kind::PNG;
     std::unique_ptr<SizeDialog>      m_image_size, m_canvas_size;   // s009
     std::unique_ptr<NumberDialog>    m_rotate_dialog;               // s011
     std::map<int, std::unique_ptr<NumberDialog>> m_modify_dialogs;  // s011 m4: one per Modify kind

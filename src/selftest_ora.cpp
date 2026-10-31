@@ -128,6 +128,27 @@ const core::Layer* by_name(const cf::Contents& c, const std::string& name, std::
 }  // namespace
 
 void selftest_ora(const Check& check) {
+    {   // s050 (Scott's install, s049): XML forbids "--" inside a comment, and
+        // update-mime-database refuses the whole file. Every XML / SVG we ship.
+        std::string bad;
+        int seen = 0;
+        for (const char* dir : {"data", "resources"})
+            for (const auto& e : fs::recursive_directory_iterator(fs::path(KLIMT_SOURCE_DIR) / dir)) {
+                const auto ext = e.path().extension().string();
+                if (!e.is_regular_file() || (ext != ".xml" && ext != ".svg")) continue;
+                ++seen;
+                std::ifstream in(e.path());
+                const std::string t((std::istreambuf_iterator<char>(in)), {});
+                for (std::size_t a = t.find("<!--"); a != std::string::npos; a = t.find("<!--", a + 4)) {
+                    const std::size_t z = t.find("-->", a + 4);
+                    if (z == std::string::npos || t.substr(a + 4, z - a - 4).find("--") != std::string::npos) {
+                        bad += e.path().filename().string() + " ";
+                        break;
+                    }
+                }
+            }
+        check("xml: no \"--\" inside a comment in any shipped XML / SVG", seen > 0 && bad.empty(), bad);
+    }
     std::cout << "\n-- s049: WebP --\n";
     {
         std::string err;
@@ -285,6 +306,13 @@ void selftest_ora(const Check& check) {
         std::string said;
         for (const auto& n : notes) said += n + "; ";
         check("ora: says the adjustment layer was left out", said.find("adjustment") != std::string::npos, said);
+        {   // s050: the Export dialog says it first -- the same lines
+            const auto pl = ora::plan(c.image, c.layers);
+            check("ora plan: what's left out is exactly what the toast says", pl.left_out == notes, said);
+            std::string baked;
+            for (const auto& b : pl.baked) baked += b + "; ";
+            check("ora plan: the mask is said as baked", baked.find("1 layer mask") != std::string::npos, baked);
+        }
         const auto es = entries(at("doc.ora"));
         check("ora: mimetype is the first entry, stored, image/openraster",
               !es.empty() && es[0].name == "mimetype" && es[0].method == ZIP_CM_STORE &&

@@ -5,6 +5,7 @@
 #include "CommandPalette.hpp"   // ditto
 #include "NewDialog.hpp"        // ditto
 #include "NumberDialog.hpp"
+#include "ExportDialog.hpp"   // s050
 #include "AdjustDialog.hpp"
 #include "FilterDialog.hpp"   // s013     // ditto
 #include "FadeDialog.hpp"     // s020

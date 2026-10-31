@@ -16,6 +16,8 @@ Kind sniff(const std::string& path) {
                    (b[0] == 'M' && b[1] == 'M' && b[2] == 0 && (b[3] == 42 || b[3] == 43))))
         return Kind::TIFF;
     // s049: WebP is a RIFF container whose form type is "WEBP".
+    // s050: Photoshop -- "8BPS", version 1 (PSD) or 2 (PSB; refused in words).
+    if (n >= 6 && std::memcmp(b, "8BPS", 4) == 0 && b[4] == 0 && (b[5] == 1 || b[5] == 2)) return Kind::PSD;
     if (n >= 12 && std::memcmp(b, "RIFF", 4) == 0 && std::memcmp(b + 8, "WEBP", 4) == 0) return Kind::WebP;
     // A .klimt is a zip whose FIRST entry is "mimetype", stored, holding
     // "image/x-klimt" (OpenRaster's trick): the local header's 30 bytes, the
@@ -42,6 +44,7 @@ const char* kind_name(Kind k) {
         case Kind::Klimt: return "Klimt";
         case Kind::WebP:  return "WebP";
         case Kind::ORA:   return "OpenRaster";
+        case Kind::PSD:   return "Photoshop";
         case Kind::Unknown: break;
     }
     return "";
@@ -55,6 +58,7 @@ std::optional<Raster> read_image(const std::string& path, std::string& error, co
         case Kind::WebP: return read_webp(path, error, p);
         case Kind::Klimt: error = "a Klimt document, not an image"; return std::nullopt;
         case Kind::ORA:   error = "an OpenRaster document, not an image"; return std::nullopt;
+        case Kind::PSD:   error = "a Photoshop document, not an image"; return std::nullopt;
         case Kind::Unknown: break;
     }
     std::ifstream in(path, std::ios::binary);

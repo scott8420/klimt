@@ -112,6 +112,28 @@ void selftest_pyramid(const Check& check) {
             }
         check("pyramid: one layer's preview is its full composite's block mean (within 2 / 255)", ok && worst <= 2.0, "worst " + num(worst));
         check("pyramid: the cache now holds that layer", cache.size() == 1, "");
+        {   // s050: the reduced composite on all the cores -- each tile exactly
+            // what one thread draws for it, every tile placed; a cancel says so.
+            // At 1/2 (320 x 260): four tiles, so the threads share them.
+            const auto r1 = core::reduced(im, ls, 1, &cache);
+            std::vector<std::uint32_t> threaded;
+            const bool ok1 = r1 && core::composite_reduced_argb(*r1, threaded);
+            const int RW = 320, RH = 260;
+            std::vector<std::uint32_t> serial(static_cast<std::size_t>(RW * RH), 0u), t;
+            const int cols = (RW + P::kTile - 1) / P::kTile, rows = (RH + P::kTile - 1) / P::kTile;
+            for (int row = 0; row < rows && ok1; ++row)
+                for (int col = 0; col < cols; ++col) {
+                    int tw = 0, th = 0;
+                    core::composite_tile_argb(r1->image, r1->layers, col, row, t, tw, th);
+                    for (int y = 0; y < th; ++y)
+                        for (int x = 0; x < tw; ++x)
+                            serial[static_cast<std::size_t>((row * P::kTile + y) * RW + col * P::kTile + x)] = t[static_cast<std::size_t>(y * tw + x)];
+                }
+            check("pyramid: the threaded reduced composite == the tiles one by one (4 tiles)",
+                  ok1 && cols * rows == 4 && serial == threaded, "");
+            std::vector<std::uint32_t> none;
+            check("pyramid: a cancelled reduced composite says so", !core::composite_reduced_argb(*r, none, [] { return true; }), "");
+        }
     }
     {
         // s048: the layers reduced on all the cores -- each exactly its own

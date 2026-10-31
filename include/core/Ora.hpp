@@ -28,6 +28,15 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
 bool save(const std::string& path, const Image& im, const std::map<Document::Id, Layer>& layers,
           std::string& error, std::vector<std::string>& notes, const formats::Progress& p = {});
 
+// s050: what an Export as .ora will do, said BEFORE it writes (the Export
+// dialog): `baked` -- looks drawn into a layer's pixels ("2 masks"),
+// `left_out` -- what doesn't cross at all (the same lines save() puts in
+// `notes`, so the dialog and the toast never disagree).
+struct Plan {
+    std::vector<std::string> baked, left_out;
+};
+Plan plan(const Image& im, const std::map<Document::Id, Layer>& layers);
+
 // ORA's composite-op for a Klimt blend mode ("svg:multiply"; a mode SVG
 // lacks as Krita writes it, "krita:linear_burn"), and back -- any "svg:" /
 // "krita:" / "klimt:" name, spaces and underscores as hyphens. Unknown:

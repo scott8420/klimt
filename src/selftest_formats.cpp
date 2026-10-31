@@ -182,6 +182,22 @@ void selftest_formats(const Check& check) {
         r.pixels = picture({P::Depth::U8, P::Mode::CMYK, false}, 8, 8);
         check("png: CMYK is refused in words", !Fm::write_png(path("cmyk.png"), r, err) && !err.empty(), err);
     }
+    {   // s050: PNG's compression level, from the Export dialog -- smaller, never different
+        Fm::Raster r;
+        r.pixels = P::TileMap({P::Depth::U8, P::Mode::RGB, true}, 300, 200).paint({0, 0, 300, 200}, [](int x, int y, const P::Px&) {
+            return P::rgba(static_cast<float>(x % 7) / 6, static_cast<float>(y % 5) / 4, 0.25f, 1);
+        });
+        std::string err;
+        Fm::WriteOptions fast, small;
+        fast.png_level = 0;
+        small.png_level = 9;
+        const bool ok = Fm::write_png(path("level0.png"), r, err, {}, fast) && Fm::write_png(path("level9.png"), r, err, {}, small);
+        const auto a = Fm::read_png(path("level0.png"), err);
+        const auto b = Fm::read_png(path("level9.png"), err);
+        const bool same = a && b && diff(a->pixels, b->pixels) == 0;
+        check("png: level 9 is smaller than level 0, the pixels the same",
+              ok && same && std::filesystem::file_size(path("level9.png")) < std::filesystem::file_size(path("level0.png")) / 2, err);
+    }
 
     std::cout << "\n-- formats: JPEG --\n";
     for (const P::Format f : {P::Format{P::Depth::U8, P::Mode::RGB, false}, P::Format{P::Depth::U8, P::Mode::Gray, false},
