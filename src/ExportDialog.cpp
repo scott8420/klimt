@@ -223,7 +223,9 @@ void ExportDialog::fill_ora(const core::ora::Plan& plan, formats::Kind kind) {
     if (plan.baked.empty() && plan.left_out.empty()) {
         section("Everything crosses", {psd ? "Layers, groups, names, visibility, opacity, Fill, blend modes, clipping and masks, as they are."
                                            : "Layers, groups, names, visibility, opacity and blend modes, as they are."});
+        if (!plan.kept.empty()) section("Kept live -- still changeable in Photoshop", plan.kept);   // s053
     } else {
+        if (!plan.kept.empty()) section("Kept live -- still changeable in Photoshop", plan.kept);   // s053
         if (!plan.baked.empty()) section("Baked into the layer's pixels -- the look survives", plan.baked);
         if (!plan.left_out.empty()) section(psd ? "Not in the file" : "Not in the file -- ORA can't hold it", plan.left_out);
     }

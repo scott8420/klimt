@@ -1,4 +1,6 @@
 #include "Shell.hpp"
+#include "core/Recents.hpp"   // s054: Open Recent
+#include <filesystem>
 #include "Log.hpp"
 #include "core/Tools.hpp"
 
@@ -33,6 +35,24 @@ void Shell::bind_actions() {  // bindings
             const auto key = std::stoull(Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(v).get());
             copy_to_tab(key, m_layers.selection());
         } catch (const std::exception&) {}
+    });
+    // s054: File > Open Recent. A file gone since: said, and dropped from the list.
+    add_action_with_parameter("open-recent", Glib::Variant<Glib::ustring>::variant_type(), [this](const Glib::VariantBase& v) {
+        const std::string p = Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(v).get();
+        std::error_code ec;
+        if (!std::filesystem::exists(p, ec)) {
+            toast("“" + std::filesystem::path(p).filename().string() + "” isn't there any more");
+            core::recents_remove(m_recents, p);
+            core::save_recents(m_recents_file, m_recents);
+            sync_recents();
+            return;
+        }
+        open_path(p);
+    });
+    add_action("recent-clear", [this] {
+        m_recents.clear();
+        core::save_recents(m_recents_file, m_recents);
+        sync_recents();
     });
     m_act_fade = add_action("fade", sigc::mem_fun(*this, &Shell::on_fade));   // s020: Edit > Fade
     build_file_drops();   // s022

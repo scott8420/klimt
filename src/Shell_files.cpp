@@ -1,4 +1,5 @@
 #include "Shell.hpp"
+#include "core/Recents.hpp"   // s054
 #include <glibmm/main.h>
 #include "NewDialog.hpp"
 #include "ExportDialog.hpp"   // s050
@@ -316,6 +317,7 @@ void Shell::open_path(const std::string& path) {
                 // s020: a tab of its own -- made now, when there is something to show.
                 if (!tab_reusable() && !new_tab()) { toast("“" + name + "” opened, but the image can't be shown now -- try again"); return; }
                 adopt(std::move(*shared), native ? path : std::string{}, name, path);
+                note_recent(path);   // s054
                 Glib::signal_idle().connect_once([this] { open_next(); });
             };
         });
@@ -464,6 +466,7 @@ void Shell::save_to(const std::string& path, std::function<void()> then) {
             info.path = path;
             info.name = name;
             info.saved_mark = mark;
+            note_recent(path);   // s054
             update_title();
             toast("Saved “" + name + "”");
             if (then) then();
@@ -612,6 +615,35 @@ void Shell::export_to(const std::string& path, formats::Kind kind, const formats
             });
         };
     });
+}
+
+// ── s054: File > Open Recent ────────────────────────────────────────────────
+void Shell::note_recent(const std::string& path) {
+    core::recents_add(m_recents, path);
+    core::save_recents(m_recents_file, m_recents);
+    sync_recents();
+}
+
+void Shell::sync_recents() {
+    if (!m_recent_menu) return;
+    m_recent_menu->remove_all();
+    auto files = Gio::Menu::create();
+    for (const auto& p : m_recents) {
+        // The name, then its folder (two files of one name told apart); a
+        // menu label's "_" is a mnemonic, so doubled.
+        std::string label = fs::path(p).filename().string() + "   " + fs::path(p).parent_path().filename().string();
+        for (std::size_t i = 0; (i = label.find('_', i)) != std::string::npos; i += 2) label.insert(i, "_");
+        auto item = Gio::MenuItem::create(label, "");
+        item->set_action_and_target("win.open-recent", Glib::Variant<Glib::ustring>::create(p));
+        files->append_item(item);
+    }
+    if (m_recents.empty()) files->append("(nothing yet)", "win.none");
+    m_recent_menu->append_section(files);
+    if (!m_recents.empty()) {
+        auto clear = Gio::Menu::create();
+        clear->append("Clear Recent", "win.recent-clear");
+        m_recent_menu->append_section(clear);
+    }
 }
 
 }  // namespace klimt

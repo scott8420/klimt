@@ -170,7 +170,9 @@ private:
     void step_tab(int by);                       // category: tabs: Ctrl+Tab / Ctrl+Shift+Tab
     AdwTabPage* page_of(std::uint64_t key) const;   // category: tabs: the bar's page of a tab
     void copy_to_tab(std::uint64_t key, const std::vector<core::Document::Id>& ids);   // category: tabs: s022 -- layers into another tab (one step there)
-    void sync_duplicate_to();                    // category: tabs: s022 -- Layer > Duplicate To lists the other tabs
+    void sync_duplicate_to();
+    void note_recent(const std::string& path);   // s054: opened / saved -> the front of Open Recent
+    void sync_recents();                         // s054: rebuild the Open Recent submenu                    // category: tabs: s022 -- Layer > Duplicate To lists the other tabs
 
     // ── selection (s008) ───────────────────────────────────────────────────
     void on_shape(const CanvasView::Shape& shape);   // category: select: a marquee / lasso finished
@@ -288,7 +290,6 @@ private:
     widgets::MenuButton m_menu_button;
     widgets::Button     m_undo_button;
     widgets::Button     m_redo_button;
-    widgets::Button     m_export_button;
     widgets::Button     m_open_button;         // s007
     AdwWindowTitle*     m_title = nullptr;     // "Untitled" / "8 layers"
 
@@ -533,6 +534,10 @@ private:
     bool               m_tab_sync = false;       // the pages are being set from the model
     std::map<std::uint64_t, AdwTabPage*> m_pages;   // a tab's key -> its page
     Glib::RefPtr<Gio::Menu> m_dup_to_menu;          // s022: Layer > Duplicate To > the other tabs
+    // s054: File > Open Recent -- core::Recents, kept in ~/.config/klimt/recent.json.
+    Glib::RefPtr<Gio::Menu> m_recent_menu;
+    std::vector<std::string> m_recents;
+    std::string             m_recents_file;
     struct TabView {                             // what a parked tab keeps of the window
         CanvasView::View view;
         std::vector<core::Document::Id> selection;

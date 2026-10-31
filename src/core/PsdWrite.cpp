@@ -13,6 +13,8 @@
 #include "core/Composite.hpp"
 #include "core/Live.hpp"
 #include "core/Psd.hpp"
+#include "core/PsdAdjust.hpp"
+#include "core/PsdStyles.hpp"
 #include "core/Transfer.hpp"
 
 #include <algorithm>
@@ -224,6 +226,8 @@ struct Rec {
     // To make it (on a worker): the layer and how.
     const Layer* layer = nullptr;
     bool baked = false;
+    bool live = false;               // s053: a live adjustment layer (its blocks, its mask)
+    bool fx_live = false;            // s053 m2: its styles as lfx2 (not baked)
     std::string id;
 };
 
@@ -241,12 +245,16 @@ void empty_channels(Rec& r) {
 // The rules -- what bakes, what's left out -- in one place, for plan() and
 // save() alike, so the dialog and the toast never disagree.
 struct Rules {
+    int n_live = 0;                  // s053: adjustment layers that cross live
+    int n_fx_live = 0;               // s053 m2: layers / groups whose styles cross live
     int n_adjust = 0, n_filterlayer = 0, n_paths = 0, n_group_fx = 0, n_filters = 0, n_styles = 0, n_text = 0, n_edges = 0;
     int n_outside = 0;
     bool rgb = true, f32 = false;
 };
+// s053 m2: styles cross live (lfx2) unless one of them can't (pattern overlay).
+bool fx_live(const Layer& L, bool rgb) { return rgb && L.styles.any() && fx::crosses(L.styles); }
 bool bakes(const Layer& L, bool rgb) {
-    return !rgb || L.kind == Kind::Text || !L.filters.empty() || L.styles.any();
+    return !rgb || L.kind == Kind::Text || !L.filters.empty() || (L.styles.any() && !fx_live(L, rgb));
 }
 Rules rules(const Image& im, const std::map<Document::Id, Layer>& layers) {
     Rules r;
@@ -255,16 +263,25 @@ Rules rules(const Image& im, const std::map<Document::Id, Layer>& layers) {
     for (const auto& [id, L] : layers) {
         if (id.empty() || id[0] == '@') continue;
         if (L.kind == Kind::Group) {
-            if (L.styles.any()) ++r.n_group_fx;
+            if (fx_live(L, r.rgb)) ++r.n_fx_live;
+            else if (L.styles.any()) ++r.n_group_fx;
             continue;
         }
-        if (L.kind == Kind::Adjustment) { ++r.n_adjust; continue; }
+        if (L.kind == Kind::Adjustment) {   // s053: Klimt's four all cross live
+            if (L.adjust.kind == AdjustKind::None) ++r.n_adjust;
+            else {
+                ++r.n_live;
+                if (L.mask && L.edges.any()) ++r.n_edges;
+            }
+            continue;
+        }
         if (L.kind == Kind::Filter) { ++r.n_filterlayer; continue; }
         if (!draws_pixels(L.kind)) { ++r.n_paths; continue; }
+        if (fx_live(L, r.rgb)) ++r.n_fx_live;
         if (L.kind == Kind::Text) ++r.n_text;
         else {
             if (!L.filters.empty()) ++r.n_filters;
-            if (L.styles.any()) ++r.n_styles;
+            if (L.styles.any() && !fx_live(L, r.rgb)) ++r.n_styles;
         }
         if (!bakes(L, r.rgb) && L.mask && L.edges.any()) ++r.n_edges;
         if (L.pixels && L.pixels->has_outside()) ++r.n_outside;
@@ -279,12 +296,14 @@ Plan plan(const Image& im, const std::map<Document::Id, Layer>& layers) {
     Plan pl;
     if (r.n_text) pl.baked.push_back(plural(r.n_text, "text layer", "text layers") + " as pixels (named, not live type)");
     if (r.n_filters) pl.baked.push_back(plural(r.n_filters, "layer's live filters", "layers' live filters"));
-    if (r.n_styles) pl.baked.push_back(plural(r.n_styles, "layer's styles", "layers' styles"));
+    if (r.n_styles) pl.baked.push_back(plural(r.n_styles, "layer's styles", "layers' styles") + " (a pattern overlay can't go live)");
     if (r.n_edges) pl.baked.push_back(plural(r.n_edges, "mask's Density / Feather", "masks' Density / Feather") + " into the mask");
+    if (r.n_fx_live) pl.kept.push_back(plural(r.n_fx_live, "layer's styles", "layers' styles") + " live -- shadows, glows, bevel, satin, overlays, stroke");
+    if (r.n_live) pl.kept.push_back(plural(r.n_live, "adjustment layer", "adjustment layers") + " live -- Levels, Curves, Hue/Saturation, Brightness/Contrast");
     if (r.n_adjust) pl.left_out.push_back(plural(r.n_adjust, "adjustment layer", "adjustment layers") + " left out");
     if (r.n_filterlayer) pl.left_out.push_back(plural(r.n_filterlayer, "filter layer", "filter layers") + " left out");
     if (r.n_paths) pl.left_out.push_back(plural(r.n_paths, "path layer", "path layers") + " left out");
-    if (r.n_group_fx) pl.left_out.push_back(plural(r.n_group_fx, "group's styles", "groups' styles") + " left out");
+    if (r.n_group_fx) pl.left_out.push_back(plural(r.n_group_fx, "group's styles", "groups' styles") + " left out (a pattern overlay)");
     if (r.n_outside) pl.left_out.push_back(plural(r.n_outside, "layer's pixels", "layers' pixels") + " beyond the canvas cut off");
     if (!r.rgb) pl.left_out.push_back("written as RGB (every layer drawn as RGB)");
     if (r.f32) pl.left_out.push_back("32-bit written as 16-bit");
@@ -337,18 +356,22 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
                 g.flags = L.visible ? 0 : 2;
                 g.layer = &L;
                 g.id = id;
+                g.fx_live = fx_live(L, rgb);
                 recs.push_back(std::move(g));
                 continue;
             }
-            if (!draws_pixels(L.kind)) continue;   // adjustment / filter / path: plan() says
+            const bool live = L.kind == Kind::Adjustment && L.adjust.kind != AdjustKind::None;   // s053
+            if (!draws_pixels(L.kind) && !live) continue;   // filter / path: plan() says
             Rec r;
+            r.live = live;
             r.name = L.name;
             r.blend = std::string(key_of_blend(L.blend == Blend::PassThrough ? Blend::Normal : L.blend));
             r.opacity = u8_of(L.opacity);
             r.clipping = L.clipped ? 1 : 0;
             r.flags = L.visible ? 0 : 2;
             r.layer = &L;
-            r.baked = bakes(L, rgb);
+            r.baked = !live && bakes(L, rgb);
+            r.fx_live = !live && fx_live(L, rgb);
             r.fill = r.baked ? 255 : u8_of(L.fill);
             r.id = id;
             recs.push_back(std::move(r));
@@ -386,10 +409,10 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
             auto pl = planes_of(m, b, bps, true);
             r.channels.emplace_back(-2, rle(pl[0], b.w(), b.h(), bps, true));
         }
-        if (r.section != 0) {
+        if (r.section != 0 || r.live) {   // a group, a live adjustment: no pixels, the mask last
             empty_channels(r);
             // The mask goes after the colour channels, as Photoshop orders them.
-            std::rotate(r.channels.begin(), r.channels.begin() + 1, r.channels.end());
+            if (r.mask) std::rotate(r.channels.begin(), r.channels.begin() + 1, r.channels.end());
             return;
         }
         P::TileMap m;
@@ -401,6 +424,7 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
             solo.opacity = 100;
             solo.blend = Blend::Normal;
             solo.clipped = false;
+            if (r.fx_live) solo.styles = {};   // s053 m2: they go live, not into the pixels
             const std::map<Document::Id, Layer> alone{{r.id, solo}};
             auto flat = file::flatten(im, alone, cancel_only);
             if (!flat) { failed = true; return; }
@@ -467,8 +491,8 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
         put(info, r.blend.size() == 4 ? r.blend : std::string("norm"));
         info.push_back(static_cast<std::uint8_t>(r.opacity));
         info.push_back(static_cast<std::uint8_t>(r.clipping));
-        // Bit 3 says bit 4 is meaningful; bit 4: pixel data irrelevant to the look (a divider).
-        info.push_back(static_cast<std::uint8_t>(r.flags | 0x08 | (r.section == 3 ? 0x10 : 0)));
+        // Bit 3 says bit 4 is meaningful; bit 4: pixel data irrelevant to the look (a divider, an adjustment).
+        info.push_back(static_cast<std::uint8_t>(r.flags | 0x08 | (r.section == 3 || r.live ? 0x10 : 0)));
         info.push_back(0);
         const std::size_t extra = hole(info);
         if (r.mask) {
@@ -492,6 +516,9 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
             put(info, pas);
             pad_to(info, at, 4);
         }
+        // s053: the adjustment's own blocks first, as Photoshop orders them.
+        if (r.live)
+            for (const auto& b : adj::blocks(r.layer->adjust)) block(info, b.key, b.data);
         {   // luni: the real name, UTF-16BE
             Bytes u;
             std::vector<char16_t> w16;
@@ -509,6 +536,7 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
             while (u.size() % 4) u.push_back(0);
             block(info, "luni", u);
         }
+        if (r.fx_live) block(info, "lfx2", fx::block(r.layer->styles));   // s053 m2
         if (r.section) {
             Bytes s;
             be32(s, static_cast<std::uint32_t>(r.section));

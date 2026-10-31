@@ -518,8 +518,8 @@ void selftest_psd(const Check& check) {
         const bool ok = psd::save(fw, im, ls, err, notes);
         check("psd write 8: saves", ok, err);
         const auto pl = psd::plan(im, ls);
-        check("psd write: the plan -- styles baked, the adjustment layer left out",
-              pl.baked.size() == 1 && pl.baked[0] == "1 layer's styles" && pl.left_out.size() == 1 &&
+        check("psd write: the plan -- styles live (s053), the bare adjustment layer left out",
+              pl.baked.empty() && pl.kept.size() == 1 && pl.kept[0].find("1 layer's styles live") == 0 && pl.left_out.size() == 1 &&
                   pl.left_out[0] == "1 adjustment layer left out",
               (pl.baked.empty() ? "" : pl.baked[0]) + " / " + (pl.left_out.empty() ? "" : pl.left_out[0]));
         check("psd write: the toast's notes are the plan's left-out lines", notes == pl.left_out, "");
@@ -554,8 +554,8 @@ void selftest_psd(const Check& check) {
                 check("psd write 8: the mask -- hides its square, shows elsewhere", Gr->mask && Gr->mask_on &&
                       near(Gr->mask->get(35, 35).c[0], 1) && near(Gr->mask->get(25, 25).c[0], 0) && near(Gr->mask->get(5, 5).c[0], 0), "");
                 check("psd write 8: a mask switched off stays off (and kept though it hides nothing)", B->mask && !B->mask_on, "");
-                check("psd write 8: the styled layer baked -- its shadow is pixels now, its styles off",
-                      !S->styles.any() && S->pixels->get(123, 162).c[3] > 0.2f, std::to_string(S->pixels->get(123, 162).c[3]));
+                check("psd write 8: the styled layer's styles come back live (s053) -- its shadow not in its pixels",
+                      S->styles == shadowed.styles && S->pixels->get(123, 162).c[3] < 0.01f, std::to_string(S->pixels->get(123, 162).c[3]));
             }
             // The look, everywhere: Klimt's composite of what came back = the document's.
             const auto a = core::file::flatten(im, ls);

@@ -9,6 +9,8 @@
 // own record (type 1 open / 2 closed) above them. 16-bit files keep their
 // layers in an "Lr16" block at the end of the layer section instead.
 #include "core/Psd.hpp"
+#include "core/PsdAdjust.hpp"
+#include "core/PsdStyles.hpp"
 
 #include "core/Transfer.hpp"
 #include "formats/Formats.hpp"
@@ -194,6 +196,12 @@ struct Record {
     std::string   section_blend;       // lsct's own blend key, when it has one
     int           fill = 255;          // iOpa
     bool          adjust = false, text = false, smart = false, effects = false, vector_mask = false;
+    // s053: an adjustment Klimt holds (Levels, Curves, Hue/Saturation,
+    // Brightness/Contrast) -- read as a live adjustment layer -- and what of
+    // it didn't cross exactly.
+    std::optional<Adjust>    live;
+    std::vector<std::string> losses;
+    fx::Reading              fx;       // s053 m2: lfx2 / lmfx, read when the tree is built
 };
 
 // PackBits, one row: `out` must be filled exactly.
@@ -329,6 +337,7 @@ LayerInfo read_layer_info(Reader& r, std::size_t end, int bps, std::string& why,
         rec.name = utf8_of_macroman(r.str(nlen));
         r.skip((4 - (1 + nlen) % 4) % 4);
         // Additional layer information: tagged blocks.
+        adj::Reading reading;
         while (!r.bad && r.at + 12 <= extra_end) {
             const std::string bsig = r.str(4);
             if (bsig != "8BIM" && bsig != "8B64") break;
@@ -336,7 +345,9 @@ LayerInfo read_layer_info(Reader& r, std::size_t end, int bps, std::string& why,
             const std::uint32_t len = r.u32();
             const std::size_t at = r.at, next = at + len;
             if (next > extra_end) break;
-            if (key == "luni" && len >= 4) {
+            if (reading.feed(key, r.d + at, len)) {
+                if (kAdjustKeys.count(key)) rec.adjust = true;
+            } else if (key == "luni" && len >= 4) {
                 const std::uint32_t k = r.u32();
                 if (k <= (len - 4) / 2) rec.name = utf8_of_utf16be(r.d + r.at, k);
             } else if ((key == "lsct" || key == "lsdk") && len >= 4) {
@@ -348,7 +359,7 @@ LayerInfo read_layer_info(Reader& r, std::size_t end, int bps, std::string& why,
                 rec.text = true;
             } else if (key == "SoLd" || key == "PlLd" || key == "SoLE" || key == "plLd") {
                 rec.smart = true;
-            } else if (key == "lfx2" || key == "lrFX" || key == "lmfx") {
+            } else if (rec.fx.feed(key, r.d + at, len) || key == "lrFX") {   // s053 m2: lfx2 / lmfx read
                 rec.effects = true;
             } else if (key == "vmsk" || key == "vsms") {
                 rec.vector_mask = true;
@@ -359,6 +370,9 @@ LayerInfo read_layer_info(Reader& r, std::size_t end, int bps, std::string& why,
         }
         r.seek(extra_end);
         if (r.bad) { why = "a damaged layer record"; return li; }
+        rec.live = reading.result();
+        rec.losses = reading.losses();
+        if (rec.live) rec.adjust = true;
     }
     // The channels' pixels: where each one's bytes are (in file order), then
     // decoded on the cores (s052 -- each channel is independent).
@@ -371,8 +385,9 @@ LayerInfo read_layer_info(Reader& r, std::size_t end, int bps, std::string& why,
             r.at += c.len;
             const bool masky = c.id == -2 || c.id == -3;
             // A pixel layer: its colours, alpha and mask; a group: its mask only.
+            // s053: a live adjustment layer: its mask.
             const bool wanted = (rec.section == 0 && !rec.adjust) ? (c.id >= -2 && c.id <= 2)
-                                                                   : (rec.section != 3 && !rec.adjust && c.id == -2);
+                                                                   : (rec.section != 3 && (!rec.adjust || rec.live) && c.id == -2);
             if (!wanted) continue;
             const Rect& b = masky ? rec.mask_box : rec.box;
             const std::uint64_t area = static_cast<std::uint64_t>(b.w()) * static_cast<std::uint64_t>(b.h());
@@ -544,7 +559,9 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
 
     // Colour mode data: nothing for RGB.
     r.skip(r.u32());
-    // Image resources: the resolution and the profile.
+    // Image resources: the resolution and the profile; s053 m2: the global
+    // light, for the styles that use it.
+    int global_angle = 120, global_altitude = 30;   // Photoshop's defaults
     {
         const std::uint32_t len = r.u32();
         const std::size_t end = r.at + len;
@@ -561,6 +578,10 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
                 const int unit = r.u16();
                 const double dpi = unit == 2 ? res * 2.54 : res;
                 if (dpi >= 1 && dpi <= 10000) c.image.dpi = dpi;
+            } else if (id == 1037 && sz >= 4) {   // Global Angle
+                global_angle = std::clamp(r.i32(), -360, 360);
+            } else if (id == 1049 && sz >= 4) {   // Global Altitude
+                global_altitude = std::clamp(r.i32(), 0, 90);
             } else if (id == 1039 && sz > 0) {   // the ICC profile
                 c.image.icc = std::make_shared<const std::vector<std::uint8_t>>(r.d + at, r.d + at + sz);
             }
@@ -617,8 +638,8 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
             if (p.stop()) return false;
             auto& rec = li.records[i];
             const bool group = rec.section == 1 || rec.section == 2;
-            if (rec.section == 3 || (rec.adjust && !group)) return true;
-            if (!group) made_px[i] = std::make_shared<const P::TileMap>(pixels_of(rec, c.image.format, Wi, Hi, bps));
+            if (rec.section == 3 || (rec.adjust && !group && !rec.live)) return true;
+            if (!group && !rec.adjust) made_px[i] = std::make_shared<const P::TileMap>(pixels_of(rec, c.image.format, Wi, Hi, bps));
             if (rec.has_mask && rec.mask_box.w() > 0 && rec.mask_box.h() > 0)
                 made_mask[i] = std::make_shared<const P::TileMap>(mask_of(rec, Wi, Hi, bps, c.image.format.depth));
             rec.channels.clear();   // the planes: done with
@@ -630,6 +651,8 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
     }
 
     int next = 1;
+    std::map<std::string, int> fx_lost;   // s053 m2
+    int n_ranges = 0, n_legacy = 0, n_channels = 0;
     int n_adjust = 0, n_effects = 0, n_vector = 0, n_text = 0, n_smart = 0, n_unknown_blend = 0, n_beyond = 0;
     // Records bottom first. A context is a group being filled: its children,
     // bottom first; a type-3 divider opens one, the group's own record closes it.
@@ -643,7 +666,16 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
         L.name = rec.name;
         L.visible = !(rec.flags & 2);
         L.opacity = percent(rec.opacity);
-        if (rec.effects) ++n_effects;
+        // s053 m2: styles live on pixel layers and groups; on an adjustment layer (Klimt's have none) left out.
+        if (rec.effects) {
+            const auto st = rec.adjust ? std::nullopt : rec.fx.result(global_angle, global_altitude);
+            if (st) {
+                L.styles = *st;
+                for (const auto& l : rec.fx.losses()) ++fx_lost[l];
+            } else {
+                ++n_effects;
+            }
+        }
         if (rec.vector_mask) ++n_vector;
         auto blend = blend_of_key(rec.blend_key);
         if (rec.section == 1 || rec.section == 2) {
@@ -668,7 +700,31 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
             stack.back().kids.push_back(ctx.id);
             continue;
         }
-        if (rec.adjust) { ++n_adjust; continue; }
+        if (rec.adjust && !rec.live) { ++n_adjust; continue; }
+        if (rec.adjust) {   // s053: a live adjustment layer
+            for (const auto& l : rec.losses) {
+                if (l == "colour ranges") ++n_ranges;
+                else if (l == "legacy") ++n_legacy;
+                else if (l == "channels") ++n_channels;
+            }
+            if (!blend || *blend == Blend::PassThrough) { if (!blend) ++n_unknown_blend; blend = Blend::Normal; }
+            L.kind = Kind::Adjustment;
+            L.adjust = *rec.live;
+            if (L.name.empty()) L.name = std::string(adjust::label(L.adjust.kind));
+            L.blend = *blend;
+            L.fill = percent(rec.fill);
+            L.clipped = rec.clipping == 1;
+            if (made_mask[ri]) {
+                L.mask = made_mask[ri];
+                L.mask_on = !(rec.mask_flags & 2);
+            } else {   // Klimt's adjustment layers always have one: hiding nothing
+                L.mask = std::make_shared<const P::TileMap>(P::TileMap(P::Format{c.image.format.depth, P::Mode::Gray, false}, Wi, Hi));
+            }
+            const std::string id = "L" + std::to_string(next++);
+            c.layers[id] = std::move(L);
+            stack.back().kids.push_back(id);
+            continue;
+        }
         if (rec.text) ++n_text;
         if (rec.smart) ++n_smart;
         if (!blend || *blend == Blend::PassThrough) { if (!blend) ++n_unknown_blend; blend = Blend::Normal; }
@@ -768,6 +824,23 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
     }
     c.next_id = next;
     if (n_adjust) c.notes.push_back(plural(n_adjust, "adjustment / fill layer", "adjustment / fill layers") + " left out");
+    if (n_ranges) c.notes.push_back(plural(n_ranges, "Hue/Saturation's colour ranges", "Hue/Saturations' colour ranges") + " left out (the master kept)");
+    if (n_legacy) c.notes.push_back(plural(n_legacy, "legacy Brightness/Contrast", "legacy Brightness/Contrasts") + " read with the modern maths");
+    if (n_channels) c.notes.push_back(plural(n_channels, "adjustment's extra channels", "adjustments' extra channels") + " left out");
+    {
+        struct Said { const char* key; const char* one; const char* many; const char* tail; };
+        static constexpr Said kSaid[] = {
+            {"pattern", "pattern overlay", "pattern overlays", " left out"},
+            {"copies", "layer's repeated effects", "layers' repeated effects", " -- the first of each kept"},
+            {"gradient", "gradient overlay", "gradient overlays", " simplified (its ends, linear or radial)"},
+            {"bevel", "bevel style", "bevel styles", " read as Inner Bevel / Emboss"},
+            {"stroke fill", "stroke's gradient / pattern fill", "strokes' gradient / pattern fills", " read as a colour"},
+            {"colour", "layer's non-RGB effect colours", "layers' non-RGB effect colours", " read as black"},
+            {"off", "layer's styles switched off in Photoshop", "layers' styles switched off in Photoshop", " -- kept, off"},
+        };
+        for (const auto& w : kSaid)
+            if (const auto it = fx_lost.find(w.key); it != fx_lost.end()) c.notes.push_back(plural(it->second, w.one, w.many) + w.tail);
+    }
     if (n_effects) c.notes.push_back(plural(n_effects, "layer's styles", "layers' styles") + " left out");
     if (n_vector) c.notes.push_back(plural(n_vector, "vector mask", "vector masks") + " left out");
     if (n_text) c.notes.push_back(plural(n_text, "text layer", "text layers") + " read as pixels");

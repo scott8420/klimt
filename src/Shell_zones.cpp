@@ -1,4 +1,5 @@
 #include "core/Patterns.hpp"   // s033: the pattern library
+#include "core/Recents.hpp"   // s054
 #include <gtkmm/grid.h>   // s031: the canvas and its rulers
 #include "Shell.hpp"
 #include "widgets/Wheel.hpp"   // s036
@@ -52,7 +53,7 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     if (auto display = Gdk::Display::get_default())
         Gtk::StyleContext::add_provider_for_display(display, css, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
-    // ── the header: the app mark | the document | undo, redo, Export, menu ──
+    // ── the header: the app mark | the document | undo, redo, menu ──
     auto header = Gtk::make_managed<Gtk::HeaderBar>();
     // s049 (Scott): The Dancer's face in colour, not the symbolic mark --
     // "after seeing the full picture a user will recognise her". 24 px; the
@@ -90,11 +91,7 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     m_menu_button.set_menu_model(build_menu());
     m_menu_button.set_tooltip_text("Main menu");
     header->pack_end(m_menu_button);
-    m_export_button.set_label("Export");
-    m_export_button.add_css_class("suggested-action");
-    m_export_button.set_action_name("win.export");
-    m_export_button.set_tooltip_text("Export a flat PNG, JPEG or TIFF  (Ctrl+Shift+E)");
-    header->pack_end(m_export_button);
+    // s054 (Scott): no Export button here -- File > Export (Ctrl+Shift+E) is enough.
     m_redo_button.set_icon_name("edit-redo-symbolic");
     m_redo_button.set_action_name("win.redo");
     header->pack_end(m_redo_button);
@@ -303,6 +300,12 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto file = Gio::Menu::create();
     file->append("New…", "win.new");
     file->append("Open…", "win.open");
+    // s054 (Scott): Open Recent -- the last files opened or saved, newest first.
+    m_recent_menu = Gio::Menu::create();
+    m_recents_file = Glib::build_filename(Glib::get_user_config_dir(), "klimt", "recent.json");
+    m_recents = core::load_recents(m_recents_file);
+    sync_recents();
+    file->append_submenu("Open Recent", m_recent_menu);
     file->append("Save", "win.save");
     file->append("Save As…", "win.save-as");
     file->append("Export…", "win.export");

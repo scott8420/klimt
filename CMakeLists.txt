@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s052")
+set(KLIMT_BUILD "s054")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -99,6 +99,8 @@ add_library(klimt_core STATIC
     src/core/Ora.cpp       # s049: OpenRaster in and out (Krita, GIMP, MyPaint)
     src/core/Psd.cpp       # s050: Photoshop documents in
     src/core/PsdWrite.cpp  # s051: and out
+    src/core/PsdAdjust.cpp # s053: adjustment layers both ways
+    src/core/PsdStyles.cpp # s053: layer styles both ways (lfx2)
     src/core/Pdf.cpp       # s051: Export as PDF -- the picture, type kept as type
     # THE SELECTION (s008): a mask on the tile grid; shapes, set arithmetic,
     # feather, the ants' outline, fill / delete through it.
@@ -174,7 +176,7 @@ add_executable(klimt-thumbnailer src/thumbnailer.cpp)
 target_link_libraries(klimt-thumbnailer PRIVATE klimt_formats PkgConfig::LIBZIP)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp src/selftest_psd.cpp src/selftest_pdf.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp src/selftest_psd.cpp src/selftest_psdadjust.cpp src/selftest_pdf.cpp)
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads PkgConfig::LIBZIP ZLIB::ZLIB)   # s049: reads the zips it writes
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"

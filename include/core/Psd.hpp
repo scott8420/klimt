@@ -9,8 +9,11 @@
 // Raw, RLE (PackBits), ZIP and ZIP-with-prediction channels. A file with no
 // layers opens as its merged picture, one "Background".
 //
-// What doesn't is said in the open's toast, as ORA does: adjustment and fill
-// layers (left out), layer styles (left out), vector masks (left out), text
+// s053: Levels, Curves, Hue/Saturation and Brightness/Contrast adjustment
+// layers, and layer styles (lfx2 / lmfx), come in LIVE and go out live.
+//
+// What doesn't is said in the open's toast, as ORA does: the other adjustment
+// and fill layers (left out), vector masks (left out), text
 // and smart objects (read as their pixels). Not read at all, refused in
 // words: PSB (large documents), CMYK / Gray / Lab / Indexed / Bitmap, 32-bit.
 // Pure over its arguments: runs on a worker.
@@ -33,9 +36,11 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
 // 16); resolution and profile; the merged picture (RLE, matted with white,
 // its transparency the first extra channel) for readers that take only it.
 // BAKED -- drawn alone into the layer's pixels, the look kept: text layers
-// (named; not live type), live filters, styles, every layer of a non-RGB
-// document. LEFT OUT: adjustment, filter and path layers, a group's styles,
-// pixels beyond the canvas. `notes` hears the left-out lines, as ORA.
+// (named; not live type), live filters, styles with a pattern overlay, every
+// layer of a non-RGB document. LEFT OUT: filter and path layers, a group's
+// styles with a pattern overlay,
+// pixels beyond the canvas -- and, s053, adjustment layers and styles go
+// LIVE (plan's `kept`; core/PsdAdjust.hpp, core/PsdStyles.hpp). `notes` hears the left-out lines, as ORA.
 using Plan = ora::Plan;
 bool save(const std::string& path, const Image& im, const std::map<Document::Id, Layer>& layers,
           std::string& error, std::vector<std::string>& notes, const formats::Progress& p = {});
