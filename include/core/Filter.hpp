@@ -40,7 +40,8 @@ enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass
                                        Fibers,                                       // s043 m3: Render
                                        Displace,                                     // s043 m4: Distort
                                        LensFlare,                                    // s044 m1: Render
-                                       Shear };                                      // s044 m2: Distort
+                                       Shear,                                        // s044 m2: Distort
+                                       Lighting };                                   // s045 m1: Render
 
 // s034: what Smart Sharpen takes away -- the blur it undoes.
 enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
@@ -183,6 +184,16 @@ struct Filter {
     // sorted, both ends always there, up to 16, a smooth curve through them;
     // `wrap` Wrap Around (else Repeat Edge Pixels).
     std::vector<std::array<double, 2>> shear{{0.0, 0.0}, {1.0, 0.0}};
+    // s045 m1 -- RENDER > Lighting Effects: `axis` the Light 0 Point, 1
+    // Spot, 2 Infinite; `amount` the Intensity 0 .. 200 %; the light's place
+    // `cx`, `cy` (% of the image); `angle` its direction (Spot, Infinite;
+    // -180 .. 180, counter-clockwise, 0 to the right); `radius` its Reach 5 ..
+    // 200 % of the image's diagonal (Point, Spot); `hotspot` the Spot's cone
+    // 5 .. 90 degrees; `ambient` the light everywhere 0 .. 100 %; `gloss`
+    // 0 .. 100 % (the shine); `texture` the relief from the layer's own
+    // luminance, `height` 0 .. 100. White light.
+    double hotspot = 35, ambient = 20, gloss = 0, height = 50;
+    bool texture = false;
     bool operator==(const Filter&) const = default;
 };
 

@@ -204,6 +204,20 @@ void FilterLayerEditor::rebuild() {
                    [this](int v) { m_f.wrap = v == 1; });
             break;
         }
+        case FilterKind::Lighting:   // s045 m1
+            choice("filter_layer.light", "Light", {"Point", "Spot", "Infinite"}, [this] { return m_f.axis; }, [this](int v) { m_f.axis = v; });
+            row("filter_layer.intensity", "Intensity", 0, 200, 0, false, "%", &m_f.amount);
+            row("filter_layer.angle", "Direction", -180, 180, 0, false, "°", &m_angle);
+            row("filter_layer.hotspot", "Hotspot", 5, 90, 0, false, "°", &m_f.hotspot);
+            row("filter_layer.reach", "Reach", 5, 200, 0, false, "%", &m_f.radius);
+            row("filter_layer.ambient", "Ambience", 0, 100, 0, false, "%", &m_f.ambient);
+            row("filter_layer.gloss", "Gloss", 0, 100, 0, false, "%", &m_f.gloss);
+            choice("filter_layer.texture", "Texture", {"None", "The Layer's Lightness"}, [this] { return m_f.texture ? 1 : 0; },
+                   [this](int v) { m_f.texture = v == 1; });
+            row("filter_layer.height", "Height", 0, 100, 0, false, "", &m_f.height);
+            row("filter_layer.cx", "Centre X", 0, 100, 1, false, "%", &m_f.cx);
+            row("filter_layer.cy", "Centre Y", 0, 100, 1, false, "%", &m_f.cy);
+            break;
         case FilterKind::LensFlare:   // s044 m1
             row("filter_layer.brightness", "Brightness", 10, 300, 0, false, "%", &m_f.amount);
             choice("filter_layer.lens", "Lens Type", {"50-300mm Zoom", "35mm Prime", "105mm Prime", "Movie Prime"}, [this] { return m_f.axis; },

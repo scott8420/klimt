@@ -258,6 +258,28 @@ void FilterDialog::rebuild() {
                    [this](int v) { m_f.wrap = v == 1; }, "What fills in where a row moved away from the edge");
             break;
         }
+        case FilterKind::Lighting:   // s045 m1: Render
+            choice("filter.light", "Light", {"Point", "Spot", "Infinite"}, [this] { return m_f.axis; },
+                   [this](int v) { m_f.axis = v; }, "Point: a bulb above the picture; Spot: a cone aimed across it; Infinite: the sun, from one side");
+            row("filter.intensity", "Intensity", 0, 200, 0, false, "%", &m_f.amount);
+            row("filter.angle", "Direction", -180, 180, 0, false, "°", &m_angle);
+            row("filter.hotspot", "Hotspot", 5, 90, 0, false, "°", &m_f.hotspot);
+            row("filter.reach", "Reach", 5, 200, 0, false, "%", &m_f.radius);
+            row("filter.ambient", "Ambience", 0, 100, 0, false, "%", &m_f.ambient);
+            row("filter.gloss", "Gloss", 0, 100, 0, false, "%", &m_f.gloss);
+            choice("filter.texture", "Texture", {"None", "The Layer's Lightness"}, [this] { return m_f.texture ? 1 : 0; },
+                   [this](int v) { m_f.texture = v == 1; }, "Raise the surface where the picture is light -- relief the light catches");
+            row("filter.height", "Height", 0, 100, 0, false, "", &m_f.height);
+            {
+                auto l = Gtk::make_managed<Gtk::Label>("Direction: which way a Spot points, or where the Infinite light comes from. "
+                                                       "Hotspot: the Spot's cone. Reach: how far a Point or Spot lights.");
+                l->set_wrap(true);
+                l->set_xalign(0.0f);
+                l->add_css_class("dim-label");
+                m_body.append(*l);
+            }
+            centre_rows("Light", "Click or drag: where the light is (Point, Spot)", "Then click the picture: the light goes there (Esc: never mind)");
+            break;
         case FilterKind::LensFlare:   // s044 m1: Render
             row("filter.brightness", "Brightness", 10, 300, 0, false, "%", &m_f.amount);
             choice("filter.lens", "Lens Type", {"50-300mm Zoom", "35mm Prime", "105mm Prime", "Movie Prime"}, [this] { return m_f.axis; },
@@ -587,7 +609,12 @@ void FilterDialog::centre_rows(const char* title, const char* tip, const char* p
         cr->set_source_rgba(0.85, 0.85, 0.88, 0.55);
         cr->set_line_width(1);
         const double far = std::hypot(std::max(x, w - x), std::max(y, h - y));
-        if (m_f.kind == FilterKind::LensFlare) {   // s044 m1: a little sun, and the ghosts' line through the middle
+        if (m_f.kind == FilterKind::Lighting) {   // s045 m1: the light and the way it points
+            const double a = m_f.angle * 3.14159265358979 / 180;
+            cr->move_to(x, y);
+            cr->line_to(x + 30 * std::cos(a), y - 30 * std::sin(a));
+            cr->stroke();
+        } else if (m_f.kind == FilterKind::LensFlare) {   // s044 m1: a little sun, and the ghosts' line through the middle
             for (int k = 0; k < 12; ++k) {
                 const double a = k * 3.14159265358979 / 6;
                 cr->move_to(x + 7 * std::cos(a), y + 7 * std::sin(a));

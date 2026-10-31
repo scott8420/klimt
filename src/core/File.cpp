@@ -363,6 +363,7 @@ json live_json(const LiveFilter& lf) {
             {"c1", f.c1}, {"c2", f.c2},           // s042 m3: the clouds' colours
             {"screen", f.screen},                 // s043 m2: Colour Halftone
             {"shear", f.shear},                   // s044 m2: Shear's curve
+            {"hotspot", f.hotspot}, {"ambient", f.ambient}, {"gloss", f.gloss}, {"height", f.height}, {"texture", f.texture},   // s045 m1
             {"generators", f.generators}, {"wl_min", f.wl_min}, {"amp_min", f.amp_min},   // s042 m4: Wave
             {"ridges", f.ridges}, {"scale_h", f.scale_h}, {"scale_v", f.scale_v}, {"wrap", f.wrap}};   // s041 m3
 }
@@ -420,6 +421,11 @@ std::optional<LiveFilter> live_from(const json& j) {
         for (const auto& p : j["shear"])
             if (p.is_array() && p.size() == 2) lf.f.shear.push_back({p[0].get<double>(), p[1].get<double>()});
     }
+    lf.f.hotspot = j.value("hotspot", 35.0);   // s045 m1: Lighting Effects
+    lf.f.ambient = j.value("ambient", 20.0);
+    lf.f.gloss = j.value("gloss", 0.0);
+    lf.f.height = j.value("height", 50.0);
+    lf.f.texture = j.value("texture", false);
     lf.f.scale_h = j.value("scale_h", 100.0);
     lf.f.scale_v = j.value("scale_v", 100.0);
     lf.f.wrap = j.value("wrap", false);

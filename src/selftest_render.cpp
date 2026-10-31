@@ -184,4 +184,51 @@ void selftest_render(const Check& check) {
         check("bounds: Twirl in a 60 px selection -- its middle turned, its corner (outside its ellipse) not",
               o && moved(135, 125) && !moved(102, 102) && !moved(157, 157), "");
     }
+
+    std::cout << "\n-- filters: Render -- Lighting Effects (s045 m1) --\n";
+    {
+        auto le = F::fresh(FilterKind::Lighting);
+        check("lighting: under Render; a Spot, Intensity 100, Ambience 20, no texture; live, placed",
+              F::group(FilterKind::Lighting) == "Render" && le.axis == 1 && le.amount == 100 && le.ambient == 20 && !le.texture &&
+                  F::livable(FilterKind::Lighting) && F::placed(le), "");
+        auto t = le; t.axis = 7; t.amount = 900; t.hotspot = 1; t.ambient = -5; t.gloss = 300; t.radius = 1; t.texture = true;
+        const auto n = F::normalised(t);
+        auto g = F::fresh(FilterKind::GaussianBlur); g.texture = true; g.gloss = 50;
+        check("lighting: normalised -- three lights, Intensity 0..200, Hotspot 5..90, 0..100 %, Reach 5..200; others' back",
+              n.axis == 2 && n.amount == 200 && n.hotspot == 5 && n.ambient == 0 && n.gloss == 100 && n.radius == 5 && n.texture &&
+                  !F::normalised(g).texture && F::normalised(g).gloss == 0, "");
+        const int W = 300, H = 200;
+        const auto grey = P::TileMap(f32(), W, H).fill({0, 0, W, H}, P::rgba(0.5f, 0.4f, 0.3f, 1));
+        auto inf = le; inf.axis = 2; inf.ambient = 0; inf.angle = 0;
+        const auto oi = F::filtered(grey, inf, nullptr);
+        const float k = static_cast<float>(std::sin(40 * 3.14159265358979 / 180));
+        check("lighting: Infinite on a flat picture -- every pixel its colour x sin(40 deg), everywhere the same",
+              oi && std::abs(oi->get(10, 10).c[0] - 0.5f * k) < 1e-4f && std::abs(oi->get(290, 190).c[2] - 0.3f * k) < 1e-4f, oi ? num(oi->get(10, 10).c[0]) : "");
+        auto dark = le; dark.amount = 0; dark.ambient = 100;
+        check("lighting: no light, full ambience -- as it was", same_in(grey, *F::filtered(grey, dark, nullptr), {0, 0, W, H}, 1e-5f), "");
+        auto pt = le; pt.axis = 0; pt.cx = 20; pt.cy = 50; pt.radius = 30; pt.ambient = 10;
+        const auto op = F::filtered(grey, pt, nullptr);
+        check("lighting: Point -- bright under the bulb; past its reach only the ambience",
+              op && op->get(60, 100).c[0] > 0.4f && std::abs(op->get(290, 10).c[0] - 0.05f) < 1e-4f, op ? num(op->get(60, 100).c[0]) : "");
+        auto sp = le; sp.cx = 50; sp.cy = 50; sp.angle = 0; sp.ambient = 0;   // at the middle, aimed right
+        const auto os = F::filtered(grey, sp, nullptr);
+        check("lighting: Spot -- lit where it's aimed (right), dark behind it (left)", os && os->get(220, 100).c[0] > 0.2f && os->get(60, 100).c[0] < 0.01f,
+              os ? num(os->get(220, 100).c[0]) + " / " + num(os->get(60, 100).c[0]) : "");
+        // Texture: a light bar on grey, the sun from the right -- the bar's right flank catches it, its left is shaded.
+        const auto bar = P::TileMap(f32(), W, H).fill({0, 0, W, H}, P::rgba(0.5f, 0.5f, 0.5f, 1)).fill({140, 0, 20, H}, P::rgba(0.9f, 0.9f, 0.9f, 1));
+        auto tx = inf; tx.texture = true; tx.height = 100;
+        const auto ot = F::filtered(bar, tx, nullptr);
+        check("lighting: Texture -- the side facing the light brighter than the side away",
+              ot && ot->get(160, 100).c[0] > ot->get(139, 100).c[0] + 0.05f, ot ? num(ot->get(160, 100).c[0]) + " vs " + num(ot->get(139, 100).c[0]) : "");
+        const P::Rect view{100, 40, 120, 100};
+        check("lighting: the preview's rectangle == the result there (texture on)", same_in(*ot, *F::filtered(bar, tx, nullptr, false, &view), view), "");
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);
+        auto lv = tx; lv.axis = 0; lv.hotspot = 50; lv.ambient = 33; lv.gloss = 40; lv.height = 70; lv.cx = 10; lv.angle = 45;
+        check("lighting: live", L::add_live(j, d, "L4", lv), "");
+        std::string err;
+        check("lighting: every setting back from the file", saved_back(d, "e", err), err);
+    }
 }

@@ -193,7 +193,7 @@ void Shell::on_focal_point(int x, int y) {
     if (!m_filter_dialog || !m_filter_dialog->get_visible()) return;
     const auto l = m_doc.get(m_filter_target);
     const auto& f = m_filter_dialog->value();
-    if (l && (f.kind == core::FilterKind::RadialBlur || f.kind == core::FilterKind::LensFlare)) {   // s040 m2: the blur's centre (s044: the flare's)
+    if (l && (f.kind == core::FilterKind::RadialBlur || f.kind == core::FilterKind::LensFlare || f.kind == core::FilterKind::Lighting)) {   // s040 m2: the blur's centre (s044: the flare's)
         const auto im = m_doc.image();
         m_filter_dialog->set_centre_at((x + 0.5) * 100.0 / std::max(1, im.width), (y + 0.5) * 100.0 / std::max(1, im.height));
         return;
@@ -248,7 +248,8 @@ void Shell::on_filter(core::FilterKind k) {
         // s039 m2: Set Focal Point -- the next click on the picture, the depth there.
         m_filter_dialog->signal_focal_pick().connect([this](bool on) {
             m_canvas.set_point_pick(on);
-            if (on) toast(m_filter_dialog->value().kind == core::FilterKind::LensFlare ? "Click the picture where the light is (Esc: never mind)"
+            if (on) toast((m_filter_dialog->value().kind == core::FilterKind::LensFlare || m_filter_dialog->value().kind == core::FilterKind::Lighting)
+                              ? "Click the picture where the light is (Esc: never mind)"
                           : m_filter_dialog->value().kind == core::FilterKind::RadialBlur
                               ? "Click the picture where the blur's centre goes (Esc: never mind)"
                               : "Click the picture where it should stay sharp (Esc: never mind)");

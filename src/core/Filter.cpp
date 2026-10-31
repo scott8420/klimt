@@ -58,6 +58,7 @@ constexpr Info kInfo[] = {
     {FilterKind::Displace,     "displace",      "Displace",      "Distort"},    // s043 m4
     {FilterKind::LensFlare,    "lens-flare",    "Lens Flare",    "Render"},     // s044 m1
     {FilterKind::Shear,        "shear",         "Shear",         "Distort"},    // s044 m2
+    {FilterKind::Lighting,     "lighting-effects", "Lighting Effects", "Render"},   // s045 m1
 };
 // s043: PIXELATE -- cells anchored to the image's corner.
 bool pixelate_kind(FilterKind k) {
@@ -99,7 +100,8 @@ bool ranked(FilterKind k) {
 bool custom(FilterKind k) {
     return k == FilterKind::SmartSharpen || k == FilterKind::DustScratches || k == FilterKind::ReduceNoise ||
            k == FilterKind::FindEdges || k == FilterKind::Emboss || k == FilterKind::Solarize ||   // s042: Stylize
-           k == FilterKind::Diffuse || k == FilterKind::Wind || pixelate_kind(k);   // s043
+           k == FilterKind::Diffuse || k == FilterKind::Wind || pixelate_kind(k) ||   // s043
+           k == FilterKind::Lighting;   // s045
 }
 bool stylize_kind(FilterKind k) { return k == FilterKind::FindEdges || k == FilterKind::Emboss || k == FilterKind::Solarize; }
 // The Gaussian under Gaussian Blur, Unsharp Mask and High Pass.
@@ -1198,6 +1200,75 @@ void pixelate(const std::vector<float>& buf, std::vector<float>& out, int W, int
     }
 }
 
+// s045 m1: LIGHTING EFFECTS over the band's own pixels -- straight colour
+// into `out`. (ox, oy): the buffer's place in the image (iw x ih). The
+// surface: flat, or (Texture) raised by the luminance; lit by one white
+// light -- ambient + diffuse (Lambert) + a Blinn shine, each colour times
+// the light it gets.
+void lighting(const std::vector<float>& buf, std::vector<float>& out, int W, int H, int C, int cc, bool has_a, const Rect& b,
+              int ox, int oy, int iw, int ih, const Filter& f, const std::function<bool()>& stop) {
+    constexpr double kPi = 3.14159265358979323846;
+    const auto px = [&](int x, int y) {
+        return buf.data() + (static_cast<std::size_t>(std::clamp(y, 0, H - 1)) * static_cast<std::size_t>(W) + static_cast<std::size_t>(std::clamp(x, 0, W - 1))) *
+                                static_cast<std::size_t>(C);
+    };
+    const auto straight = [&](const float* p, int c) { const float a = has_a ? p[cc] : 1.f; return a > 1e-6f ? p[c] / a : 0.f; };
+    const auto lum = [&](int x, int y) {
+        const float* p = px(x, y);
+        return cc >= 3 ? 0.299 * straight(p, 0) + 0.587 * straight(p, 1) + 0.114 * straight(p, 2) : static_cast<double>(straight(p, 0));
+    };
+    const double D = std::hypot(iw, ih), I = f.amount / 100, amb = f.ambient / 100, gl = f.gloss / 100;
+    const double lx = f.cx / 100 * iw, ly = f.cy / 100 * ih, lz = 0.25 * D;   // the light, above the picture
+    const double R = std::max(1.0, f.radius / 100 * D);
+    const double th = f.angle * kPi / 180, ax = std::cos(th), ay = -std::sin(th);
+    // Spot: aimed from the light at a point Reach/2 along its direction, on the picture.
+    const double tx = lx + ax * R * 0.5, ty = ly + ay * R * 0.5;
+    double sx = tx - lx, sy = ty - ly, sz = -lz;
+    { const double n = std::sqrt(sx * sx + sy * sy + sz * sz); sx /= n; sy /= n; sz /= n; }
+    const double cos_in = std::cos(f.hotspot * kPi / 180), cos_out = std::cos(std::min(89.0, f.hotspot + 12) * kPi / 180);
+    const double elev = 40 * kPi / 180;   // Infinite: the light's height in the sky
+    const double ix = ax * std::cos(elev), iy = ay * std::cos(elev), iz = std::sin(elev);
+    const double k = f.texture ? f.height / 100 * 6 : 0;
+    const double shine = 4 + 120 * gl;
+    for (int y = b.y; y < b.y + b.h; ++y) {
+        if ((y & 15) == 0 && stop && stop()) return;
+        for (int x = b.x; x < b.x + b.w; ++x) {
+            const double X = x + ox + 0.5, Y = y + oy + 0.5;
+            double nx = 0, ny = 0, nz = 1;
+            if (k > 0) {   // the relief's slope (central differences)
+                nx = -(lum(x + 1, y) - lum(x - 1, y)) * k;
+                ny = -(lum(x, y + 1) - lum(x, y - 1)) * k;
+                const double n = std::sqrt(nx * nx + ny * ny + 1);
+                nx /= n; ny /= n; nz = 1 / n;
+            }
+            double Lx, Ly, Lz, power = 1;
+            if (f.axis == 2) { Lx = ix; Ly = iy; Lz = iz; }
+            else {
+                Lx = lx - X; Ly = ly - Y; Lz = lz;
+                const double n = std::sqrt(Lx * Lx + Ly * Ly + Lz * Lz);
+                Lx /= n; Ly /= n; Lz /= n;
+                if (f.axis == 0) {   // Point: fades out to its reach round it
+                    const double t = std::min(1.0, std::hypot(X - lx, Y - ly) / R);
+                    power = (1 - t * t) * (1 - t * t);
+                } else {             // Spot: the cone, soft past the hotspot; fading to the reach round its target
+                    const double c = -(Lx * sx + Ly * sy + Lz * sz);
+                    const double s = std::clamp((c - cos_out) / std::max(1e-9, cos_in - cos_out), 0.0, 1.0);
+                    const double t = std::min(1.0, std::hypot(X - tx, Y - ty) / R);
+                    power = s * s * (3 - 2 * s) * (1 - t * t);
+                }
+            }
+            const double diff = std::max(0.0, nx * Lx + ny * Ly + nz * Lz);
+            double hx = Lx, hy = Ly, hz = Lz + 1;
+            { const double n = std::sqrt(hx * hx + hy * hy + hz * hz); hx /= n; hy /= n; hz /= n; }
+            const double spec = gl > 0 ? gl * std::pow(std::max(0.0, nx * hx + ny * hy + nz * hz), shine) : 0;
+            const double lit = amb + I * power * diff, add = I * power * spec;
+            const float* p = px(x, y);
+            float* o = out.data() + (static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)) * static_cast<std::size_t>(C);
+            for (int c = 0; c < cc; ++c) o[c] = static_cast<float>(straight(p, c) * lit + add);
+        }
+    }
+}
+
 // s042 m2: DIFFUSE and WIND over the band's own pixels -- straight colour
 // into `out`. (ox, oy): the buffer's place in the image (the hashes are of
 // the image's pixels, so the preview is the result).
@@ -1494,6 +1565,7 @@ bool placed(const Filter& in) {
     const Filter f = normalised(in);
     return f.kind == FilterKind::AddNoise || (f.kind == FilterKind::LensBlur && f.amount > 0) || f.kind == FilterKind::RadialBlur || warps(f.kind) ||
            f.kind == FilterKind::Diffuse || f.kind == FilterKind::Wind || renders(f.kind) || f.kind == FilterKind::LensFlare ||   // s042 m2: by the place's hash; s044
+           f.kind == FilterKind::Lighting ||   // s045
            pixelate_kind(f.kind);   // s043: the image's cells
 }
 
@@ -1699,7 +1771,7 @@ const std::vector<FilterKind>& kinds() {
                                            FilterKind::Twirl, FilterKind::Wave, FilterKind::ZigZag,                                    // s041 m3: Distort
                                            FilterKind::Diffuse, FilterKind::Emboss, FilterKind::FindEdges, FilterKind::Solarize,       // s042 m1: Stylize
                                            FilterKind::Wind,                                                                            // s042 m2
-                                           FilterKind::Clouds, FilterKind::DifferenceClouds, FilterKind::Fibers, FilterKind::LensFlare, // s042 m3: Render; s043 m3; s044
+                                           FilterKind::Clouds, FilterKind::DifferenceClouds, FilterKind::Fibers, FilterKind::LensFlare, FilterKind::Lighting,   // s042 m3: Render; s043 m3; s044; s045
                                            FilterKind::ColourHalftone, FilterKind::Crystallize, FilterKind::Facet, FilterKind::Fragment,   // s043: Pixelate
                                            FilterKind::Mezzotint, FilterKind::Mosaic, FilterKind::Pointillize,
                                            FilterKind::AddNoise, FilterKind::DustScratches, FilterKind::Median, FilterKind::ReduceNoise,
@@ -1761,6 +1833,7 @@ Filter fresh(FilterKind k) {
         case FilterKind::Displace:     f.scale_h = 10; f.scale_v = 10; break;   // s043 m4: Photoshop's (Stretch to Fit, Repeat Edge)
         case FilterKind::LensFlare:    f.amount = 100; f.cx = 35; f.cy = 35; break;   // s044 m1: 50-300mm Zoom, up left of the middle
         case FilterKind::Shear:        f.wrap = true; break;   // s044 m2: a straight line; Photoshop's Wrap Around
+        case FilterKind::Lighting:     f.axis = 1; f.amount = 100; f.cx = 50; f.cy = 30; f.angle = -90; f.radius = 60; break;   // s045 m1: a Spot from above, aimed down
         case FilterKind::None: break;
     }
     return f;
@@ -1791,13 +1864,14 @@ Filter normalised(const Filter& in) {
         case FilterKind::Crystallize: case FilterKind::Pointillize: f.radius = std::round(std::clamp(f.radius, 3.0, 300.0)); break;
         case FilterKind::Fragment: case FilterKind::Facet: case FilterKind::Mezzotint: case FilterKind::Fibers: f.radius = 1; break;
         case FilterKind::Displace: case FilterKind::LensFlare: case FilterKind::Shear: f.radius = 1; break;   // s043 m4, s044
+        case FilterKind::Lighting: f.radius = std::round(std::clamp(f.radius, 5.0, 200.0)); break;   // s045 m1: its Reach
         case FilterKind::ColourHalftone: f.radius = std::round(std::clamp(f.radius, 4.0, 127.0)); break;   // s043 m2: the Max. Radius
         default:                     f.radius = std::round(std::clamp(f.radius, 0.1, 250.0) * 10) / 10; break;
     }
     const bool streak = f.kind == FilterKind::MotionBlur || (f.kind == FilterKind::SmartSharpen && f.remove == Remove::Motion);
     f.angle = streak ? std::clamp(f.angle, -90, 90) : f.kind == FilterKind::LensBlur ? std::clamp(f.angle, 0, 360)
             : f.kind == FilterKind::Twirl ? std::clamp(f.angle, -999, 999)
-            : f.kind == FilterKind::Emboss ? std::clamp(f.angle, -180, 180) : 0;   // s040 m4, s042 m1
+            : (f.kind == FilterKind::Emboss || f.kind == FilterKind::Lighting) ? std::clamp(f.angle, -180, 180) : 0;   // s040 m4, s042 m1, s045
     f.threshold = std::clamp(f.threshold, 0, 255);
     if (f.kind == FilterKind::UnsharpMask || f.kind == FilterKind::SmartSharpen) f.amount = std::round(std::clamp(f.amount, 1.0, 500.0));
     else if (f.kind == FilterKind::AddNoise) f.amount = std::round(std::clamp(f.amount, 0.1, 400.0) * 10) / 10;
@@ -1811,6 +1885,7 @@ Filter normalised(const Filter& in) {
     else if (f.kind == FilterKind::Emboss) f.amount = std::round(std::clamp(f.amount, 1.0, 500.0));   // s042 m1
     else if (f.kind == FilterKind::Fibers) f.amount = std::round(std::clamp(f.amount, 1.0, 64.0));    // s043 m3: the Variance
     else if (f.kind == FilterKind::LensFlare) f.amount = std::round(std::clamp(f.amount, 10.0, 300.0));   // s044 m1: the Brightness
+    else if (f.kind == FilterKind::Lighting) f.amount = std::round(std::clamp(f.amount, 0.0, 200.0));      // s045 m1: the Intensity
     else f.amount = 0;
     if (f.kind == FilterKind::SurfaceBlur) f.threshold = std::max(f.threshold, 2);   // m4
     else if (f.kind != FilterKind::UnsharpMask && f.kind != FilterKind::DustScratches && f.kind != FilterKind::LensBlur) f.threshold = 0;
@@ -1843,7 +1918,7 @@ Filter normalised(const Filter& in) {
         f.blades = blank.blades; f.curvature = blank.curvature; f.bright = blank.bright;
         f.depth = blank.depth; f.focal = blank.focal; f.invert = blank.invert; f.depth_channel.clear();
     }
-    if (f.kind == FilterKind::LensFlare) {   // s044 m1: its centre
+    if (f.kind == FilterKind::LensFlare || f.kind == FilterKind::Lighting) {   // s044 m1: its centre (s045: the light's)
         f.cx = std::round(std::clamp(f.cx, 0.0, 100.0) * 10) / 10;
         f.cy = std::round(std::clamp(f.cy, 0.0, 100.0) * 10) / 10;
         f.zoom = blank.zoom;
@@ -1855,6 +1930,7 @@ Filter normalised(const Filter& in) {
     f.axis = f.kind == FilterKind::Mezzotint ? std::clamp(f.axis, 0, 9)   // s043 m2: its Type
            : f.kind == FilterKind::Displace ? std::clamp(f.axis, 0, 1)    // s043 m4: Stretch to Fit / Tile
            : f.kind == FilterKind::LensFlare ? std::clamp(f.axis, 0, 3)   // s044 m1: the Lens Type
+           : f.kind == FilterKind::Lighting ? std::clamp(f.axis, 0, 2)    // s045 m1: Point / Spot / Infinite
            : f.kind == FilterKind::Diffuse ? std::clamp(f.axis, 0, 3)   // s042 m2
            : (f.kind == FilterKind::Spherize || f.kind == FilterKind::Wave || f.kind == FilterKind::ZigZag || f.kind == FilterKind::Wind) ? std::clamp(f.axis, 0, 2)
            : f.kind == FilterKind::PolarCoordinates ? std::clamp(f.axis, 0, 1) : 0;   // s040 m4, s041 m3
@@ -1875,6 +1951,10 @@ Filter normalised(const Filter& in) {
     } else { f.scale_h = blank.scale_h; f.scale_v = blank.scale_v; if (f.kind != FilterKind::Shear) f.wrap = blank.wrap;   // s044 m2: Shear has Wrap Around
              f.generators = blank.generators; f.wl_min = blank.wl_min; f.amp_min = blank.amp_min; }
     if (f.kind != FilterKind::Displace) f.map_layer.clear();
+    if (f.kind == FilterKind::Lighting) {   // s045 m1
+        f.hotspot = std::round(std::clamp(f.hotspot, 5.0, 90.0));
+        f.ambient = pct(f.ambient); f.gloss = pct(f.gloss); f.height = pct(f.height);
+    } else { f.hotspot = blank.hotspot; f.ambient = blank.ambient; f.gloss = blank.gloss; f.height = blank.height; f.texture = blank.texture; }
     if (f.kind == FilterKind::Shear) {   // s044 m2: the curve -- sorted, clamped, both ends, at most 16, none on top of another
         f.scale_h = blank.scale_h; f.scale_v = blank.scale_v;
         auto pts = f.shear;
@@ -1923,6 +2003,7 @@ int reach(const Filter& in) {
         case FilterKind::Displace: return 1 << 16;   // s043 m4: anywhere the map sends it
         case FilterKind::LensFlare: return 0;         // s044 m1: by place, no neighbours
         case FilterKind::Shear:     return 1 << 16;   // s044 m2: the whole row
+        case FilterKind::Lighting:  return f.texture ? 1 : 0;   // s045 m1: the relief's slope
         case FilterKind::FindEdges: return 1;   // s042 m1: the 3 x 3
         case FilterKind::Solarize:  return 0;
         case FilterKind::Emboss:    return static_cast<int>(std::ceil(f.radius / 2)) + 2;
@@ -2151,6 +2232,7 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                 if (stylize_kind(f.kind)) stylize(buf, out, R.w, R.h, C, cc, has_a, own, f, stop);   // s042
                 else if (f.kind == FilterKind::Diffuse || f.kind == FilterKind::Wind) weather(buf, out, R.w, R.h, C, cc, has_a, own, R.x, R.y, f, stop);
                 else if (pixelate_kind(f.kind)) pixelate(buf, out, R.w, R.h, C, cc, has_a, own, R.x, R.y, f, stop);   // s043
+                else if (f.kind == FilterKind::Lighting) lighting(buf, out, R.w, R.h, C, cc, has_a, own, R.x, R.y, IW, IH, f, stop);   // s045
                 else if (f.kind == FilterKind::SmartSharpen) smart(buf, out, R.w, R.h, C, cc, has_a, own, f, stop);
                 else if (f.kind == FilterKind::DustScratches) dust(buf, out, R.w, R.h, C, cc, has_a, own, f, bins, clamp01, stop);
                 else reduce(buf, out, R.w, R.h, C, cc, has_a, own, f, stop);
