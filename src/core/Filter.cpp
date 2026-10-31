@@ -56,6 +56,8 @@ constexpr Info kInfo[] = {
     {FilterKind::Mezzotint,    "mezzotint",     "Mezzotint",     "Pixelate"},
     {FilterKind::Fibers,       "fibers",        "Fibers",        "Render"},     // s043 m3
     {FilterKind::Displace,     "displace",      "Displace",      "Distort"},    // s043 m4
+    {FilterKind::LensFlare,    "lens-flare",    "Lens Flare",    "Render"},     // s044 m1
+    {FilterKind::Shear,        "shear",         "Shear",         "Distort"},    // s044 m2
 };
 // s043: PIXELATE -- cells anchored to the image's corner.
 bool pixelate_kind(FilterKind k) {
@@ -69,7 +71,8 @@ bool renders(FilterKind k) { return clouds_kind(k) || k == FilterKind::Fibers; }
 bool warps(FilterKind k) {
     return k == FilterKind::Twirl || k == FilterKind::Pinch || k == FilterKind::Spherize || k == FilterKind::PolarCoordinates ||
            k == FilterKind::Ripple || k == FilterKind::Wave || k == FilterKind::ZigZag ||   // s041 m3
-           k == FilterKind::Displace;   // s043 m4: by its map (worked in the same pass)
+           k == FilterKind::Displace ||   // s043 m4: by its map (worked in the same pass)
+           k == FilterKind::Shear;        // s044 m2
 }
 const Info* info(FilterKind k) {
     for (const auto& i : kInfo)
@@ -78,7 +81,7 @@ const Info* info(FilterKind k) {
 }
 
 // Reads its neighbours (all but Add Noise).
-bool reads(FilterKind k) { return k != FilterKind::None && k != FilterKind::AddNoise && !renders(k); }   // s042 m3: nor the clouds (s043: nor Fibers)
+bool reads(FilterKind k) { return k != FilterKind::None && k != FilterKind::AddNoise && !renders(k) && k != FilterKind::LensFlare; }   // s044: nor the flare   // s042 m3: nor the clouds (s043: nor Fibers)
 // Its result IS the worked buffer (a blur, the median) -- not a difference
 // from it (Unsharp Mask, High Pass).
 bool replaces(FilterKind k) {
@@ -1340,6 +1343,14 @@ bool warp_source(const Filter& f, double ex, double ey, double rx, double ry, do
     constexpr double kPi = 3.14159265358979323846;
     if (rx <= 0 || ry <= 0) return false;
     // s041 m3: the ones over the whole rectangle (ex +- rx, ey +- ry).
+    if (f.kind == FilterKind::Shear) {   // s044 m2: each row across by the curve at its height
+        const double L = ex - rx, w = 2 * rx, T = ey - ry, h = 2 * ry;
+        sx = x - shear_at(f, (y - T) / h) * rx;
+        sy = y;
+        if (f.wrap) sx = L + std::fmod(std::fmod(sx - L, w) + w, w);
+        else sx = std::clamp(sx, L + 0.5, L + w - 0.5);
+        return true;
+    }
     if (f.kind == FilterKind::PolarCoordinates) {
         const double w = 2 * rx, h = 2 * ry, L = ex - rx, T = ey - ry;
         if (f.axis == 0) {   // Rectangular to Polar: the top edge gathers to the middle, the rows become rings
@@ -1482,7 +1493,7 @@ float clouds_at(int x, int y, std::uint32_t seed) {
 bool placed(const Filter& in) {
     const Filter f = normalised(in);
     return f.kind == FilterKind::AddNoise || (f.kind == FilterKind::LensBlur && f.amount > 0) || f.kind == FilterKind::RadialBlur || warps(f.kind) ||
-           f.kind == FilterKind::Diffuse || f.kind == FilterKind::Wind || renders(f.kind) ||   // s042 m2: by the place's hash
+           f.kind == FilterKind::Diffuse || f.kind == FilterKind::Wind || renders(f.kind) || f.kind == FilterKind::LensFlare ||   // s042 m2: by the place's hash; s044
            pixelate_kind(f.kind);   // s043: the image's cells
 }
 
@@ -1492,6 +1503,103 @@ bool seeded(FilterKind k) {
            k == FilterKind::Fibers;
 }
 bool coloured(FilterKind k) { return renders(k) || k == FilterKind::Pointillize; }
+Light3 flare_at(const Filter& f, int iw, int ih, double x, double y) {
+    constexpr double kPi = 3.14159265358979323846;
+    const double D = std::hypot(iw, ih), b = f.amount / 100;
+    const double cx = f.cx / 100 * iw, cy = f.cy / 100 * ih, ox = iw / 2.0, oy = ih / 2.0;
+    const double dx = x - cx, dy = y - cy, r = std::hypot(dx, dy), rn = r / D;
+    const int type = std::clamp(f.axis, 0, 3);
+    double R = 0, G = 0, B = 0;
+    const auto add = [&](double v, double cr, double cg, double cb) { R += v * cr; G += v * cg; B += v * cb; };
+    // The core: a hot white point, and its warm glow (105mm: wider and softer).
+    const double core = type == 2 ? 0.035 : 0.02, glow = type == 2 ? 0.2 : 0.12;
+    add(b * std::exp(-(rn / core) * (rn / core)), 1, 1, 1);
+    add(b * 0.55 * std::exp(-rn / glow), 1.0, 0.85, 0.6);
+    // Rays: thin spokes from the centre (35mm Prime: strong), by a fixed
+    // pattern of angles, fading out.
+    {
+        const double th = std::atan2(dy, dx);
+        const int n = type == 1 ? 18 : 12;
+        double ray = 0;
+        for (int k = 0; k < n; ++k) {
+            const double a = k * 2 * kPi / n + 0.37 * std::sin(k * 2.3);   // not quite even
+            double d = std::remainder(th - a, 2 * kPi);
+            const double w = 0.012 + 0.008 * (k % 3);
+            ray += std::exp(-(d / w) * (d / w)) * (0.5 + 0.5 * std::cos(k * 1.7));
+        }
+        add(b * (type == 1 ? 0.5 : 0.22) * ray * std::exp(-rn / 0.18) * std::min(1.0, rn / 0.01), 1, 0.95, 0.85);
+    }
+    // Movie Prime: the long blue horizontal streak.
+    if (type == 3) add(b * 0.6 * std::exp(-std::abs(dy) / (0.004 * D)) * std::exp(-std::abs(dx) / (0.45 * D)), 0.55, 0.7, 1.0);
+    // The ring round the glow (the zoom and the primes, not the movie lens):
+    // its colours split -- red outside, blue inside.
+    if (type != 3) {
+        const double ring = type == 2 ? 0.16 : 0.11, wd = 0.006;
+        const auto band = [&](double at) { const double t = (rn - at) / wd; return std::exp(-t * t); };
+        add(b * 0.16, band(ring + 0.004), 0, 0);
+        add(b * 0.16, 0, band(ring), 0);
+        add(b * 0.16, 0, 0, band(ring - 0.004));
+    }
+    // The ghosts: the lens's reflections, on the line from the centre through
+    // the middle of the picture and beyond it (t: 0 the centre, 1 the middle).
+    struct Ghost { double t, size, v, cr, cg, cb; bool ring; };
+    static const Ghost kZoom[] = {{0.45, 0.012, 0.25, 0.9, 0.7, 0.4, false}, {0.7, 0.025, 0.12, 0.5, 0.9, 0.5, false},
+                                  {1.15, 0.04, 0.1, 0.4, 0.6, 1.0, false},   {1.35, 0.018, 0.2, 1.0, 0.6, 0.3, false},
+                                  {1.6, 0.06, 0.07, 0.6, 0.5, 1.0, true},    {1.85, 0.03, 0.12, 0.4, 1.0, 0.6, false},
+                                  {2.1, 0.08, 0.06, 1.0, 0.5, 0.4, true}};
+    static const Ghost k35[] = {{0.6, 0.02, 0.15, 1.0, 0.7, 0.4, false}, {1.3, 0.035, 0.1, 0.4, 0.7, 1.0, false},
+                                {1.7, 0.015, 0.2, 0.6, 1.0, 0.5, false}, {2.0, 0.05, 0.07, 0.8, 0.5, 1.0, true}};
+    static const Ghost k105[] = {{0.8, 0.03, 0.1, 1.0, 0.75, 0.5, false}, {1.4, 0.05, 0.08, 0.5, 0.7, 1.0, false},
+                                 {1.9, 0.07, 0.05, 0.9, 0.6, 0.9, true}};
+    static const Ghost kMovie[] = {{0.9, 0.02, 0.12, 0.5, 0.7, 1.0, false}, {1.5, 0.035, 0.1, 0.4, 0.6, 1.0, false},
+                                   {2.0, 0.015, 0.15, 0.6, 0.8, 1.0, false}};
+    const Ghost* gs = type == 0 ? kZoom : type == 1 ? k35 : type == 2 ? k105 : kMovie;
+    const int ng = type == 0 ? 7 : type == 1 ? 4 : 3;
+    for (int i = 0; i < ng; ++i) {
+        const Ghost& g = gs[i];
+        const double gx = cx + g.t * (ox - cx), gy = cy + g.t * (oy - cy);
+        const double d = std::hypot(x - gx, y - gy) / D, s = g.size;
+        double v;
+        if (g.ring) { const double t = (d - s) / (0.15 * s); v = std::exp(-t * t); }
+        else v = std::clamp((s - d) / (0.15 * s) + 0.5, 0.0, 1.0) * (0.6 + 0.4 * d / s);   // a disc, brighter to its rim, its edge soft
+        add(b * g.v * v, g.cr, g.cg, g.cb);
+    }
+    return {static_cast<float>(R), static_cast<float>(G), static_cast<float>(B)};
+}
+
+int shear_hit(const core::Filter& f, double t, double v, double tol_t, double tol_v) {
+    int best = -1;
+    double bd = 1e300;
+    for (std::size_t i = 0; i < f.shear.size(); ++i) {
+        const double dt = std::abs(f.shear[i][0] - t), dv = std::abs(f.shear[i][1] - v);
+        if (dt > tol_t || dv > tol_v) continue;
+        const double d = dt / tol_t + dv / tol_v;
+        if (d < bd) { bd = d; best = static_cast<int>(i); }
+    }
+    return best;
+}
+
+double shear_at(const Filter& f, double t) {
+    const auto& p = f.shear;
+    if (p.empty()) return 0;
+    t = std::clamp(t, 0.0, 1.0);
+    if (p.size() == 1) return std::clamp(p[0][1], -1.0, 1.0);
+    std::size_t i = 0;
+    while (i + 2 < p.size() && t > p[i + 1][0]) ++i;
+    const auto& a = p[i];
+    const auto& b = p[i + 1];
+    const double span = std::max(1e-9, b[0] - a[0]), u = std::clamp((t - a[0]) / span, 0.0, 1.0);
+    // Catmull-Rom tangents (in v per t), the ends' from their one neighbour.
+    const auto slope = [&](std::size_t k) {
+        const std::size_t lo = k == 0 ? 0 : k - 1, hi = std::min(k + 1, p.size() - 1);
+        return (p[hi][1] - p[lo][1]) / std::max(1e-9, p[hi][0] - p[lo][0]);
+    };
+    const double m0 = slope(i) * span, m1 = slope(i + 1) * span;
+    const double u2 = u * u, u3 = u2 * u;
+    const double v = (2 * u3 - 3 * u2 + 1) * a[1] + (u3 - 2 * u2 + u) * m0 + (-2 * u3 + 3 * u2) * b[1] + (u3 - u2) * m1;
+    return std::clamp(v, -1.0, 1.0);
+}
+
 bool fills(FilterKind k) { return k == FilterKind::Clouds || k == FilterKind::Fibers; }
 bool livable(FilterKind k) { return k != FilterKind::Displace && k != FilterKind::None; }
 bool wants_map(const Filter& f) { return f.kind == FilterKind::Displace && !f.map_layer.empty(); }
@@ -1587,11 +1695,11 @@ const std::vector<FilterKind>& kinds() {
     static const std::vector<FilterKind> v{FilterKind::BoxBlur, FilterKind::GaussianBlur, FilterKind::LensBlur, FilterKind::MotionBlur,
                                            FilterKind::RadialBlur, FilterKind::SurfaceBlur,   // s040
                                            FilterKind::Displace,                                                                         // s043 m4
-                                           FilterKind::Pinch, FilterKind::PolarCoordinates, FilterKind::Ripple, FilterKind::Spherize,   // s040 m4,
+                                           FilterKind::Pinch, FilterKind::PolarCoordinates, FilterKind::Ripple, FilterKind::Shear, FilterKind::Spherize,   // s040 m4; s044 m2: Shear
                                            FilterKind::Twirl, FilterKind::Wave, FilterKind::ZigZag,                                    // s041 m3: Distort
                                            FilterKind::Diffuse, FilterKind::Emboss, FilterKind::FindEdges, FilterKind::Solarize,       // s042 m1: Stylize
                                            FilterKind::Wind,                                                                            // s042 m2
-                                           FilterKind::Clouds, FilterKind::DifferenceClouds, FilterKind::Fibers,                        // s042 m3: Render; s043 m3
+                                           FilterKind::Clouds, FilterKind::DifferenceClouds, FilterKind::Fibers, FilterKind::LensFlare, // s042 m3: Render; s043 m3; s044
                                            FilterKind::ColourHalftone, FilterKind::Crystallize, FilterKind::Facet, FilterKind::Fragment,   // s043: Pixelate
                                            FilterKind::Mezzotint, FilterKind::Mosaic, FilterKind::Pointillize,
                                            FilterKind::AddNoise, FilterKind::DustScratches, FilterKind::Median, FilterKind::ReduceNoise,
@@ -1651,6 +1759,8 @@ Filter fresh(FilterKind k) {
         case FilterKind::Mezzotint:    break;                   // Fine Dots
         case FilterKind::Fibers:       f.amount = 16; f.ridges = 4; break;   // s043 m3: Photoshop's
         case FilterKind::Displace:     f.scale_h = 10; f.scale_v = 10; break;   // s043 m4: Photoshop's (Stretch to Fit, Repeat Edge)
+        case FilterKind::LensFlare:    f.amount = 100; f.cx = 35; f.cy = 35; break;   // s044 m1: 50-300mm Zoom, up left of the middle
+        case FilterKind::Shear:        f.wrap = true; break;   // s044 m2: a straight line; Photoshop's Wrap Around
         case FilterKind::None: break;
     }
     return f;
@@ -1680,7 +1790,7 @@ Filter normalised(const Filter& in) {
         case FilterKind::Mosaic: f.radius = std::round(std::clamp(f.radius, 2.0, 200.0)); break;   // s043 m1: the Cell Size
         case FilterKind::Crystallize: case FilterKind::Pointillize: f.radius = std::round(std::clamp(f.radius, 3.0, 300.0)); break;
         case FilterKind::Fragment: case FilterKind::Facet: case FilterKind::Mezzotint: case FilterKind::Fibers: f.radius = 1; break;
-        case FilterKind::Displace: f.radius = 1; break;   // s043 m4
+        case FilterKind::Displace: case FilterKind::LensFlare: case FilterKind::Shear: f.radius = 1; break;   // s043 m4, s044
         case FilterKind::ColourHalftone: f.radius = std::round(std::clamp(f.radius, 4.0, 127.0)); break;   // s043 m2: the Max. Radius
         default:                     f.radius = std::round(std::clamp(f.radius, 0.1, 250.0) * 10) / 10; break;
     }
@@ -1700,6 +1810,7 @@ Filter normalised(const Filter& in) {
     else if (f.kind == FilterKind::Wave) f.amount = std::round(std::clamp(f.amount, 1.0, 999.0));
     else if (f.kind == FilterKind::Emboss) f.amount = std::round(std::clamp(f.amount, 1.0, 500.0));   // s042 m1
     else if (f.kind == FilterKind::Fibers) f.amount = std::round(std::clamp(f.amount, 1.0, 64.0));    // s043 m3: the Variance
+    else if (f.kind == FilterKind::LensFlare) f.amount = std::round(std::clamp(f.amount, 10.0, 300.0));   // s044 m1: the Brightness
     else f.amount = 0;
     if (f.kind == FilterKind::SurfaceBlur) f.threshold = std::max(f.threshold, 2);   // m4
     else if (f.kind != FilterKind::UnsharpMask && f.kind != FilterKind::DustScratches && f.kind != FilterKind::LensBlur) f.threshold = 0;
@@ -1732,13 +1843,18 @@ Filter normalised(const Filter& in) {
         f.blades = blank.blades; f.curvature = blank.curvature; f.bright = blank.bright;
         f.depth = blank.depth; f.focal = blank.focal; f.invert = blank.invert; f.depth_channel.clear();
     }
-    if (f.kind == FilterKind::RadialBlur) {   // s040
+    if (f.kind == FilterKind::LensFlare) {   // s044 m1: its centre
+        f.cx = std::round(std::clamp(f.cx, 0.0, 100.0) * 10) / 10;
+        f.cy = std::round(std::clamp(f.cy, 0.0, 100.0) * 10) / 10;
+        f.zoom = blank.zoom;
+    } else if (f.kind == FilterKind::RadialBlur) {   // s040
         f.quality = std::clamp(f.quality, 0, 2);
         f.cx = std::round(std::clamp(f.cx, 0.0, 100.0) * 10) / 10;
         f.cy = std::round(std::clamp(f.cy, 0.0, 100.0) * 10) / 10;
     } else { f.zoom = blank.zoom; f.cx = blank.cx; f.cy = blank.cy; }   // (quality: below -- Ripple's Size too)
     f.axis = f.kind == FilterKind::Mezzotint ? std::clamp(f.axis, 0, 9)   // s043 m2: its Type
            : f.kind == FilterKind::Displace ? std::clamp(f.axis, 0, 1)    // s043 m4: Stretch to Fit / Tile
+           : f.kind == FilterKind::LensFlare ? std::clamp(f.axis, 0, 3)   // s044 m1: the Lens Type
            : f.kind == FilterKind::Diffuse ? std::clamp(f.axis, 0, 3)   // s042 m2
            : (f.kind == FilterKind::Spherize || f.kind == FilterKind::Wave || f.kind == FilterKind::ZigZag || f.kind == FilterKind::Wind) ? std::clamp(f.axis, 0, 2)
            : f.kind == FilterKind::PolarCoordinates ? std::clamp(f.axis, 0, 1) : 0;   // s040 m4, s041 m3
@@ -1756,9 +1872,25 @@ Filter normalised(const Filter& in) {
         f.scale_h = std::round(std::clamp(f.scale_h, -999.0, 999.0));
         f.scale_v = std::round(std::clamp(f.scale_v, -999.0, 999.0));
         f.generators = blank.generators; f.wl_min = blank.wl_min; f.amp_min = blank.amp_min;
-    } else { f.scale_h = blank.scale_h; f.scale_v = blank.scale_v; f.wrap = blank.wrap;
+    } else { f.scale_h = blank.scale_h; f.scale_v = blank.scale_v; if (f.kind != FilterKind::Shear) f.wrap = blank.wrap;   // s044 m2: Shear has Wrap Around
              f.generators = blank.generators; f.wl_min = blank.wl_min; f.amp_min = blank.amp_min; }
     if (f.kind != FilterKind::Displace) f.map_layer.clear();
+    if (f.kind == FilterKind::Shear) {   // s044 m2: the curve -- sorted, clamped, both ends, at most 16, none on top of another
+        f.scale_h = blank.scale_h; f.scale_v = blank.scale_v;
+        auto pts = f.shear;
+        for (auto& p : pts) { p[0] = std::clamp(p[0], 0.0, 1.0); p[1] = std::clamp(p[1], -1.0, 1.0); }
+        std::stable_sort(pts.begin(), pts.end(), [](const auto& a, const auto& b) { return a[0] < b[0]; });
+        std::vector<std::array<double, 2>> out;
+        for (const auto& p : pts)
+            if (out.empty() || p[0] - out.back()[0] > 0.01) out.push_back(p);
+            else out.back()[1] = p[1];   // two at one height: the later wins
+        if (out.empty()) out = blank.shear;
+        if (out.front()[0] > 0) out.insert(out.begin(), {0.0, out.front()[1]});
+        if (out.back()[0] < 1) out.push_back({1.0, out.back()[1]});
+        out.front()[0] = 0; out.back()[0] = 1;
+        while (static_cast<int>(out.size()) > kShearPoints) out.erase(out.end() - 2);
+        f.shear = std::move(out);
+    } else f.shear = blank.shear;
     if (f.kind != FilterKind::Wind) f.from_left = false;   // s042 m2
     if (f.kind == FilterKind::ColourHalftone)   // s043 m2: the screens' angles
         for (auto& a : f.screen) a = std::round(std::clamp(a, -360.0, 360.0));
@@ -1789,6 +1921,8 @@ int reach(const Filter& in) {
         case FilterKind::Twirl: case FilterKind::Pinch: case FilterKind::Spherize: return 1 << 16;   // s040 m4: the whole ellipse
         case FilterKind::PolarCoordinates: case FilterKind::Ripple: case FilterKind::Wave: case FilterKind::ZigZag: return 1 << 16;   // s041 m3
         case FilterKind::Displace: return 1 << 16;   // s043 m4: anywhere the map sends it
+        case FilterKind::LensFlare: return 0;         // s044 m1: by place, no neighbours
+        case FilterKind::Shear:     return 1 << 16;   // s044 m2: the whole row
         case FilterKind::FindEdges: return 1;   // s042 m1: the 3 x 3
         case FilterKind::Solarize:  return 0;
         case FilterKind::Emboss:    return static_cast<int>(std::ceil(f.radius / 2)) + 2;
@@ -1836,7 +1970,10 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
     const Filter f = normalised(in);
     const int IW = src.width(), IH = src.height();
     Rect r{0, 0, IW, IH};
-    if (sel) r = r.intersect(select::extent(*sel));
+    // s044: the selection's EXACT bounds -- Distort fits its ellipse (Shear,
+    // Polar, Displace their rectangle) to them; the tiles' extent (s014..s043)
+    // made a small selection's shape the whole tile's.
+    if (sel) r = r.intersect(select::bounds(*sel));
     const Rect whole_r = r;   // s040 m4: Distort's ellipse fits this (the preview's rectangle doesn't move it)
     if (only) r = r.intersect(*only);
     if (r.empty()) return src;
@@ -2126,6 +2263,16 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                                 const float col = cc >= 3 ? f.c1[ci] + (f.c2[ci] - f.c1[ci]) * v : v;
                                 n.c[static_cast<std::size_t>(c)] = std::abs(o.c[static_cast<std::size_t>(c)] - col);
                             }
+                        }
+                    } else if (f.kind == FilterKind::LensFlare) {   // s044 m1: the flare's light screened over, alpha kept
+                        if (oa <= 0.f) continue;
+                        const Light3 L = flare_at(f, IW, IH, x + 0.5, y + 0.5);
+                        const float lc[3] = {std::min(L.r, 1.f), std::min(L.g, 1.f), std::min(L.b, 1.f)};
+                        const float lum = 0.299f * lc[0] + 0.587f * lc[1] + 0.114f * lc[2];
+                        for (int c = 0; c < cc; ++c) {
+                            const float l = cc >= 3 ? lc[std::min(c, 2)] : lum;
+                            const float v = o.c[static_cast<std::size_t>(c)];
+                            n.c[static_cast<std::size_t>(c)] = v + l * (1 - std::clamp(v, 0.f, 1.f));   // screen (white stays exactly white)
                         }
                     } else {   // Add Noise
                         if (oa <= 0.f) continue;

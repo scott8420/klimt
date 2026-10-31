@@ -4,6 +4,7 @@
 // the slider under them; log sliders for radii). A slider drag is a begin ..
 // end (ONE step); a typed value is a press. docs/filter-layers.md.
 #include "core/Filter.hpp"
+#include "widgets/ShearCurve.hpp"   // s044 m2
 
 #include <gtkmm/box.h>
 #include <gtkmm/checkbutton.h>
@@ -50,6 +51,7 @@ private:
     struct Choice { Gtk::DropDown* dd; std::function<int()> get; };
     std::vector<Choice> m_choices;
     void choice(const char* name, const char* label, std::vector<Glib::ustring> items, std::function<int()> get, std::function<void(int)> put);
+    widgets::ShearCurve* m_shear = nullptr; // s044 m2: Shear's curve
     Gtk::DropDown*    m_depth = nullptr;    // s039: Lens Blur's depth map -- None / Transparency
     Gtk::CheckButton* m_invert = nullptr;
     std::vector<Gtk::Widget*> m_depth_only;

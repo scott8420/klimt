@@ -121,6 +121,7 @@ void FilterLayerEditor::rebuild() {
     m_into = nullptr;
     m_gauss = m_mono = nullptr;
     m_choices.clear();   // s041 m2
+    m_shear = nullptr;   // s044 m2
     m_depth = nullptr; m_invert = nullptr; m_depth_only.clear();   // s039
     m_built = m_f.kind;
     auto head = Gtk::make_managed<Gtk::Label>();
@@ -191,6 +192,24 @@ void FilterLayerEditor::rebuild() {
             }
             choice("filter_layer.diffuse_mode", "Mode", {"Normal", "Darken Only", "Lighten Only", "Anisotropic"}, [this] { return m_f.axis; },
                    [this](int v) { m_f.axis = v; });
+            break;
+        case FilterKind::Shear: {   // s044 m2
+            m_shear = Gtk::make_managed<widgets::ShearCurve>("filter_layer.shear_curve");
+            m_shear->set(m_f);
+            m_shear->signal_begin().connect([this] { m_begin.emit(); });
+            m_shear->signal_end().connect([this] { m_end.emit(); });
+            m_shear->signal_changed().connect([this] { if (!m_syncing) { m_f.shear = m_shear->value().shear; emit(); } });
+            m_body.append(*m_shear);
+            choice("filter_layer.undefined", "Undefined Areas", {"Repeat Edge Pixels", "Wrap Around"}, [this] { return m_f.wrap ? 1 : 0; },
+                   [this](int v) { m_f.wrap = v == 1; });
+            break;
+        }
+        case FilterKind::LensFlare:   // s044 m1
+            row("filter_layer.brightness", "Brightness", 10, 300, 0, false, "%", &m_f.amount);
+            choice("filter_layer.lens", "Lens Type", {"50-300mm Zoom", "35mm Prime", "105mm Prime", "Movie Prime"}, [this] { return m_f.axis; },
+                   [this](int v) { m_f.axis = v; });
+            row("filter_layer.cx", "Centre X", 0, 100, 1, false, "%", &m_f.cx);
+            row("filter_layer.cy", "Centre Y", 0, 100, 1, false, "%", &m_f.cy);
             break;
         case FilterKind::Fibers: {   // s043 m3
             row("filter_layer.variance", "Variance", 1, 64, 0, false, "", &m_f.amount);
@@ -352,6 +371,7 @@ void FilterLayerEditor::sync(int keep) {
         }
     }
     if (m_gauss) m_gauss->set_active(m_f.gaussian);
+    if (m_shear && m_shear->value().shear != m_f.shear) m_shear->set(m_f);   // s044 m2: an undo, another layer's
     for (const auto& ch : m_choices) ch.dd->set_selected(static_cast<guint>(ch.get()));   // s041 m2
     if (m_mono) m_mono->set_active(m_f.mono);
     if (m_shape) m_shape->set_selected(m_f.round ? 1u : 0u);   // m3

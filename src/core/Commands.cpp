@@ -87,6 +87,7 @@ const std::vector<Command>& commands() {
             {"Lens Blur", "Filter", "win.filter-lens-blur", "", "filter blur bokeh depth of field aperture iris blades highlights camera", ""},   // s037
             {"Radial Blur", "Filter", "win.filter-radial-blur", "", "filter blur spin zoom rotate wheel speed burst centre center motion", ""},   // s040
             {"Twirl", "Filter", "win.filter-twirl", "", "filter distort swirl whirl spiral rotate", ""},   // s040 m4
+            {"Shear", "Filter", "win.filter-shear", "", "filter distort shear bend curve skew rows", ""},   // s044 m2
             {"Displace", "Filter", "win.filter-displace", "", "filter distort displace displacement map texture warp layer", ""},   // s043 m4
             {"Pinch", "Filter", "win.filter-pinch", "", "filter distort squeeze bulge shrink", ""},
             {"Spherize", "Filter", "win.filter-spherize", "", "filter distort sphere bulge fisheye lens dent", ""},
@@ -101,6 +102,7 @@ const std::vector<Command>& commands() {
             {"Wind", "Filter", "win.filter-wind", "", "filter stylize wind blast stagger streaks speed", ""},
             {"Clouds", "Filter", "win.filter-clouds", "", "filter render clouds noise fractal smoke sky texture", ""},   // s042 m3
             {"Difference Clouds", "Filter", "win.filter-difference-clouds", "", "filter render clouds difference marble texture", ""},
+            {"Lens Flare", "Filter", "win.filter-lens-flare", "", "filter render lens flare sun light glare ghosts anamorphic", ""},   // s044 m1
             {"Fibers", "Filter", "win.filter-fibers", "", "filter render fibers fibres fabric wood grain hair texture", ""},   // s043 m3
             {"Mosaic", "Filter", "win.filter-mosaic", "", "filter pixelate mosaic blocks pixels squares censor", ""},   // s043 m1
             {"Crystallize", "Filter", "win.filter-crystallize", "", "filter pixelate crystallize polygons cells voronoi stained glass", ""},
@@ -140,6 +142,8 @@ const std::vector<Command>& commands() {
             {"New Filter Layer: Wind", "Layer", "win.filter-layer-wind", "", "filter layer live non-destructive stylize wind", ""},
             {"New Filter Layer: Clouds", "Layer", "win.filter-layer-clouds", "", "filter layer live non-destructive render clouds", ""},   // s042 m3
             {"New Filter Layer: Difference Clouds", "Layer", "win.filter-layer-difference-clouds", "", "filter layer live non-destructive render clouds difference", ""},
+            {"New Filter Layer: Shear", "Layer", "win.filter-layer-shear", "", "filter layer live non-destructive distort shear bend", ""},   // s044 m2
+            {"New Filter Layer: Lens Flare", "Layer", "win.filter-layer-lens-flare", "", "filter layer live non-destructive render lens flare sun", ""},   // s044 m1
             {"New Filter Layer: Fibers", "Layer", "win.filter-layer-fibers", "", "filter layer live non-destructive render fibers fibres", ""},   // s043 m3
             {"New Filter Layer: Mosaic", "Layer", "win.filter-layer-mosaic", "", "filter layer live non-destructive pixelate mosaic blocks", ""},   // s043 m1
             {"New Filter Layer: Crystallize", "Layer", "win.filter-layer-crystallize", "", "filter layer live non-destructive pixelate crystallize cells", ""},

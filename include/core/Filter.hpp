@@ -38,7 +38,9 @@ enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass
                                        Mosaic, Crystallize, Pointillize, Fragment,   // s043 m1: Pixelate
                                        ColourHalftone, Facet, Mezzotint,             // s043 m2
                                        Fibers,                                       // s043 m3: Render
-                                       Displace };                                   // s043 m4: Distort
+                                       Displace,                                     // s043 m4: Distort
+                                       LensFlare,                                    // s044 m1: Render
+                                       Shear };                                      // s044 m2: Distort
 
 // s034: what Smart Sharpen takes away -- the blur it undoes.
 enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
@@ -171,6 +173,16 @@ struct Filter {
     // content over the selection's bounds), 1 Tile (at its size, from the
     // image's corner); `wrap` Wrap Around (else Repeat Edge Pixels).
     std::string map_layer;
+    // s044 m1 -- RENDER > Lens Flare: `amount` the Brightness 10 .. 300 %;
+    // the Flare Center `cx`, `cy` in % of the image (as Radial Blur's);
+    // `axis` the Lens Type 0 50-300mm Zoom, 1 35mm Prime, 2 105mm Prime, 3
+    // Movie Prime. Screened over the pixels; alpha kept.
+    // s044 m2 -- DISTORT > Shear: `shear` the curve's points {t, v} -- t 0
+    // (the top of the selection's bounds, or the picture's) .. 1 (the
+    // bottom), v -1 .. 1 (each row moved by v x half the width: + right),
+    // sorted, both ends always there, up to 16, a smooth curve through them;
+    // `wrap` Wrap Around (else Repeat Edge Pixels).
+    std::vector<std::array<double, 2>> shear{{0.0, 0.0}, {1.0, 0.0}};
     bool operator==(const Filter&) const = default;
 };
 
@@ -268,6 +280,17 @@ double mezzotint_at(int type, int x, int y, int channel, std::uint32_t seed);
 // s043 m3: the fibres' value at an image pixel, 0 .. 1 (value noise stretched
 // down the picture by the variance, fine across by the strength).
 float fibers_at(int x, int y, double variance, double strength, std::uint32_t seed);
+// s044 m1: Lens Flare's light at an image point (pixel centre), RGB 0 ..
+// (unclamped; screened over the picture), for an image of iw x ih.
+struct Light3 { float r, g, b; };
+Light3 flare_at(const Filter& f, int iw, int ih, double x, double y);
+// s044 m2: Shear's curve at t (0 top .. 1 bottom): the row's move, -1 .. 1
+// of half the width (Catmull-Rom through the points, clamped).
+double shear_at(const Filter& f, double t);
+constexpr int kShearPoints = 16;
+// s044 m2: the index of Shear's point a click at (t, v) lands on, within
+// `tol_t` / `tol_v` (-1: none) -- the curve widget's, and the selftest's.
+int shear_hit(const Filter& f, double t, double v, double tol_t, double tol_v);
 
 // The 1-D blur Gaussian Blur, Unsharp Mask and High Pass share, along a line of n samples with
 // stride `stride` floats (edges clamp): sigma < 3 an exact Gaussian kernel,

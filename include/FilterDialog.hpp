@@ -5,6 +5,7 @@
 // the view shows on a worker, a moment after the last change. Escape / Cancel
 // / closing: nothing happens. docs/filters.md.
 #include "core/Filter.hpp"
+#include "widgets/ShearCurve.hpp"   // s044 m2
 #include "widgets/Widgets.hpp"
 
 #include <gtkmm/checkbutton.h>
@@ -79,6 +80,7 @@ private:
     void extreme_rows();
     void lens_rows();                                  // s039
     void radial_rows();                                // s040
+    void centre_rows(const char* title, const char* tip, const char* pick_tip);   // s044: Radial Blur's centre box, Lens Flare's too
     void randomize_button();                           // s042 m3: a new seed
     // s041 m3: a labelled dropdown, synced with the filter.
     struct Choice { Gtk::DropDown* dd; std::function<int()> get; };
@@ -88,6 +90,7 @@ private:
     Gtk::DropDown*            m_method = nullptr;      // s040: Spin / Zoom
     Gtk::DropDown*            m_quality = nullptr;     // Draft / Good / Best
     Gtk::DrawingArea*         m_centre_box = nullptr;  // s040 m2: the Blur Centre, dragged
+    widgets::ShearCurve*      m_shear = nullptr;       // s044 m2: Shear's curve
     int                       m_iw = 4, m_ih = 3;
     void centre_from(double x, double y);
     void noise_rows(double lo, double hi, int digits, bool log);   // Add Noise's, Lens Blur's

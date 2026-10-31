@@ -114,6 +114,7 @@ void selftest_tooldefaults(const std::function<void(const std::string&, bool, co
 void selftest_filterlayers(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s030
 void selftest_sharpen(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s034
 void selftest_pixelate(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s043
+void selftest_render(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s044
 void selftest_paths(const std::function<void(const std::string&, bool, const std::string&)>& check);     // s035
 void selftest_isolate(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s035 m7
 void selftest_rulers(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s031
@@ -1255,6 +1256,7 @@ int main() {
     selftest_filterlayers([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_sharpen([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_pixelate([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_render([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_paths([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_isolate([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_rulers([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });

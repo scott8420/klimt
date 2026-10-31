@@ -168,6 +168,7 @@ void FilterDialog::rebuild() {
     m_method = m_quality = nullptr;   // s040
     m_choices.clear();                // s041 m3
     m_centre_box = nullptr;
+    m_shear = nullptr;   // s044 m2
     auto head = Gtk::make_managed<Gtk::Label>();
     head->set_markup("<b>" + Glib::Markup::escape_text(std::string(F::label(m_f.kind))) + "</b>");
     head->set_xalign(0.0f);
@@ -232,6 +233,38 @@ void FilterDialog::rebuild() {
             randomize_button();
             break;
         }
+        case FilterKind::Shear: {   // s044 m2: Distort -- the curve
+            auto l = Gtk::make_managed<Gtk::Label>("Each row of the picture (or the selection) moves across as far as the line is from the middle. "
+                                                   "Click the line to add a point; drag it out sideways, or double-click it, to take it away.");
+            l->set_wrap(true);
+            l->set_xalign(0.0f);
+            l->add_css_class("dim-label");
+            m_body.append(*l);
+            m_shear = Gtk::make_managed<widgets::ShearCurve>("filter.shear_curve");
+            m_shear->set(m_f);
+            m_shear->signal_changed().connect([this] { m_f.shear = m_shear->value().shear; m_changed.emit(); });
+            m_body.append(*m_shear);
+            auto reset = Gtk::make_managed<Gtk::Button>("Straighten");
+            reset->set_name("filter.shear_reset");
+            reset->set_tooltip_text("Back to a straight line (nothing moves)");
+            reset->set_halign(Gtk::Align::START);
+            reset->signal_clicked().connect([this] {
+                m_f.shear = F::fresh(FilterKind::Shear).shear;
+                if (m_shear) m_shear->set(m_f);
+                m_changed.emit();
+            });
+            m_body.append(*reset);
+            choice("filter.undefined", "Undefined Areas", {"Repeat Edge Pixels", "Wrap Around"}, [this] { return m_f.wrap ? 1 : 0; },
+                   [this](int v) { m_f.wrap = v == 1; }, "What fills in where a row moved away from the edge");
+            break;
+        }
+        case FilterKind::LensFlare:   // s044 m1: Render
+            row("filter.brightness", "Brightness", 10, 300, 0, false, "%", &m_f.amount);
+            choice("filter.lens", "Lens Type", {"50-300mm Zoom", "35mm Prime", "105mm Prime", "Movie Prime"}, [this] { return m_f.axis; },
+                   [this](int v) { m_f.axis = v; if (m_centre_box) m_centre_box->queue_draw(); },
+                   "Zoom: many ghosts and a ring; 35mm: strong rays; 105mm: a wide soft glow; Movie: a long blue streak");
+            centre_rows("Flare Center", "Click or drag: where the light is", "Then click the picture: the flare goes there (Esc: never mind)");
+            break;
         case FilterKind::Displace: {   // s043 m4: Distort -- by another layer
             row("filter.scale_h", "Horizontal Scale", -999, 999, 0, false, "%", &m_f.scale_h);
             row("filter.scale_v", "Vertical Scale", -999, 999, 0, false, "%", &m_f.scale_v);
@@ -527,17 +560,23 @@ void FilterDialog::radial_rows() {
         m_f.quality = static_cast<int>(m_quality->get_selected());
         m_changed.emit();
     });
-    // s040 m2: THE BLUR CENTRE -- the picture's shape; rings (Spin) or rays
+    centre_rows("Blur Centre", "Click or drag: the blur's centre on the picture",
+                "Then click the picture: the blur's centre goes there (Esc: never mind)");
+}
+
+// s040 m2: THE CENTRE -- the picture's shape; rings (Spin) or rays (Zoom)
+// round it, or (s044: Lens Flare) a small sun; click or drag to move it.
+void FilterDialog::centre_rows(const char* title, const char* tip, const char* pick_tip) {
     // (Zoom) round the centre; click or drag to move it.
     auto lab = Gtk::make_managed<Gtk::Label>();
-    lab->set_markup("<small><b>Blur Centre</b></small>");
+    lab->set_markup(std::string("<small><b>") + title + "</b></small>");
     lab->set_xalign(0.0f);
     lab->add_css_class("dim-label");
     lab->set_margin_top(6);
     m_body.append(*lab);
     m_centre_box = Gtk::make_managed<Gtk::DrawingArea>();
     m_centre_box->set_name("filter.centre_box");
-    m_centre_box->set_tooltip_text("Click or drag: the blur's centre on the picture");
+    m_centre_box->set_tooltip_text(tip);
     m_centre_box->set_halign(Gtk::Align::CENTER);
     m_centre_box->set_cursor("crosshair");
     m_centre_box->set_draw_func([this](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
@@ -548,7 +587,19 @@ void FilterDialog::radial_rows() {
         cr->set_source_rgba(0.85, 0.85, 0.88, 0.55);
         cr->set_line_width(1);
         const double far = std::hypot(std::max(x, w - x), std::max(y, h - y));
-        if (m_f.zoom) {
+        if (m_f.kind == FilterKind::LensFlare) {   // s044 m1: a little sun, and the ghosts' line through the middle
+            for (int k = 0; k < 12; ++k) {
+                const double a = k * 3.14159265358979 / 6;
+                cr->move_to(x + 7 * std::cos(a), y + 7 * std::sin(a));
+                cr->line_to(x + 14 * std::cos(a), y + 14 * std::sin(a));
+            }
+            cr->move_to(x, y);
+            cr->line_to(x + 2 * (w / 2.0 - x), y + 2 * (h / 2.0 - y));
+            const std::vector<double> dash{3, 3};
+            cr->set_dash(dash, 0);
+            cr->stroke();
+            cr->unset_dash();
+        } else if (m_f.zoom) {
             for (int k = 0; k < 24; ++k) {
                 const double a = k * 3.14159265358979 / 12;
                 cr->move_to(x + 8 * std::cos(a), y + 8 * std::sin(a));
@@ -578,7 +629,7 @@ void FilterDialog::radial_rows() {
     m_body.append(*m_centre_box);
     m_focal_pick = Gtk::make_managed<Gtk::ToggleButton>("Pick on Picture");
     m_focal_pick->set_name("filter.centre_pick");
-    m_focal_pick->set_tooltip_text("Then click the picture: the blur's centre goes there (Esc: never mind)");
+    m_focal_pick->set_tooltip_text(pick_tip);
     m_focal_pick->set_halign(Gtk::Align::START);
     m_body.append(*m_focal_pick);
     m_focal_pick->signal_toggled().connect([this] {
