@@ -196,6 +196,8 @@ AboutWindow::AboutWindow(Gtk::Window& parent) {
             {"libjpeg-turbo", "IJG and BSD-3-Clause"},
             {"libtiff", "libtiff License"},
             {"libzip", "BSD-3-Clause"},
+            {"Pango and Cairo", "LGPL-2.1-or-later / LGPL-2.1 or MPL-1.1"},   // s046: type
+            {"TeX hyphenation patterns (hyph-utf8)", "MIT, BSD-3-Clause and others -- third_party/hyphen"},   // s048
         };
         for (const auto& l : libs)
             c->append(*text("shell.about.credits.lib",

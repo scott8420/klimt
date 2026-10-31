@@ -14,6 +14,7 @@
 #include "core/Paint.hpp"
 #include "core/Text.hpp"
 #include "core/Transform.hpp"
+#include "text/Hyphen.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -362,9 +363,10 @@ void selftest_text(const Check& check) {
         s.family = "Serif"; s.weight = 700; s.italic = true; s.size = 36; s.colour = {0.7f, 0.5f, 0.1f, 0.9f};
         s.align = T::Align::Center; s.tracking = 50; s.leading = 44; s.x = 60; s.y = 30; s.box_w = 200; s.box_h = 150;
         s.m = {1, 0, 0.2, 1, 3, 4};
+        s.hyphenate = true; s.lang = "de";
         {   // s047: runs ride along
             T::Look k; k.weight = 400; k.colour = std::array<float, 3>{0.1f, 0.2f, 0.3f}; k.kern = 40; k.underline = true;
-            T::Look k2; k2.size = 20; k2.shift = 6; k2.strike = true; k2.family = "Monospace"; k2.tracking = -30;
+            T::Look k2; k2.size = 20; k2.shift = 6; k2.strike = true; k2.family = "Monospace"; k2.tracking = -30; k2.caps = 2; k2.position = 1; k2.ligatures = false; k2.figures = 2; k2.fig_space = 2; k2.dlig = true; k2.frac = true; k2.font_kern = false;
             s = T::styled(T::styled(s, 0, 4, k), 8, 14, k2);
         }
         const auto id = L::add_text(j, d, s);
@@ -387,6 +389,7 @@ void selftest_text(const Check& check) {
                   std::abs(t.colour[3] - 0.9f) < 1e-6 && t.align == T::Align::Center && t.tracking == 50 && t.leading == 44 &&
                   t.box_w == 200 && t.box_h == 150 && t.m[2] == 0.2, "");
             check("text: and its runs, every field", t.runs == s.runs && s.runs.size() == 2, num(static_cast<double>(t.runs.size())));
+            check("text: and its hyphenation and language (s048)", t.hyphenate && t.lang == "de", t.lang);
             check("text: and its pixels as they were saved", back->layers.at(id).pixels && ink_of(*back->layers.at(id).pixels).x0 == ink_of(*d.get(id)->pixels).x0, "");
             check("text: and its layer style", back->layers.at(id).styles.drop.on, "");
         }
@@ -558,5 +561,104 @@ void selftest_text(const Check& check) {
         check("box: to_text undoes the matrix (the frame's corners are the box's)",
               std::abs(t0.x - 10) < 1e-9 && std::abs(t0.y - 20) < 1e-9 && std::abs(t2.x - 110) < 1e-9 && std::abs(t2.y - 70) < 1e-9,
               num(t0.x) + "," + num(t0.y) + " " + num(t2.x) + "," + num(t2.y));
+    }
+
+    // ── s048 m1: hyphenation -- Composix's Liang patterns in box type ────────
+    std::cout << "\n-- text: hyphenation (s048 m1) --\n";
+    {
+        check("hyphen: the patterns are in (hy-phen-ation)", T::hyphenated("hyphenation") == "hy-phen-ation", T::hyphenated("hyphenation"));
+        check("hyphen: in German too", !T::hyphen_points("Silbentrennung", -1, -1, "de").empty(), "");
+                const auto width = [](const std::string& t) { T::Spec p; p.text = t; p.size = 40; const auto f = T::frame(p); return f[1].x - f[0].x; };
+        T::Spec s;
+        s.text = "representation";
+        s.size = 40; s.x = 10; s.y = 10;
+        // Wide enough for "represent-": a character wrap would break after the
+        // t (9); the patterns have no point there -- rep-re-sen-ta-tion -- so 8.
+        s.box_w = std::max(width("represent-"), width("represent‐")) + 1;
+        s.hyphenate = true;
+        const int len = static_cast<int>(s.text.size());
+        check("hyphen: a long word breaks at a hyphenation point", T::line_home(s, len) == 8, num(T::line_home(s, len)));
+        check("hyphen: not hyphenating, Pango breaks it where the letters run out",
+              [&] { T::Spec o = s; o.hyphenate = false; return T::line_home(o, len) != 8; }(), "");
+        const Ink one = ink_of(T::render(s, 600, 400));
+        T::Spec bare; bare.text = "represen"; bare.size = 40; bare.x = 10; bare.y = 10 + (T::caret(s, 0).y1 - T::caret(bare, 0).y1);
+        check("hyphen: and the hyphen is drawn at the break", one.any() && one.x1 > ink_of(T::render(bare, 600, 400)).x1 + 3, "");
+        bool round = true;
+        for (int i = 0; i <= len; ++i) {
+            const auto c = T::caret(s, i);
+            if (T::index_at(s, c.x0 + 0.01, (c.y0 + c.y1) / 2) != i && !(i == 8 && T::index_at(s, c.x0 + 0.01, (c.y0 + c.y1) / 2) == 8)) round = false;
+        }
+        check("hyphen: caret and hit-test agree through the soft hyphens", round, "");
+        int steps = 0;
+        for (int i = 0; i < len && steps < 100; i = T::step(s, i, 1)) ++steps;
+        check("hyphen: right steps one letter at a time -- no stop at a soft hyphen", steps == len, num(steps));
+        steps = 0;
+        for (int i = len; i > 0 && steps < 100; i = T::step(s, i, -1)) ++steps;
+        check("hyphen: and left too", steps == len, num(steps));
+        check("hyphen: a word step takes the whole word", T::word_step(s, 0, 1) == len, num(T::word_step(s, 0, 1)));
+        check("hyphen: a selection over the word is one quad a line", T::range(s, 0, len).size() == 2, "");
+        T::Spec off = s;
+        off.hyphenate = false;
+        check("hyphen: the text itself never holds the hyphens", T::edited(s, len, len, "s").text == "representations", "");
+        check("hyphen: point type doesn't hyphenate", [&] { T::Spec q = s; q.box_w = 0; return T::line_home(q, len) == 0; }(), "");
+        T::Spec shortw = s;
+        shortw.text = "abcde abcde";
+        check("hyphen: words under six letters stay whole", T::line_home(shortw, 11) == 0 || T::line_home(shortw, 11) == 6, num(T::line_home(shortw, 11)));
+        T::Look red; red.colour = std::array<float, 3>{1, 0, 0};
+        const auto r = T::styled(s, 8, len, red);
+        check("hyphen: a run after a break point is set on its letters", r.runs.size() == 1 && r.runs[0].start == 8 && ink_of(T::render(r, 600, 400)).any(), "");
+    }
+
+    // ── s048 m2: caps, super- and subscript, OpenType features ───────────────
+    std::cout << "\n-- text: caps, scripts, OpenType features (s048 m2) --\n";
+    {
+        const auto ink = [](const T::Spec& x) { return ink_of(T::render(x, 600, 400)); };
+        T::Spec low; low.text = "ace"; low.size = 60; low.x = 20; low.y = 200;
+        T::Spec up = low; up.text = "ACE";
+        T::Look caps; caps.caps = 1;
+        const Ink l = ink(low), u = ink(up), c = ink(T::styled(low, 0, 3, caps));
+        check("caps: ALL CAPS sets the capitals (as tall as typed ones)", c.any() && std::abs(c.y0 - u.y0) <= 1 && c.y0 < l.y0 - 5,
+              num(c.y0) + " vs " + num(u.y0) + " (lower " + num(l.y0) + ")");
+        check("caps: the text keeps what was typed", T::styled(low, 0, 3, caps).text == "ace", "");
+        T::Look sc; sc.caps = 2;
+        check("caps: small caps changes the letters", T::render(T::styled(low, 0, 3, sc), 600, 400).a != T::render(low, 600, 400).a, "");
+        T::Spec h; h.text = "H"; h.size = 60; h.x = 20; h.y = 200;
+        const Ink plain = ink(h);
+        T::Look sup; sup.position = 1;
+        T::Look sub; sub.position = 2;
+        const Ink sp = ink(T::styled(h, 0, 1, sup)), sb = ink(T::styled(h, 0, 1, sub));
+        const double ph = plain.y1 - plain.y0;
+        check("scripts: superscript rises a third of the size", sp.any() && std::abs((plain.y1 - sp.y1) - 20) <= 2, num(plain.y1 - sp.y1));
+        check("scripts: at 58.3% of it", std::abs((sp.y1 - sp.y0) - ph * T::kScriptSize) <= 2, num(sp.y1 - sp.y0) + " of " + num(ph));
+        check("scripts: subscript drops a third", sb.any() && std::abs((sb.y1 - plain.y1) - 20) <= 2, num(sb.y1 - plain.y1));
+        T::Spec two = h; two.text = "Hx\nH";
+        check("scripts: a raised letter doesn't move its line",
+              std::abs(T::caret(T::styled(two, 1, 2, sup), 3).y0 - T::caret(two, 3).y0) < 0.01 &&
+              std::abs(T::caret(T::styled(two, 1, 2, sup), 0).y0 - T::caret(two, 0).y0) < 0.01, "");
+        T::Look ot; ot.ligatures = false; ot.figures = 2; ot.fig_space = 2; ot.frac = true; ot.font_kern = false;
+        check("features: as HarfBuzz settings", T::ot_settings(ot) == "liga=0,clig=0,kern=0,lnum=0,onum=1,pnum=0,tnum=1,frac=1", T::ot_settings(ot));
+        T::Look dflt; dflt.ligatures = true; dflt.font_kern = true; dflt.caps = 0; dflt.position = 0; dflt.figures = 0;
+        check("features: the defaults are no setting (no run)", T::styled(h, 0, 1, dflt).runs.empty() && T::ot_settings(dflt).empty(), "");
+        T::Spec f; f.text = "1/2 office"; f.size = 40; f.x = 10; f.y = 100;
+        T::Look fr; fr.frac = true; fr.ligatures = false;
+        check("features: a run with features sets", ink(T::styled(f, 0, 10, fr)).any(), "");
+        check("features: look_at fills them in", *T::look_at(T::styled(f, 0, 3, fr), 1).frac && !*T::look_at(f, 1).frac && *T::look_at(f, 1).ligatures, "");
+    }
+
+    // ── s048 m3: point type's handles scale it ───────────────────────────────
+    std::cout << "\n-- text: point type scaled by its handles (s048 m3) --\n";
+    {
+        T::Spec s; s.text = "Adele"; s.size = 40; s.x = 100; s.y = 120;
+        const auto f = T::frame(s);
+        const auto pv = T::to_text(s, f[2].x, f[2].y);   // the bottom-right corner stays
+        const auto u = T::scaled(s, 2, 2, pv.x, pv.y);
+        const auto g = T::frame(u);
+        check("scale: a corner's uniform scale lands in the size", std::abs(u.size - 80) < 1e-9 && u.m[0] == 1 && u.m[3] == 1, num(u.size));
+        check("scale: about the opposite corner, which stays", std::abs(g[2].x - f[2].x) < 0.01 && std::abs(g[2].y - f[2].y) < 0.01,
+              num(g[2].x) + "," + num(g[2].y) + " vs " + num(f[2].x) + "," + num(f[2].y));
+        check("scale: and the frame doubles", std::abs((g[1].x - g[0].x) - 2 * (f[1].x - f[0].x)) < 0.5, "");
+        const auto w = T::scaled(s, 1.5, 1, pv.x, pv.y);
+        check("scale: a side stretches it -- live, in the matrix", w.size == 40 && std::abs(w.m[0] - 1.5) < 1e-9 && w.m[3] == 1, "");
+        check("scale: nothing for a zero scale", T::scaled(s, 0, 1, 0, 0) == s, "");
     }
 }

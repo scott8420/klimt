@@ -113,4 +113,34 @@ void selftest_pyramid(const Check& check) {
         check("pyramid: one layer's preview is its full composite's block mean (within 2 / 255)", ok && worst <= 2.0, "worst " + num(worst));
         check("pyramid: the cache now holds that layer", cache.size() == 1, "");
     }
+    {
+        // s048: the layers reduced on all the cores -- each exactly its own
+        // reduction; a map two layers share reduced once; a cancel gives nothing.
+        core::Image im;
+        im.width = 300; im.height = 200; im.format = fmt(P::Depth::U8);
+        core::Layers ls;
+        auto shared = std::make_shared<const P::TileMap>(checker(P::Depth::U8, 300, 200));
+        for (int k = 0; k < 6; ++k) {
+            core::Layer l;
+            l.name = "L" + std::to_string(k);
+            l.pos = k + 1;
+            l.pixels = k == 5 ? shared : std::make_shared<const P::TileMap>(P::TileMap(fmt(P::Depth::U8), 300, 200).paint({0, 0, 300, 200},
+                [k](int x, int y, const P::Px&) { return P::rgba(static_cast<float>((x * (k + 2)) % 256) / 255.f, static_cast<float>(y % 64) / 63.f, 0.2f, 1); }));
+            if (k == 2) l.mask = shared;
+            ls.emplace("L" + std::to_string(k), l);
+        }
+        core::ReduceCache cache;
+        const auto r = core::reduced(im, ls, 2, &cache);
+        bool same = r.has_value();
+        for (const auto& [id, l] : ls) {
+            if (!same) break;
+            const auto mine = core::reduced_map(*l.pixels, 2);
+            const auto& got = r->layers.at(id).pixels;
+            for (int y = 0; same && y < mine.height(); y += 3)
+                for (int x = 0; x < mine.width(); x += 4) if (got->get(x, y).c != mine.get(x, y).c) { same = false; break; }
+        }
+        check("pyramid: on all the cores, each layer is its own reduction", same, "");
+        check("pyramid: a map two layers share is reduced once", cache.size() == 6 && r && r->layers.at("L2").mask == r->layers.at("L5").pixels, num(static_cast<double>(cache.size())));
+        check("pyramid: cancelled, it gives nothing", !core::reduced(im, ls, 3, nullptr, [] { return true; }).has_value(), "");
+    }
 }

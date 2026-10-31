@@ -401,9 +401,11 @@ private:
         int          clicks = 0;
         int          handle = -1;         // s047: a box handle being dragged (0 TL .. 7 L)
         text::Spec   hspec;               // the Spec at its press
+        bool         hshift = false;      // s048: Shift at the press (a corner scales freely)
     };
     std::vector<CanvasView::Cross> text_handles(const text::Spec& s) const;   // category: text: s047
     int  text_handle_at(const text::Spec& s, double x, double y) const;     // category: text: -1 none
+    void text_accels(bool visiting);                                        // category: text: s048 -- lend Ctrl+= to the type
     TextEdit         m_te;
     sigc::connection m_te_blink;
     GtkIMContext*    m_im = nullptr;               // a GtkIMMulticontext (gtkmm doesn't wrap it)

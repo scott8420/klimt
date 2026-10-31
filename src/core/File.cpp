@@ -307,6 +307,16 @@ json runs_json(const std::vector<text::Run>& rs) {
         if (k.kern) o["kern"] = *k.kern;
         if (k.underline) o["underline"] = *k.underline;
         if (k.strike) o["strike"] = *k.strike;
+        if (k.caps) o["caps"] = *k.caps;   // s048
+        if (k.position) o["position"] = *k.position;
+        if (k.ligatures) o["ligatures"] = *k.ligatures;
+        if (k.dlig) o["dlig"] = *k.dlig;
+        if (k.figures) o["figures"] = *k.figures;
+        if (k.fig_space) o["fig_space"] = *k.fig_space;
+        if (k.frac) o["frac"] = *k.frac;
+        if (k.ordn) o["ordn"] = *k.ordn;
+        if (k.swsh) o["swsh"] = *k.swsh;
+        if (k.font_kern) o["font_kern"] = *k.font_kern;
         out.push_back(std::move(o));
     }
     return out;
@@ -332,6 +342,10 @@ std::vector<text::Run> runs_from(const json& j) {
         if (o.contains("kern") && o["kern"].is_number()) k.kern = o["kern"].get<double>();
         if (o.contains("underline") && o["underline"].is_boolean()) k.underline = o["underline"].get<bool>();
         if (o.contains("strike") && o["strike"].is_boolean()) k.strike = o["strike"].get<bool>();
+        const auto oi = [&](const char* key, std::optional<int>& v) { if (o.contains(key) && o[key].is_number()) v = o[key].get<int>(); };
+        const auto ob = [&](const char* key, std::optional<bool>& v) { if (o.contains(key) && o[key].is_boolean()) v = o[key].get<bool>(); };
+        oi("caps", k.caps); oi("position", k.position); oi("figures", k.figures); oi("fig_space", k.fig_space);   // s048
+        ob("ligatures", k.ligatures); ob("dlig", k.dlig); ob("frac", k.frac); ob("ordn", k.ordn); ob("swsh", k.swsh); ob("font_kern", k.font_kern);
         out.push_back(std::move(r));
     }
     return out;
@@ -341,6 +355,7 @@ json text_json(const text::Spec& t) {
     const char* al = t.align == text::Align::Center ? "center" : t.align == text::Align::Right ? "right"
                    : t.align == text::Align::Justify ? "justify" : "left";
     return {{"text", t.text}, {"family", t.family}, {"weight", t.weight}, {"italic", t.italic}, {"stretch", t.stretch}, {"size", t.size},
+            {"hyphenate", t.hyphenate}, {"lang", t.lang},
             {"colour", {t.colour[0], t.colour[1], t.colour[2], t.colour[3]}}, {"align", al},
             {"tracking", t.tracking}, {"leading", t.leading}, {"x", t.x}, {"y", t.y},
             {"box_w", t.box_w}, {"box_h", t.box_h}, {"m", {t.m[0], t.m[1], t.m[2], t.m[3], t.m[4], t.m[5]}},
@@ -353,6 +368,8 @@ text::Spec text_from(const json& j) {
     t.weight = j.value("weight", 400);
     t.italic = j.value("italic", false);
     t.stretch = j.value("stretch", 4);
+    t.hyphenate = j.value("hyphenate", false);   // s048
+    t.lang = j.value("lang", std::string("en-US"));
     t.size = j.value("size", 48.0);
     if (j.contains("colour") && j.at("colour").is_array() && j.at("colour").size() == 4)
         for (std::size_t k = 0; k < 4; ++k) t.colour[k] = j.at("colour")[k].get<float>();

@@ -119,6 +119,12 @@ public:
         bool underline = false;               // s047: runs' fields
         bool strike = false;
         int  shift = 0;                       // baseline shift, px, up
+        // s048: the Character panel -- caps, scripts, OpenType; the layer's
+        // hyphenation and its language
+        int  caps = 0, position = 0, figures = 0, fig_space = 0;
+        bool ligatures = true, dlig = false, frac = false, ordn = false, swsh = false, font_kern = true;
+        bool hyphenate = true;                // new box type hyphenates (Photoshop's default)
+        std::string lang = "en-US";
         bool operator==(const TextOpts&) const = default;
     };
     const TextOpts& text() const { return m_text; }

@@ -8,6 +8,7 @@
 // to the edited layer (or the picked text layers) and set new type.
 #include "Shell.hpp"
 #include "Log.hpp"
+#include "core/Shortcuts.hpp"   // s048: text_accels
 #include "core/Text.hpp"
 
 #include <gdkmm/clipboard.h>
@@ -16,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 namespace klimt {
 
@@ -79,6 +81,18 @@ void Shell::text_follow() {
     o.underline = *k.underline;
     o.strike = *k.strike;
     o.shift = static_cast<int>(std::lround(*k.shift));
+    o.caps = *k.caps;   // s048
+    o.position = *k.position;
+    o.ligatures = *k.ligatures;
+    o.dlig = *k.dlig;
+    o.figures = *k.figures;
+    o.fig_space = *k.fig_space;
+    o.frac = *k.frac;
+    o.ordn = *k.ordn;
+    o.swsh = *k.swsh;
+    o.font_kern = *k.font_kern;
+    o.hyphenate = t.hyphenate;
+    o.lang = t.lang;
     m_strip.show_text(o);
 }
 
@@ -93,7 +107,10 @@ void Shell::on_text_style(const std::string& what) {
     static const std::map<std::string, std::string> labels = {
         {"family", "Font"}, {"face", "Font Face"}, {"weight", "Font Weight"}, {"italic", "Italic"}, {"size", "Font Size"}, {"colour", "Text Colour"},
         {"align", "Align Text"}, {"tracking", "Tracking"}, {"leading", "Leading"},
-        {"underline", "Underline"}, {"strike", "Strikethrough"}, {"shift", "Baseline Shift"}};
+        {"underline", "Underline"}, {"strike", "Strikethrough"}, {"shift", "Baseline Shift"},
+        {"caps", "Caps"}, {"position", "Super / Subscript"}, {"ligatures", "Ligatures"}, {"dlig", "Discretionary Ligatures"},
+        {"figures", "Figures"}, {"fig_space", "Figure Width"}, {"frac", "Fractions"}, {"ordn", "Ordinals"}, {"swsh", "Swashes"},
+        {"font_kern", "Font Kerning"}, {"hyphenate", "Hyphenate"}, {"lang", "Language"}};
     const auto it = labels.find(what);
     const std::string label = it == labels.end() ? "Type" : it->second;
     // s047: the letters' look (a run) -- only a character setting; align and
@@ -110,6 +127,16 @@ void Shell::on_text_style(const std::string& what) {
     else if (what == "underline") { add.underline = o.underline; field = T::Field::Underline; }
     else if (what == "strike") { add.strike = o.strike; field = T::Field::Strike; }
     else if (what == "shift") { add.shift = o.shift; field = T::Field::Shift; }
+    else if (what == "caps") { add.caps = o.caps; field = T::Field::Caps; }   // s048
+    else if (what == "position") { add.position = o.position; field = T::Field::Position; }
+    else if (what == "ligatures") { add.ligatures = o.ligatures; field = T::Field::Ligatures; }
+    else if (what == "dlig") { add.dlig = o.dlig; field = T::Field::Dlig; }
+    else if (what == "figures") { add.figures = o.figures; field = T::Field::Figures; }
+    else if (what == "fig_space") { add.fig_space = o.fig_space; field = T::Field::FigSpace; }
+    else if (what == "frac") { add.frac = o.frac; field = T::Field::Frac; }
+    else if (what == "ordn") { add.ordn = o.ordn; field = T::Field::Ordn; }
+    else if (what == "swsh") { add.swsh = o.swsh; field = T::Field::Swsh; }
+    else if (what == "font_kern") { add.font_kern = o.font_kern; field = T::Field::FontKern; }
     const int sa = std::min(m_te.caret, m_te.anchor), sb = std::max(m_te.caret, m_te.anchor);
     if (m_te.on && sa != sb && field) {   // the selected letters
         const auto l = m_doc.get(m_te.id);
@@ -120,7 +147,7 @@ void Shell::on_text_style(const std::string& what) {
     }
     // The whole layer: the Spec's own setting, and no run keeps its own
     // (colour's alpha is the layer's, always).
-    const auto f = [o, what, field](T::Spec& s) {
+    const auto f = [o, what, field, add](T::Spec& s) {
         if (what == "family") s.family = o.family;
         else if (what == "weight") s.weight = o.weight;
         else if (what == "italic") s.italic = o.italic;
@@ -133,21 +160,35 @@ void Shell::on_text_style(const std::string& what) {
         else if (what == "align") s.align = static_cast<T::Align>(std::clamp(o.align, 0, 3));
         else if (what == "tracking") s.tracking = o.tracking;
         else if (what == "leading") s.leading = o.leading;
+        else if (what == "hyphenate") s.hyphenate = o.hyphenate;   // s048: the layer's
+        else if (what == "lang") s.lang = o.lang;
         if (field) s = T::without(s, *field);
         // underline / strike / shift have no layer-wide field: a run over all of it
-        if (what == "underline" || what == "strike" || what == "shift") {
-            T::Look k;
-            if (what == "underline") k.underline = o.underline;
-            else if (what == "strike") k.strike = o.strike;
-            else k.shift = o.shift;
-            s = T::styled(s, 0, static_cast<int>(s.text.size()), k);
-        }
+        // (s048: nor have caps, scripts or the features)
+        static const std::set<std::string> lettered = {"underline", "strike", "shift", "caps", "position", "ligatures", "dlig",
+                                                       "figures", "fig_space", "frac", "ordn", "swsh", "font_kern"};
+        if (lettered.count(what)) s = T::styled(s, 0, static_cast<int>(s.text.size()), add);
     };
     L::set_text_on(m_journal, m_doc, ids, f, label, "text:" + what);
     if (m_te.on) text_show();
 }
 
 // ── a visit ─────────────────────────────────────────────────────────────────
+
+// s048: the application's accelerators fire before the canvas hears a key,
+// so while type is edited the ones the type needs are lent to it: Zoom In's
+// Ctrl+= / Ctrl++ (Ctrl+Shift+= is superscript) -- the keypad's + still zooms.
+void Shell::text_accels(bool visiting) {
+    auto app = get_application();
+    if (!app) return;
+    for (const auto& s : core::shortcut_registry()) {
+        if (s.action != "win.zoom-in") continue;
+        std::vector<Glib::ustring> keep;
+        for (const auto& a : s.accels)
+            if (!visiting || (a != "<Ctrl>plus" && a != "<Ctrl>equal")) keep.emplace_back(a);
+        app->set_accels_for_action(s.action, keep);
+    }
+}
 
 void Shell::text_ime(bool on) {
     if (!m_im) {
@@ -179,6 +220,7 @@ void Shell::text_open(const std::string& id, bool made) {
     m_te.made = made;
     m_te.blink = true;
     text_ime(true);
+    text_accels(true);   // s048
     m_canvas.grab_focus();
     m_te_blink.disconnect();
     m_te_blink = Glib::signal_timeout().connect([this] {
@@ -198,6 +240,7 @@ void Shell::text_close() {
     const bool made = m_te.made;
     m_te_blink.disconnect();
     text_ime(false);
+    text_accels(false);   // s048
     m_te = {};
     const bool kept = L::text_end(m_journal, m_doc, id, made);
     m_canvas.set_text_overlay({});
@@ -241,7 +284,7 @@ void Shell::text_show() {
     o.frame_on = true;
     o.frame = quad_of(T::frame(s));
     o.overflow = T::overflows(s);
-    if (!s.point()) o.handles = text_handles(s);   // s047
+    o.handles = text_handles(s);   // s047 box type's; s048 point type's too
     for (const auto& q : T::range(s, std::min(m_te.caret, m_te.anchor), std::max(m_te.caret, m_te.anchor))) o.sel.push_back(quad_of(q));
     const auto c = T::caret(s, m_te.caret);
     o.caret = m_te.blink;
@@ -358,6 +401,25 @@ bool Shell::text_key(guint k, Gdk::ModifierType state) {
         case GDK_KEY_Tab: text_insert("\t"); return true;
         default: break;
     }
+    // s048: Photoshop's keys -- Ctrl+Shift+K All Caps, Ctrl+Shift+H Small
+    // Caps, Ctrl+Shift+= superscript (with Alt: subscript); again: back.
+    if (ctrl && shift) {
+        const T::Look at = T::look_at(s, a != b ? a : a > 0 ? T::prev_char(s.text, a) : 0);
+        ContextStrip::TextOpts o = m_strip.text();
+        std::string what;
+        if (k == GDK_KEY_K || k == GDK_KEY_k) { o.caps = *at.caps == 1 ? 0 : 1; what = "caps"; }
+        else if (k == GDK_KEY_H || k == GDK_KEY_h) { o.caps = *at.caps == 2 ? 0 : 2; what = "caps"; }
+        else if (k == GDK_KEY_plus || k == GDK_KEY_equal) {
+            const int want = alt ? 2 : 1;
+            o.position = *at.position == want ? 0 : want;
+            what = "position";
+        }
+        if (!what.empty()) {
+            m_strip.show_text(o);
+            on_text_style(what);
+            return true;
+        }
+    }
     if (ctrl && !alt) {
         switch (k) {
             case GDK_KEY_a: case GDK_KEY_A:
@@ -423,11 +485,12 @@ void Shell::on_text(CanvasView::TextAt at, double x, double y, bool shift) {
             const auto l = m_doc.get(m_te.id);
             const double pad = 6 / std::max(0.01, m_canvas.zoom());
             // s047: a box's handle -- resize it (inside the visit: one step with it)
-            if (l && l->text && !l->text->point()) {
+            if (l && l->text) {   // s048: point type's too (they scale it)
                 const int h = text_handle_at(*l->text, x, y);
                 if (h >= 0) {
                     m_te.handle = h;
                     m_te.hspec = *l->text;
+                    m_te.hshift = shift;
                     return;
                 }
             }
@@ -473,6 +536,35 @@ void Shell::on_text(CanvasView::TextAt at, double x, double y, bool shift) {
         return;
     }
     if (at == At::Drag) {
+        if (m_te.on && m_te.handle >= 0 && m_te.hspec.point()) {
+            // s048: point type -- scaled about the opposite handle, in text space.
+            // A corner keeps the proportions (Shift: free); a side stretches.
+            const T::Spec& s0 = m_te.hspec;
+            const auto f = T::frame(s0);
+            const auto t0 = T::to_text(s0, f[0].x, f[0].y), t2 = T::to_text(s0, f[2].x, f[2].y);
+            const double x0 = std::min(t0.x, t2.x), x1 = std::max(t0.x, t2.x), y0 = std::min(t0.y, t2.y), y1 = std::max(t0.y, t2.y);
+            const int h = m_te.handle;   // 0 TL, 1 T, 2 TR, 3 R, 4 BR, 5 B, 6 BL, 7 L
+            const double hx = (h == 0 || h == 6 || h == 7) ? x0 : (h == 2 || h == 3 || h == 4) ? x1 : (x0 + x1) / 2;
+            const double hy = (h == 0 || h == 1 || h == 2) ? y0 : (h == 4 || h == 5 || h == 6) ? y1 : (y0 + y1) / 2;
+            const double px = (h == 0 || h == 6 || h == 7) ? x1 : (h == 2 || h == 3 || h == 4) ? x0 : (x0 + x1) / 2;
+            const double py = (h == 0 || h == 1 || h == 2) ? y1 : (h == 4 || h == 5 || h == 6) ? y0 : (y0 + y1) / 2;
+            const auto p = T::to_text(s0, x, y);
+            const bool corner = h % 2 == 0, sideways = h == 3 || h == 7, upright = h == 1 || h == 5;
+            double sx = 1, sy = 1;
+            if (!upright && std::abs(hx - px) > 1e-6) sx = (p.x - px) / (hx - px);
+            if (!sideways && std::abs(hy - py) > 1e-6) sy = (p.y - py) / (hy - py);
+            if (corner && !m_te.hshift && !shift) {   // proportional: the pointer projected on the diagonal
+                const double dx = hx - px, dy = hy - py, d2 = dx * dx + dy * dy;
+                const double k = d2 > 1e-9 ? ((p.x - px) * dx + (p.y - py) * dy) / d2 : 1;
+                sx = sy = k;
+            }
+            sx = std::max(0.02, sx);
+            sy = std::max(0.02, sy);
+            L::set_text(m_journal, m_doc, m_te.id, T::scaled(s0, sx, sy, px, py), "Scale Type", "text:scale");
+            m_te.blink = true;
+            text_show();
+            return;
+        }
         if (m_te.on && m_te.handle >= 0) {
             T::Spec s = m_te.hspec;
             const auto p = T::to_text(s, x, y);
@@ -524,6 +616,8 @@ void Shell::on_text(CanvasView::TextAt at, double x, double y, bool shift) {
     s.align = static_cast<T::Align>(std::clamp(o.align, 0, 3));
     s.tracking = o.tracking;
     s.leading = o.leading;
+    s.hyphenate = o.hyphenate;   // s048
+    s.lang = o.lang;
     if (m_te.boxing) {
         s.x = std::min(m_te.px, x);
         s.y = std::min(m_te.py, y);

@@ -1,5 +1,6 @@
 #include "ContextStrip.hpp"
 #include "core/Patterns.hpp"   // s033: the texture's patterns
+#include "text/Hyphen.hpp"     // s048: the hyphenation languages
 
 #include <glibmm/main.h>
 #include <glibmm/markup.h>
@@ -1070,6 +1071,104 @@ void ContextStrip::text_strip() {
     pop->set_child(*box);
     mb->set_popover(*pop);
     append(*mb);
+
+    // s048: the Character panel -- caps, scripts, the font's OpenType
+    // features (the selected letters, else the layer), and the layer's
+    // hyphenation and its language.
+    auto cb = Gtk::make_managed<Gtk::MenuButton>();
+    cb->set_name("strip.text.character");
+    cb->set_label("Character");
+    cb->set_tooltip_text("Caps, super- and subscript, OpenType features, hyphenation");
+    auto cpop = Gtk::make_managed<Gtk::Popover>();
+    auto cbx = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+    cbx->set_margin(10);
+    const auto heading = [&](const char* t) {
+        auto h = Gtk::make_managed<Gtk::Label>();
+        h->set_markup(std::string("<b>") + t + "</b>");
+        h->set_xalign(0.f);
+        cbx->append(*h);
+    };
+    const auto choice = [&](const char* label, const char* name, std::vector<Glib::ustring> items, int TextOpts::*f, const char* what) {
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+        auto l = Gtk::make_managed<Gtk::Label>(label);
+        l->add_css_class("dim-label");
+        l->set_hexpand(true);
+        l->set_xalign(0.f);
+        row->append(*l);
+        auto dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(items));
+        dd->set_name(name);
+        dd->set_selected(static_cast<guint>(std::clamp(m_text.*f, 0, static_cast<int>(items.size()) - 1)));
+        dd->property_selected().signal_changed().connect([this, dd, f, what] {
+            const int v = static_cast<int>(dd->get_selected());
+            if (v == m_text.*f) return;
+            m_text.*f = v;
+            m_text_signal.emit(what);
+        });
+        row->append(*dd);
+        cbx->append(*row);
+    };
+    const auto check = [&](const char* label, const char* name, const char* tip, bool TextOpts::*f, const char* what) {
+        auto c = Gtk::make_managed<Gtk::CheckButton>(label);
+        c->set_name(name);
+        c->set_tooltip_text(tip);
+        c->set_active(m_text.*f);
+        c->signal_toggled().connect([this, c, f, what] {
+            if (c->get_active() == m_text.*f) return;
+            m_text.*f = c->get_active();
+            m_text_signal.emit(what);
+        });
+        cbx->append(*c);
+    };
+    heading("Letters");
+    choice("Caps", "strip.text.caps", {"As typed", "All Caps", "Small Caps"}, &TextOpts::caps, "caps");
+    choice("Position", "strip.text.position", {"Normal", "Superscript", "Subscript"}, &TextOpts::position, "position");
+    heading("OpenType");
+    check("Ligatures", "strip.text.liga", "The font's standard ligatures (fi, fl)", &TextOpts::ligatures, "ligatures");
+    check("Discretionary ligatures", "strip.text.dlig", "The font's rarer ligatures (ct, st), where it has them", &TextOpts::dlig, "dlig");
+    check("Font kerning", "strip.text.fkern", "The font's own pair kerning (off: the letters' plain widths)", &TextOpts::font_kern, "font_kern");
+    choice("Figures", "strip.text.figures", {"The font's", "Lining", "Oldstyle"}, &TextOpts::figures, "figures");
+    choice("Figure width", "strip.text.figspace", {"The font's", "Proportional", "Tabular"}, &TextOpts::fig_space, "fig_space");
+    check("Fractions", "strip.text.frac", "1/2 set as a fraction, where the font can", &TextOpts::frac, "frac");
+    check("Ordinals", "strip.text.ordn", "1st, 2nd with raised letters, where the font can", &TextOpts::ordn, "ordn");
+    check("Swashes", "strip.text.swsh", "The font's swash letters, where it has them", &TextOpts::swsh, "swsh");
+    heading("Paragraph");
+    check("Hyphenate (box type)", "strip.text.hyphenate", "Break long words at their hyphenation points", &TextOpts::hyphenate, "hyphenate");
+    {
+        const auto& langs = text::hyphen_languages();
+        std::vector<Glib::ustring> names;
+        guint at = 0;
+        for (std::size_t i = 0; i < langs.size(); ++i) {
+            names.emplace_back(langs[i].name);
+            if (m_text.lang == langs[i].code) at = static_cast<guint>(i);
+        }
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+        auto l = Gtk::make_managed<Gtk::Label>("Language");
+        l->add_css_class("dim-label");
+        l->set_hexpand(true);
+        l->set_xalign(0.f);
+        row->append(*l);
+        auto dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(names));
+        dd->set_name("strip.text.lang");
+        dd->set_tooltip_text("The language its words hyphenate by");
+        dd->set_selected(at);
+        dd->property_selected().signal_changed().connect([this, dd] {
+            const auto& ls = text::hyphen_languages();
+            const auto i = dd->get_selected();
+            if (i >= ls.size() || m_text.lang == ls[i].code) return;
+            m_text.lang = ls[i].code;
+            m_text_signal.emit("lang");
+        });
+        row->append(*dd);
+        cbx->append(*row);
+    }
+    auto keys = Gtk::make_managed<Gtk::Label>("Ctrl+Shift+K All Caps · Ctrl+Shift+H Small Caps\nCtrl+Shift+= Superscript · Ctrl+Alt+Shift+= Subscript");
+    keys->add_css_class("dim-label");
+    keys->add_css_class("caption");
+    keys->set_xalign(0.f);
+    cbx->append(*keys);
+    cpop->set_child(*cbx);
+    cb->set_popover(*cpop);
+    append(*cb);
 }
 
 }  // namespace klimt

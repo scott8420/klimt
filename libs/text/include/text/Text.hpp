@@ -43,11 +43,26 @@ struct Look {
     std::optional<double>               kern;       // 1/1000 em AFTER each of its characters (Composix s265)
     std::optional<bool>                 underline;
     std::optional<bool>                 strike;
+    // s048: the rest of Composix's add_look (s260, s264)
+    std::optional<int>                  caps;       // 0 as typed, 1 ALL CAPS, 2 small caps
+    std::optional<int>                  position;   // 0 normal, 1 superscript, 2 subscript
+    std::optional<bool>                 ligatures;  // the font's standard ligatures (on by default)
+    std::optional<bool>                 dlig;       // discretionary ligatures
+    std::optional<int>                  figures;    // 0 the font's, 1 lining, 2 oldstyle
+    std::optional<int>                  fig_space;  // 0 the font's, 1 proportional, 2 tabular
+    std::optional<bool>                 frac, ordn, swsh;   // fractions, ordinals, swashes
+    std::optional<bool>                 font_kern;  // the font's own kerning (on by default)
     bool empty() const { return *this == Look{}; }
     bool operator==(const Look&) const = default;
 };
 // Which field -- for clearing one from every run (a whole-layer change).
-enum class Field : std::uint8_t { Family, Weight, Italic, Stretch, Size, Colour, Tracking, Shift, Kern, Underline, Strike };
+enum class Field : std::uint8_t { Family, Weight, Italic, Stretch, Size, Colour, Tracking, Shift, Kern, Underline, Strike,
+                                  Caps, Position, Ligatures, Dlig, Figures, FigSpace, Frac, Ordn, Swsh, FontKern };
+// s048: super- and subscript, as Composix (InDesign's): this much of the size,
+// raised / lowered this much of it.
+constexpr double kScriptSize = 0.583, kSuperRise = 0.333, kSubDrop = 0.333;
+// s048: a look's OpenType features as HarfBuzz settings ("liga=0,onum=1"); "" none.
+std::string ot_settings(const Look& k);
 // `top`'s set fields over `under`'s.
 Look over(Look under, const Look& top);
 // A look over [start, end) bytes of the text, on character boundaries.
@@ -68,6 +83,10 @@ struct Spec {
     Align       align  = Align::Left;
     double      tracking = 0;         // 1/1000 em between letters (Photoshop's tracking)
     double      leading  = 0;         // line pitch in px; 0 = the font's own (auto)
+    // s048: box type breaks words at their hyphenation points (Composix's
+    // Liang patterns, text/Hyphen.hpp) in this language ("en-US", "de", ...).
+    bool        hyphenate = false;
+    std::string lang = "en-US";
     double      x = 0, y = 0;         // the anchor (point) or the box's top-left
     double      box_w = 0, box_h = 0; // 0: point text
     std::array<double, 6> m{1, 0, 0, 1, 0, 0};   // text -> image: (a b c d e f), x' = a x + c y + e, y' = b x + d y + f
@@ -94,6 +113,10 @@ Spec normalised(Spec s);
 Spec folded(Spec s);
 // The matrix `a` composed in front of the Spec's (image' = a(image)).
 Spec mapped(Spec s, const std::array<double, 6>& a);
+// s048: scaled by (sx, sy) about the TEXT-space point (px, py) -- point
+// type's handles. Uniform: into the size (folded, when the matrix allows);
+// otherwise the matrix holds it (the type stays live, stretched).
+Spec scaled(Spec s, double sx, double sy, double px, double py);
 
 // ── runs (s047) ─────────────────────────────────────────────────────────────
 // Every setting of the character at byte `index` (the Spec's under its run):

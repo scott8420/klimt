@@ -1,5 +1,6 @@
 // libs/text -- setting a Spec with Pango + Cairo (s046). See text/Text.hpp.
 #include "text/Text.hpp"
+#include "text/Hyphen.hpp"
 
 #include <pango/pangocairo.h>
 
@@ -56,6 +57,13 @@ struct Laid {
     // centred in it. Layout px, from the layout's top (0) down. `dy` takes a
     // Pango y on this line to the placed y; [py0, py1) is Pango's own band.
     std::vector<Placed> lines;
+    // s048: the text Pango lays out -- the Spec's, with a soft hyphen (U+00AD)
+    // at each place a word may break when the box hyphenates -- and the byte
+    // maps between the two (empty: the same text).
+    std::string      lt;
+    std::vector<int> fw, bk;   // Spec byte -> layout byte; layout byte -> Spec byte
+    int to_lt(int i) const { return fw.empty() ? i : fw[static_cast<std::size_t>(std::clamp(i, 0, static_cast<int>(fw.size()) - 1))]; }
+    int to_sp(int i) const { return bk.empty() ? i : bk[static_cast<std::size_t>(std::clamp(i, 0, static_cast<int>(bk.size()) - 1))]; }
     Laid() = default;
     Laid(const Laid&) = delete;
     Laid& operator=(const Laid&) = delete;
@@ -130,13 +138,13 @@ void kern_fixup(PangoLayout* l, const std::vector<KernAt>& ks) {
 // s047: the runs as Pango attributes over the Spec's own (Composix's
 // apply_runs + add_look: later attributes win). Tracking is per em of the
 // character's own size, so a run with a size carries the letter spacing again.
-std::vector<KernAt> add_runs(const Spec& s, PangoAttrList* at) {
+std::vector<KernAt> add_runs(const Spec& s, const Laid& L, PangoAttrList* at) {
     std::vector<KernAt> kerns;
     for (const Run& r : s.runs) {
         const Look& k = r.look;
         const auto add = [&](PangoAttribute* x) {
-            x->start_index = static_cast<guint>(r.start);
-            x->end_index = static_cast<guint>(r.end);
+            x->start_index = static_cast<guint>(L.to_lt(r.start));
+            x->end_index = static_cast<guint>(L.to_lt(r.end));
             pango_attr_list_insert(at, x);
         };
         if (k.family) add(pango_attr_family_new(k.family->c_str()));
@@ -149,8 +157,16 @@ std::vector<KernAt> add_runs(const Spec& s, PangoAttrList* at) {
         const int total = track + (k.kern ? static_cast<int>(std::lround(*k.kern / 1000.0 * size * kS)) : 0);
         if (k.size || k.tracking || k.kern) add(pango_attr_letter_spacing_new(total));
         if (k.kern && *k.kern != 0)
-            for (int i = r.start; i < r.end; i = next_char(s.text, i)) kerns.push_back({i, total, track});
-        if (k.shift) add(pango_attr_rise_new(static_cast<int>(std::lround(*k.shift * kS))));
+            for (int i = r.start; i < r.end; i = next_char(s.text, i)) kerns.push_back({L.to_lt(i), total, track});
+        // s048: super- / subscript (a smaller size, raised or lowered, over any shift)
+        const double rise = k.shift.value_or(0) + (k.position == 1 ? kSuperRise * size : k.position == 2 ? -kSubDrop * size : 0.0);
+        if (rise != 0) add(pango_attr_rise_new(static_cast<int>(std::lround(rise * kS))));
+        if (k.position && *k.position != 0) add(pango_attr_scale_new(kScriptSize));
+        if (k.caps == 2) add(pango_attr_variant_new(PANGO_VARIANT_SMALL_CAPS));
+#if PANGO_VERSION_CHECK(1, 50, 0)
+        if (k.caps == 1) add(pango_attr_text_transform_new(PANGO_TEXT_TRANSFORM_UPPERCASE));
+#endif
+        if (const auto f = ot_settings(k); !f.empty()) add(pango_attr_font_features_new(f.c_str()));
         if (k.underline) add(pango_attr_underline_new(*k.underline ? PANGO_UNDERLINE_SINGLE : PANGO_UNDERLINE_NONE));
         if (k.strike) add(pango_attr_strikethrough_new(*k.strike ? TRUE : FALSE));
         if (k.colour) {
@@ -159,6 +175,46 @@ std::vector<KernAt> add_runs(const Spec& s, PangoAttrList* at) {
         }
     }
     return kerns;
+}
+
+// s048: hyphenation. Box type that hyphenates gets a soft hyphen (U+00AD)
+// at each place Liang's patterns let a word break: Pango breaks there when
+// the line needs it and draws the hyphen only then. Words of fewer than
+// kShortest letters stay whole (Photoshop's "Words Longer Than" 5).
+constexpr int kShortest = 6;
+void hyphenate_into(const Spec& s, Laid& L) {
+    L.lt = s.text;
+    L.fw.clear();
+    L.bk.clear();
+    if (s.point() || !s.hyphenate || s.text.empty()) return;
+    std::vector<int> at;   // Spec bytes a soft hyphen goes before
+    const int n = static_cast<int>(s.text.size());
+    int i = 0;
+    while (i < n) {
+        const gunichar c = g_utf8_get_char(s.text.c_str() + i);
+        if (!g_unichar_isalpha(c)) { i = next_char(s.text, i); continue; }
+        int j = i, letters = 0;
+        while (j < n && g_unichar_isalpha(g_utf8_get_char(s.text.c_str() + j))) { j = next_char(s.text, j); ++letters; }
+        if (letters >= kShortest)
+            for (int p : hyphen_points(std::string_view(s.text).substr(static_cast<std::size_t>(i), static_cast<std::size_t>(j - i)), -1, -1, s.lang))
+                if (p > 0 && p < j - i) at.push_back(i + p);
+        i = j;
+    }
+    if (at.empty()) return;
+    static const std::string kShy = "\xC2\xAD";
+    L.lt.clear();
+    L.fw.assign(static_cast<std::size_t>(n) + 1, 0);
+    L.bk.clear();
+    std::size_t k = 0;
+    for (int b = 0; b <= n; ++b) {
+        if (k < at.size() && at[k] == b) {   // the hyphen's two bytes map to the break's place
+            for (char ch : kShy) { L.lt += ch; L.bk.push_back(b); }
+            ++k;
+        }
+        L.fw[static_cast<std::size_t>(b)] = static_cast<int>(L.lt.size());
+        L.bk.push_back(b);
+        if (b < n) L.lt += s.text[static_cast<std::size_t>(b)];
+    }
 }
 
 // s047: Composix's leading (layout::leading_of): the Spec's, else 1.2 x the
@@ -184,8 +240,8 @@ void place(const Spec& s, Laid& L) {
         const LineBox lb = line_box(ln);   // its rise left out
         const double asc = lb.asc, h = lb.h;
         Placed p;
-        p.start = ln->start_index;
-        p.end = ln->start_index + ln->length;
+        p.start = L.to_sp(ln->start_index);
+        p.end = L.to_sp(ln->start_index + ln->length);
         p.top = top;
         p.lead = lead_of(s, line_size(s, p.start, p.end));
         p.base = top + (p.lead - h) / 2 + asc;
@@ -233,14 +289,15 @@ void lay_out(const Spec& s0, Laid& L) {
     pango_layout_set_font_description(L.lay, fd);
     pango_font_description_free(fd);
 
+    hyphenate_into(s, L);   // s048: before the runs (their bytes go through its map)
     PangoAttrList* at = pango_attr_list_new();
     if (s.tracking != 0)
         pango_attr_list_insert(at, pango_attr_letter_spacing_new(static_cast<int>(std::lround(s.tracking / 1000.0 * s.size * kS))));
-    const auto kerns = add_runs(s, at);
+    const auto kerns = add_runs(s, L, at);
     pango_layout_set_attributes(L.lay, at);
     pango_attr_list_unref(at);
 
-    pango_layout_set_text(L.lay, s.text.c_str(), static_cast<int>(s.text.size()));
+    pango_layout_set_text(L.lay, L.lt.c_str(), static_cast<int>(L.lt.size()));
     L.len = static_cast<int>(s.text.size());
     const PangoAlignment pa = s.align == Align::Center ? PANGO_ALIGN_CENTER
                             : s.align == Align::Right  ? PANGO_ALIGN_RIGHT : PANGO_ALIGN_LEFT;
@@ -362,6 +419,7 @@ Spec normalised(Spec s) {
         g_free(v);
     }
     if (s.family.empty()) s.family = "Sans";
+    if (s.lang.empty()) s.lang = "en-US";   // s048
     // s047: the runs -- on character boundaries, in range, in order, not
     // overlapping; a field the same as the Spec's dropped; an empty look
     // dropped; neighbours with one look joined.
@@ -385,6 +443,17 @@ Spec normalised(Spec s) {
         if (k.kern) { if (!std::isfinite(*k.kern) || *k.kern == 0) k.kern.reset(); else k.kern = std::clamp(*k.kern, -1000.0, 5000.0); }
         if (k.shift) { if (!std::isfinite(*k.shift) || *k.shift == 0) k.shift.reset(); else k.shift = std::clamp(*k.shift, -5000.0, 5000.0); }
         if (k.underline && !*k.underline) k.underline.reset();
+        // s048: a setting that is the default is no setting
+        if (k.caps) { k.caps = std::clamp(*k.caps, 0, 2); if (*k.caps == 0) k.caps.reset(); }
+        if (k.position) { k.position = std::clamp(*k.position, 0, 2); if (*k.position == 0) k.position.reset(); }
+        if (k.ligatures && *k.ligatures) k.ligatures.reset();
+        if (k.font_kern && *k.font_kern) k.font_kern.reset();
+        if (k.dlig && !*k.dlig) k.dlig.reset();
+        if (k.figures) { k.figures = std::clamp(*k.figures, 0, 2); if (*k.figures == 0) k.figures.reset(); }
+        if (k.fig_space) { k.fig_space = std::clamp(*k.fig_space, 0, 2); if (*k.fig_space == 0) k.fig_space.reset(); }
+        if (k.frac && !*k.frac) k.frac.reset();
+        if (k.ordn && !*k.ordn) k.ordn.reset();
+        if (k.swsh && !*k.swsh) k.swsh.reset();
         if (k.strike && !*k.strike) k.strike.reset();
         if (k.colour) {
             for (float& c : *k.colour) c = std::isfinite(c) ? std::clamp(c, 0.f, 1.f) : 0.f;
@@ -427,6 +496,13 @@ Spec mapped(Spec s, const std::array<double, 6>& a) {
     return folded(s);
 }
 
+Spec scaled(Spec s, double sx, double sy, double px, double py) {
+    if (!(std::abs(sx) > 1e-6) || !(std::abs(sy) > 1e-6) || !std::isfinite(sx) || !std::isfinite(sy)) return s;
+    const M sc{sx, 0, 0, sy, px - sx * px, py - sy * py};   // about (px, py)
+    s.m = compose(s.m, sc);
+    return folded(s);
+}
+
 // ── runs (s047) ─────────────────────────────────────────────────────────────
 Look over(Look u, const Look& t) {
     if (t.family) u.family = t.family;
@@ -440,7 +516,31 @@ Look over(Look u, const Look& t) {
     if (t.kern) u.kern = t.kern;
     if (t.underline) u.underline = t.underline;
     if (t.strike) u.strike = t.strike;
+    if (t.caps) u.caps = t.caps;
+    if (t.position) u.position = t.position;
+    if (t.ligatures) u.ligatures = t.ligatures;
+    if (t.dlig) u.dlig = t.dlig;
+    if (t.figures) u.figures = t.figures;
+    if (t.fig_space) u.fig_space = t.fig_space;
+    if (t.frac) u.frac = t.frac;
+    if (t.ordn) u.ordn = t.ordn;
+    if (t.swsh) u.swsh = t.swsh;
+    if (t.font_kern) u.font_kern = t.font_kern;
     return u;
+}
+
+std::string ot_settings(const Look& k) {   // Composix's (s264), over the font's defaults
+    std::string out;
+    const auto put = [&](const char* tag, int v) { out += (out.empty() ? "" : ",") + std::string(tag) + "=" + std::to_string(v); };
+    if (k.ligatures && !*k.ligatures) { put("liga", 0); put("clig", 0); }
+    if (k.font_kern && !*k.font_kern) put("kern", 0);
+    if (k.figures && *k.figures) { put("lnum", *k.figures == 1); put("onum", *k.figures == 2); }
+    if (k.fig_space && *k.fig_space) { put("pnum", *k.fig_space == 1); put("tnum", *k.fig_space == 2); }
+    if (k.dlig && *k.dlig) put("dlig", 1);
+    if (k.frac && *k.frac) put("frac", 1);
+    if (k.ordn && *k.ordn) put("ordn", 1);
+    if (k.swsh && *k.swsh) put("swsh", 1);
+    return out;
 }
 
 namespace {
@@ -464,6 +564,14 @@ Look look_at(const Spec& s0, int index) {
     base.kern = 0.0;
     base.underline = false;
     base.strike = false;
+    base.caps = 0;
+    base.position = 0;
+    base.ligatures = true;
+    base.dlig = false;
+    base.figures = 0;
+    base.fig_space = 0;
+    base.frac = base.ordn = base.swsh = false;
+    base.font_kern = true;
     const int n = static_cast<int>(s.text.size());
     if (n == 0) return base;
     index = std::clamp(index, 0, n);
@@ -510,6 +618,16 @@ Spec without(Spec s, Field f) {
             case Field::Kern: k.kern.reset(); break;
             case Field::Underline: k.underline.reset(); break;
             case Field::Strike: k.strike.reset(); break;
+            case Field::Caps: k.caps.reset(); break;
+            case Field::Position: k.position.reset(); break;
+            case Field::Ligatures: k.ligatures.reset(); break;
+            case Field::Dlig: k.dlig.reset(); break;
+            case Field::Figures: k.figures.reset(); break;
+            case Field::FigSpace: k.fig_space.reset(); break;
+            case Field::Frac: k.frac.reset(); break;
+            case Field::Ordn: k.ordn.reset(); break;
+            case Field::Swsh: k.swsh.reset(); break;
+            case Field::FontKern: k.font_kern.reset(); break;
         }
     }
     return normalised(s);
@@ -646,7 +764,7 @@ Caret caret(const Spec& s, int index) {
     const Spec n = normalised(s);
     index = clamp_index(n.text, index);
     PangoRectangle strong;
-    pango_layout_get_cursor_pos(L.lay, index, &strong, nullptr);
+    pango_layout_get_cursor_pos(L.lay, L.to_lt(index), &strong, nullptr);
     const double dy = L.lines[static_cast<std::size_t>(line_at_pango_y(L.lines, (strong.y + strong.height / 2.0) / kS))].dy;
     const P a = L.to_image(strong.x / kS, strong.y / kS + dy);
     const P b = L.to_image(strong.x / kS, (strong.y + strong.height) / kS + dy);
@@ -663,7 +781,7 @@ int index_at(const Spec& s, double x, double y) {
     const double py = (L.lines[k].py0 + L.lines[k].py1) / 2;
     int idx = 0, trailing = 0;
     pango_layout_xy_to_index(L.lay, static_cast<int>(std::lround(p.x * kS)), static_cast<int>(std::lround(py * kS)), &idx, &trailing);
-    return clamp_index(n.text, forward_chars(n.text, idx, trailing));
+    return clamp_index(n.text, L.to_sp(forward_chars(L.lt, idx, trailing)));
 }
 
 int step(const Spec& s, int index, int dir) {
@@ -671,11 +789,18 @@ int step(const Spec& s, int index, int dir) {
     lay_out(s, L);
     const Spec n = normalised(s);
     index = clamp_index(n.text, index);
-    int ni = index, tr = 0;
-    pango_layout_move_cursor_visually(L.lay, TRUE, index, 0, dir < 0 ? -1 : 1, &ni, &tr);
-    if (ni < 0) return 0;
-    if (ni >= L.len || ni == G_MAXINT) return L.len;
-    return clamp_index(n.text, forward_chars(n.text, ni, tr));
+    const int len = static_cast<int>(L.lt.size());
+    int li = L.to_lt(index);
+    for (int guard = 0; guard < 8; ++guard) {   // a soft hyphen is a stop Pango has and the text doesn't: step past it
+        int ni = li, tr = 0;
+        pango_layout_move_cursor_visually(L.lay, TRUE, li, 0, dir < 0 ? -1 : 1, &ni, &tr);
+        if (ni < 0) return 0;
+        if (ni >= len || ni == G_MAXINT) return L.len;
+        li = forward_chars(L.lt, ni, tr);
+        const int out = clamp_index(n.text, L.to_sp(li));
+        if (out != index) return out;
+    }
+    return index;
 }
 
 int line_step(const Spec& s, int index, int dir) {
@@ -688,11 +813,11 @@ int line_step(const Spec& s, int index, int dir) {
     if (k < 0) return 0;
     if (k >= static_cast<int>(b.size())) return L.len;
     PangoRectangle strong;
-    pango_layout_get_cursor_pos(L.lay, index, &strong, nullptr);
+    pango_layout_get_cursor_pos(L.lay, L.to_lt(index), &strong, nullptr);
     const double ym = (b[static_cast<std::size_t>(k)].py0 + b[static_cast<std::size_t>(k)].py1) / 2;
     int idx = 0, tr = 0;
     pango_layout_xy_to_index(L.lay, strong.x, static_cast<int>(std::lround(ym * kS)), &idx, &tr);
-    return clamp_index(n.text, forward_chars(n.text, idx, tr));
+    return clamp_index(n.text, L.to_sp(forward_chars(L.lt, idx, tr)));
 }
 
 int line_home(const Spec& s, int index) {
@@ -721,8 +846,8 @@ int word_step(const Spec& s, int index, int dir) {
     index = clamp_index(n.text, index);
     int na = 0;
     const PangoLogAttr* la = pango_layout_get_log_attrs_readonly(L.lay, &na);
-    const char* base = n.text.c_str();
-    int c = static_cast<int>(g_utf8_pointer_to_offset(base, base + index));
+    const char* base = L.lt.c_str();   // Pango's characters (soft hyphens in)
+    int c = static_cast<int>(g_utf8_pointer_to_offset(base, base + L.to_lt(index)));
     const int chars = na - 1;   // na = chars + 1
     if (dir > 0) {
         for (++c; c < chars && !la[c].is_word_end; ++c) {}
@@ -731,7 +856,7 @@ int word_step(const Spec& s, int index, int dir) {
         for (--c; c > 0 && !la[c].is_word_start; --c) {}
         c = std::max(c, 0);
     }
-    return static_cast<int>(g_utf8_offset_to_pointer(base, c) - base);
+    return clamp_index(n.text, L.to_sp(static_cast<int>(g_utf8_offset_to_pointer(base, c) - base)));
 }
 
 std::vector<std::array<Box, 4>> range(const Spec& s, int a, int b) {
@@ -748,14 +873,14 @@ std::vector<std::array<Box, 4>> range(const Spec& s, int a, int b) {
         const bool runs_on = b > ln.end;   // the selection carries past this line's end
         if (lo > hi || (lo == hi && !runs_on)) continue;
         PangoRectangle p0, p1;
-        pango_layout_index_to_pos(L.lay, lo, &p0);
+        pango_layout_index_to_pos(L.lay, L.to_lt(lo), &p0);
         double x0 = p0.x / kS, x1;
         if (hi >= ln.end) {
             PangoRectangle pe;
-            pango_layout_get_cursor_pos(L.lay, ln.end, &pe, nullptr);
+            pango_layout_get_cursor_pos(L.lay, L.to_lt(ln.end), &pe, nullptr);
             x1 = pe.x / kS + (runs_on ? n.size * 0.25 : 0);   // a sliver for the line break
         } else {
-            pango_layout_index_to_pos(L.lay, hi, &p1);
+            pango_layout_index_to_pos(L.lay, L.to_lt(hi), &p1);
             x1 = p1.x / kS;
         }
         if (x1 < x0) std::swap(x0, x1);

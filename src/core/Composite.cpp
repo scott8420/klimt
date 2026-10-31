@@ -7,6 +7,9 @@
 #include "core/Live.hpp"   // s018
 
 #include <algorithm>
+#include <map>
+#include <thread>
+#include <atomic>
 #include <cmath>
 
 namespace klimt::core {
@@ -764,13 +767,47 @@ std::optional<Reduced> reduced(const Image& im, const Layers& layers, int k, Red
         if (!m) return nullptr;
         return cache ? cache->get(m, k) : std::make_shared<const pixel::TileMap>(reduced_map(*m, k));
     };
+    // s048: every map (pixels, masks) reduced on all the cores at once --
+    // the cores take maps as they free up (a map shared by two layers once).
+    std::vector<std::shared_ptr<const pixel::TileMap>> todo;
+    {
+        std::set<const pixel::TileMap*> seen;
+        for (const auto& [id, l0] : layers)
+            for (const auto* m : {&l0.pixels, &l0.mask, &l0.filter_mask})
+                if (*m && seen.insert(m->get()).second) todo.push_back(*m);
+    }
+    std::map<const pixel::TileMap*, std::shared_ptr<const pixel::TileMap>> done;
+    {
+        std::vector<std::shared_ptr<const pixel::TileMap>> got(todo.size());
+        std::atomic<std::size_t> take{0};
+        const auto work = [&] {
+            for (std::size_t i = take++; i < todo.size(); i = take++) {
+                if (cancelled && cancelled()) return;
+                got[i] = red(todo[i]);
+            }
+        };
+        const unsigned nt = static_cast<unsigned>(std::min<std::size_t>(todo.size(), std::max(1u, std::thread::hardware_concurrency())));
+        if (nt <= 1) work();
+        else {
+            std::vector<std::thread> pool;
+            for (unsigned t = 0; t < nt; ++t) pool.emplace_back(work);
+            for (auto& th : pool) th.join();
+        }
+        if (cancelled && cancelled()) return std::nullopt;
+        for (std::size_t i = 0; i < todo.size(); ++i) done[todo[i].get()] = got[i];
+    }
+    const auto take_of = [&](const std::shared_ptr<const pixel::TileMap>& m) -> std::shared_ptr<const pixel::TileMap> {
+        if (!m) return nullptr;
+        const auto it = done.find(m.get());
+        return it == done.end() ? red(m) : it->second;
+    };
     const double s = 1.0 / f;
     for (const auto& [id, l0] : layers) {
         if (cancelled && cancelled()) return std::nullopt;
         Layer l = l0;
-        l.pixels = red(l0.pixels);
-        l.mask = red(l0.mask);
-        l.filter_mask = red(l0.filter_mask);
+        l.pixels = take_of(l0.pixels);
+        l.mask = take_of(l0.mask);
+        l.filter_mask = take_of(l0.filter_mask);
         if (l.path) l.path = std::make_shared<const path::Path>(path::mapped(*l.path, [s](path::P q) { return path::P{q.x * s, q.y * s}; }));
         if (l.hints) l.hints = nullptr;   // Isolate's strokes draw nothing
         r.layers.emplace(id, std::move(l));
