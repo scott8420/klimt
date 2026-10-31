@@ -17,6 +17,8 @@
 //     and each named verb is set() of a pure result.
 #include "core/Document.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -92,6 +94,43 @@ std::optional<pixel::TileMap> wand_mask(const pixel::TileMap& src, const pixel::
 // axis-aligned segments on pixel edges, merged into runs. Image coords.
 struct Seg { int x0, y0, x1, y1; };
 std::vector<Seg> outline(const pixel::TileMap& m);
+
+// ── s049: the ants at the view's zoom, culled to the view (WEAKNESSES 25) ──
+// A big, ragged selection (a Wand on noise) is hundreds of thousands of
+// pixel-edge segments; the canvas redraws its ants every 120 ms. Two cuts:
+//   * TRACED AT THE ZOOM: at 1/2^level the mask is pooled into 2^level
+//     blocks -- a block is ON when ANY pixel in it is (>= half), so a thin
+//     sliver never vanishes -- and that grid is outlined, scaled back up.
+//     ants_level(zoom) picks the level whose block is at most a screen
+//     pixel, so the ants are where the full-size ones would be, to a pixel.
+//     Level 0 is outline() itself.
+//   * CULLED PER CELL: the segments are cut at `cell`-px boundaries and
+//     bucketed, so a frame visits only the cells on screen.
+struct Ants {
+    int level = 0;                       // traced at 1/2^level
+    int cell = 256;                      // a bucket's side, image px
+    int cols = 0, rows = 0;              // buckets
+    std::vector<Seg> segs;               // bucket by bucket
+    std::vector<std::uint32_t> first;    // cols * rows + 1 offsets into segs
+    std::size_t size() const { return segs.size(); }
+    bool empty() const { return segs.empty(); }
+    // Each segment of every bucket the image rectangle meets.
+    template <class F> void visit(const pixel::Rect& r, F&& f) const {
+        if (segs.empty() || r.empty()) return;
+        const int c0 = std::max(0, r.x / cell), r0 = std::max(0, r.y / cell);
+        const int c1 = std::min(cols - 1, (r.x + r.w) / cell), r1 = std::min(rows - 1, (r.y + r.h) / cell);
+        for (int row = r0; row <= r1; ++row)
+            for (int col = c0; col <= c1; ++col) {
+                const auto b = static_cast<std::size_t>(row) * static_cast<std::size_t>(cols) + static_cast<std::size_t>(col);
+                for (std::uint32_t i = first[b]; i < first[b + 1]; ++i) f(segs[i]);
+            }
+    }
+};
+// 0 at zoom >= 1/2; else the largest level whose 2^level image px are at
+// most one screen px (floor(log2(1 / zoom))), at most 6.
+int ants_level(double zoom);
+// The ants of a mask at a level. nullopt when cancelled.
+std::optional<Ants> ants(const pixel::TileMap& m, int level, const std::function<bool()>& cancelled = {});
 
 // ── pure: pixels through a mask ─────────────────────────────────────────────
 // Fill `colour` (straight, the layer's format) where the mask says (nullptr:

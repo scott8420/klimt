@@ -3,6 +3,7 @@
 #include "NewDialog.hpp"
 #include "core/Transfer.hpp"   // s022: place
 #include "core/Session.hpp"    // s023
+#include "core/Ora.hpp"        // s049: Export as OpenRaster
 #include <glibmm/miscutils.h>
 #include "Log.hpp"
 
@@ -232,12 +233,14 @@ void Shell::on_open() {
         auto dlg = Gtk::FileDialog::create();
         dlg->set_title("Open");
         auto filters = Gio::ListStore<Gtk::FileFilter>::create();
-        auto all = filter("Images and Klimt documents", {"klimt", "png", "jpg", "jpeg", "tif", "tiff"});
+        auto all = filter("Images and documents", {"klimt", "ora", "png", "jpg", "jpeg", "tif", "tiff", "webp"});
         filters->append(all);
         filters->append(filter("Klimt document (.klimt)", {"klimt"}));
+        filters->append(filter("OpenRaster (.ora)", {"ora"}));   // s049
         filters->append(filter("PNG", {"png"}));
         filters->append(filter("JPEG", {"jpg", "jpeg"}));
         filters->append(filter("TIFF", {"tif", "tiff"}));
+        filters->append(filter("WebP", {"webp"}));                // s049
         dlg->set_filters(filters);
         dlg->set_default_filter(all);
         if (!m_folder.empty()) dlg->set_initial_folder(Gio::File::create_for_path(m_folder));
@@ -472,11 +475,13 @@ void Shell::on_export() {
     auto dlg = Gtk::FileDialog::create();
     dlg->set_title("Export");
     auto filters = Gio::ListStore<Gtk::FileFilter>::create();
-    auto any = filter("PNG, JPEG or TIFF", {"png", "jpg", "jpeg", "tif", "tiff"});
+    auto any = filter("PNG, JPEG, TIFF, WebP or OpenRaster", {"png", "jpg", "jpeg", "tif", "tiff", "webp", "ora"});
     filters->append(any);
     filters->append(filter("PNG", {"png"}));
     filters->append(filter("JPEG", {"jpg", "jpeg"}));
     filters->append(filter("TIFF", {"tif", "tiff"}));
+    filters->append(filter("WebP", {"webp"}));                              // s049
+    filters->append(filter("OpenRaster -- layers, for Krita (.ora)", {"ora"}));   // s049
     dlg->set_filters(filters);
     dlg->set_default_filter(any);
     dlg->set_initial_name(stem_of(name_()) + ".png");
@@ -490,6 +495,8 @@ void Shell::on_export() {
         formats::Kind kind = formats::Kind::PNG;
         if (ext == ".jpg" || ext == ".jpeg") kind = formats::Kind::JPEG;
         else if (ext == ".tif" || ext == ".tiff") kind = formats::Kind::TIFF;
+        else if (ext == ".webp") kind = formats::Kind::WebP;   // s049
+        else if (ext == ".ora") kind = formats::Kind::ORA;      // s049: the layers, not a flat image
         else if (ext != ".png") path += ".png";
         const core::Image im = m_doc.image();
         auto layers = m_doc.snapshot();
@@ -497,11 +504,16 @@ void Shell::on_export() {
         m_file_job = start_job("Export " + name, [this, im, layers = std::move(layers), path, kind, name](core::Jobs::Token& t)
                                                      -> core::Jobs::Landing {
             std::string err;
-            if (!core::file::export_image(path, kind, im, layers, err, progress_of(t))) {
+            std::vector<std::string> notes;
+            const bool ok = kind == formats::Kind::ORA ? core::ora::save(path, im, layers, err, notes, progress_of(t))
+                                                       : core::file::export_image(path, kind, im, layers, err, progress_of(t));
+            if (!ok) {
                 if (t.cancelled()) return [] {};
                 return [this, name, err] { toast("Couldn't export “" + name + "”: " + err); };
             }
-            return [this, name] { toast("Exported “" + name + "”"); };
+            std::string said;
+            for (const auto& n : notes) said += (said.empty() ? " -- " : ", ") + n;
+            return [this, name, said] { toast("Exported “" + name + "”" + said); };
         });
     });
 }

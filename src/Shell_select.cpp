@@ -171,20 +171,25 @@ void Shell::queue_ants() {
         if (m_xform.active) return;   // s011: no ants while a transform's box is up
         if (m_quick_mask) { m_canvas.set_outline(nullptr); m_ants_known = false; return; }   // s016: the red shows it
         const auto sel = m_doc.selection_ptr();
-        if (m_ants_known && sel == m_ants_for) return;
+        const int level = m_canvas.ants_level();   // s049: traced at the view's zoom
+        if (m_ants_known && sel == m_ants_for && level == m_ants_level) return;
+        const bool same_mask = m_ants_known && sel == m_ants_for;
         m_ants_known = true;
         m_ants_for = sel;
+        m_ants_level = level;
         if (m_ants_job) m_jobs.cancel(m_ants_job);
         m_ants_job = 0;
         // The old ants go NOW: until the new outline lands they would show a
         // selection that no longer is (seen under ASan: an undone Wand's
-        // outline stood ~1.5 s over the selection undo had put back).
-        m_canvas.set_outline(nullptr);
+        // outline stood ~1.5 s over the selection undo had put back). s049:
+        // a new zoom level of the SAME mask keeps them -- they are still true.
+        if (!same_mask) m_canvas.set_outline(nullptr);
         if (!sel) { update_select_actions(); return; }
-        m_ants_job = m_jobs.submit("Outline", [this, sel](core::Jobs::Token& t) -> core::Jobs::Landing {
-            auto segs = std::make_shared<const std::vector<S::Seg>>(S::outline(*sel));
-            if (t.cancelled()) return [] {};
-            return [this, segs] { m_canvas.set_outline(segs); };
+        m_ants_job = m_jobs.submit("Outline", [this, sel, level](core::Jobs::Token& t) -> core::Jobs::Landing {
+            auto a = S::ants(*sel, level, [&t] { return t.cancelled(); });
+            if (!a || t.cancelled()) return [] {};
+            auto ants = std::make_shared<const S::Ants>(std::move(*a));
+            return [this, ants] { m_canvas.set_outline(ants); };
         });
         update_select_actions();
     });

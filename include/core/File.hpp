@@ -14,6 +14,8 @@
 //                    little-endian), deflated. Tiles SHARED between layers
 //                    (a duplicate) are written once and named twice.
 //   profile.icc      the colour profile, when there is one
+//   mergedimage.png  s049: the picture, 8-bit, at most 1024 a side (a preview)
+//   Thumbnails/thumbnail.png   s049: the picture at 256 (the file manager's)
 //
 // A uniform tile (one colour) is its pixel in hex in the JSON -- no file. An
 // absent tile is transparent and not mentioned. LZ4 comes with the memory
@@ -29,6 +31,10 @@
 namespace klimt::core::file {
 
 constexpr int kVersion = 1;   // document.json's "klimt": a newer one is refused
+// s049: the preview a .klimt carries -- `mergedimage.png`, the composite at
+// most this many px a side (the file manager's largest thumbnail is 1024),
+// and `Thumbnails/thumbnail.png` at 256. Written on every save; never read.
+constexpr int kPreviewSide = 1024;
 
 // A whole document: what Document::replace takes, what a save writes.
 struct Contents {
@@ -41,8 +47,8 @@ struct Contents {
     std::vector<std::string>  notes;                           // "first page of 3"
 };
 
-// Open anything Klimt reads: a .klimt, or a PNG / JPEG / TIFF as one layer
-// named "Background". The tree is checked (Document::check) before it is
+// Open anything Klimt reads: a .klimt, an OpenRaster (s049, core/Ora.hpp),
+// or a PNG / JPEG / TIFF / WebP as one layer named "Background". The tree is checked (Document::check) before it is
 // handed back; a file that breaks it is refused, in words.
 std::optional<Contents> open(const std::string& path, std::string& error, const formats::Progress& p = {});
 
@@ -64,7 +70,7 @@ std::string check(const NewSpec& s);
 Contents make_new(const NewSpec& s);
 
 // Export: the composite (what the eye sees) as one flat image, written as a
-// PNG, JPEG or TIFF. RGB only for now (the compositor is RGB); the depth is
+// PNG, JPEG, TIFF or WebP (s049). RGB only for now (the compositor is RGB); the depth is
 // the document's (PNG / JPEG cap it); alpha kept unless the file can't.
 std::optional<pixel::TileMap> flatten(const Image& im, const std::map<Document::Id, Layer>& layers,
                                       const formats::Progress& p = {});

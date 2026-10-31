@@ -702,6 +702,120 @@ std::vector<Seg> outline(const TileMap& m) {
     return out;
 }
 
+// ── s049: the ants at the view's zoom, culled per cell ──────────────────────
+int ants_level(double zoom) {
+    if (!(zoom > 0) || zoom >= 0.5) return 0;
+    int k = 0;
+    while (k < 6 && std::ldexp(zoom, k + 1) <= 1.0 + 1e-9) ++k;
+    return k;
+}
+
+namespace {
+// Runs of unit edges -> segments; then each cut at cell boundaries and
+// bucketed (counting sort).
+Ants bucketed(std::vector<Seg> segs, int level, int w, int h) {
+    Ants a;
+    a.level = level;
+    a.cell = kTile << level;
+    a.cols = std::max(1, (w + a.cell - 1) / a.cell);
+    a.rows = std::max(1, (h + a.cell - 1) / a.cell);
+    std::vector<Seg> cut;
+    cut.reserve(segs.size());
+    for (const Seg& s : segs) {
+        if (s.y0 == s.y1) {   // horizontal: cut along x
+            for (int x = s.x0; x < s.x1;) {
+                const int e = std::min(s.x1, (x / a.cell + 1) * a.cell);
+                cut.push_back({x, s.y0, e, s.y0});
+                x = e;
+            }
+        } else {
+            for (int y = s.y0; y < s.y1;) {
+                const int e = std::min(s.y1, (y / a.cell + 1) * a.cell);
+                cut.push_back({s.x0, y, s.x0, e});
+                y = e;
+            }
+        }
+    }
+    const auto bucket = [&](const Seg& s) {
+        const int col = std::min(a.cols - 1, std::min(s.x0, s.x1) / a.cell);
+        const int row = std::min(a.rows - 1, std::min(s.y0, s.y1) / a.cell);
+        return static_cast<std::size_t>(row) * static_cast<std::size_t>(a.cols) + static_cast<std::size_t>(col);
+    };
+    a.first.assign(static_cast<std::size_t>(a.cols) * static_cast<std::size_t>(a.rows) + 1, 0);
+    for (const Seg& s : cut) ++a.first[bucket(s) + 1];
+    for (std::size_t i = 1; i < a.first.size(); ++i) a.first[i] += a.first[i - 1];
+    std::vector<std::uint32_t> at(a.first.begin(), a.first.end() - 1);
+    a.segs.resize(cut.size());
+    for (const Seg& s : cut) a.segs[at[bucket(s)]++] = s;
+    return a;
+}
+
+// Unit edges of an on/off grid (gw x gh) merged into runs, scaled by `f`
+// and clamped to w x h (the last block of a row or column may be partial).
+std::vector<Seg> grid_outline(const std::vector<std::uint8_t>& g, int gw, int gh, int f, int w, int h) {
+    const auto on = [&](int x, int y) {
+        return x >= 0 && y >= 0 && x < gw && y < gh && g[static_cast<std::size_t>(y) * static_cast<std::size_t>(gw) + static_cast<std::size_t>(x)];
+    };
+    const auto X = [&](int gx) { return std::min(gx * f, w); };
+    const auto Y = [&](int gy) { return std::min(gy * f, h); };
+    std::vector<Seg> out;
+    // Horizontal edges on grid line y (between rows y-1 and y), runs along x.
+    for (int y = 0; y <= gh; ++y)
+        for (int x = 0; x < gw;) {
+            if (on(x, y - 1) == on(x, y)) { ++x; continue; }
+            int e = x + 1;
+            while (e < gw && on(e, y - 1) != on(e, y)) ++e;
+            out.push_back({X(x), Y(y), X(e), Y(y)});
+            x = e;
+        }
+    for (int x = 0; x <= gw; ++x)
+        for (int y = 0; y < gh;) {
+            if (on(x - 1, y) == on(x, y)) { ++y; continue; }
+            int e = y + 1;
+            while (e < gh && on(x - 1, e) != on(x, e)) ++e;
+            out.push_back({X(x), Y(y), X(x), Y(e)});
+            y = e;
+        }
+    return out;
+}
+}  // namespace
+
+std::optional<Ants> ants(const TileMap& m, int level, const std::function<bool()>& cancelled) {
+    const int w = m.width(), h = m.height();
+    level = std::clamp(level, 0, 6);
+    if (level == 0) {
+        auto segs = outline(m);
+        if (cancelled && cancelled()) return std::nullopt;
+        return bucketed(std::move(segs), 0, w, h);
+    }
+    // Pool: a block is on when any of its pixels is.
+    const int f = 1 << level;
+    const int gw = (w + f - 1) / f, gh = (h + f - 1) / f;
+    std::vector<std::uint8_t> g(static_cast<std::size_t>(gw) * static_cast<std::size_t>(gh), 0);
+    const auto set = [&](int bx, int by) { g[static_cast<std::size_t>(by) * static_cast<std::size_t>(gw) + static_cast<std::size_t>(bx)] = 1; };
+    for (int row = 0; row < m.rows(); ++row) {
+        if (cancelled && cancelled()) return std::nullopt;
+        for (int col = 0; col < m.cols(); ++col) {
+            const TileRef t = m.tile(col, row);
+            if (!t) continue;
+            const pixel::Rect c = live(col, row, w, h);
+            float u = 0;
+            if (uniform_value(t, u)) {
+                if (u < 0.5f) continue;
+                for (int by = c.y / f; by <= (c.y + c.h - 1) / f; ++by)
+                    for (int bx = c.x / f; bx <= (c.x + c.w - 1) / f; ++bx) set(bx, by);
+                continue;
+            }
+            for (int y = c.y; y < c.y + c.h; ++y)
+                for (int x = c.x; x < c.x + c.w; ++x)
+                    if (coverage(m, x, y) >= 0.5f) set(x / f, y / f);
+        }
+    }
+    auto segs = grid_outline(g, gw, gh, f, w, h);
+    if (cancelled && cancelled()) return std::nullopt;
+    return bucketed(std::move(segs), level, w, h);
+}
+
 // ── pixels through a mask ───────────────────────────────────────────────────
 namespace {
 // Each tile the mask holds (all tiles when no mask), through `px(old, m)`.

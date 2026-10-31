@@ -84,8 +84,14 @@ public:
 
     // ── s008: the selection on the canvas ──────────────────────────────────
     // The marching ants: the selection's outline (image coords), animated
-    // while there is one. nullptr / empty: no ants.
-    void set_outline(std::shared_ptr<const std::vector<core::select::Seg>> segs);
+    // while there is one. nullptr / empty: no ants. s049: traced at a zoom
+    // level and bucketed (core::select::Ants); a frame draws only the
+    // buckets on screen. When the zoom wants another level than the ants
+    // have, signal_ants_level fires (once, from idle) and the Shell traces
+    // again -- the old ants stay up until the new ones land.
+    void set_outline(std::shared_ptr<const core::select::Ants> ants);
+    int  ants_level() const { return core::select::ants_level(m_zoom); }
+    sigc::signal<void()>& signal_ants_level() { return m_ants_level_signal; }
     // A marquee or lasso the user finished (Select tool): its kind, its
     // points in image coords (a rectangle / ellipse: two corners), and the
     // op the modifiers at the press chose. Kind None: a click without a drag
@@ -343,7 +349,9 @@ private:
     double snap_y(double iy) const;
 
     // s008: the ants, and the shape being dragged.
-    std::shared_ptr<const std::vector<core::select::Seg>> m_ants;
+    std::shared_ptr<const core::select::Ants> m_ants;
+    int               m_ants_asked = -1;              // s049: the level last asked for
+    sigc::signal<void()> m_ants_level_signal;
     double            m_ant_phase = 0;
     sigc::connection  m_ant_timer;
     bool              m_rubber = false;               // a marquee / lasso in progress

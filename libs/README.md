@@ -12,7 +12,7 @@ Built: `pixel` (s006), `formats` (s007), `text` (s046: type on Pango + Cairo; s0
 | `pixel`   | tiles, colour depths, blend modes, compositing | -- |
 | `tint`    | colour management: ICC, CMYK, spot inks | Composix |
 | `trace`   | raster -> bezier outlines (Streamline-style) | Granjon, Curvz |
-| `formats` | PNG, JPEG, TIFF (s007); PSD, ORA, EPS, WebP, RAW to come | -- |
+| `formats` | PNG, JPEG, TIFF (s007); WebP, PNG in memory (s049); PSD, EPS, RAW to come (ORA is core's -- it needs the compositor) | -- |
 | `filters` | adjustments and effects | -- |
 | `seg`     | local models (SAM, matting, inpaint) via ONNX Runtime | -- |
 | `plate`   | PDF writer -- copied from Composix when export needs it | Composix |

@@ -543,6 +543,7 @@ private:
     // ── the ants (s008) ────────────────────────────────────────────────────
     std::shared_ptr<const pixel::TileMap> m_ants_for;   // the mask the canvas's ants are of
     bool               m_ants_known = false;
+    int                m_ants_level = -1;   // s049: the zoom level the canvas's ants are traced at
     bool               m_ants_queued = false;
     core::Jobs::Id     m_ants_job = 0;
     bool               m_closing = false;      // a close already confirmed (or saved)

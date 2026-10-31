@@ -876,8 +876,9 @@ void CanvasView::update_cursor() {
 }
 
 // ── s008: the ants ──────────────────────────────────────────────────────────
-void CanvasView::set_outline(std::shared_ptr<const std::vector<core::select::Seg>> segs) {
-    m_ants = (segs && !segs->empty()) ? std::move(segs) : nullptr;
+void CanvasView::set_outline(std::shared_ptr<const core::select::Ants> ants) {
+    m_ants = (ants && !ants->empty()) ? std::move(ants) : nullptr;
+    m_ants_asked = -1;
     // March while there is something to march: a dash step every 120 ms.
     if (m_ants && !m_ant_timer.connected())
         m_ant_timer = Glib::signal_timeout().connect([this] {
@@ -897,14 +898,25 @@ void CanvasView::draw_ants(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h
     // On whole device pixels (+0.5: a 1 px line sits on the pixel, crisp).
     const auto sx = [&](int x) { return std::round(to_screen_x(x + m_ants_dx)) + 0.5; };   // s016: + the patch's drag
     const auto sy = [&](int y) { return std::round(to_screen_y(y + m_ants_dy)) + 0.5; };
+    // s049: the zoom wants ants at another level -- ask once; keep these up.
+    const int want = ants_level();
+    if (want != m_ants->level && want != m_ants_asked) {
+        m_ants_asked = want;
+        Glib::signal_idle().connect_once([this] { m_ants_level_signal.emit(); });
+    }
+    // s049: only the buckets the view shows (image coords, the drag undone).
+    const int ix0 = static_cast<int>(std::floor(std::min(to_image_x(0), to_image_x(w)))) - m_ants_dx - 1;
+    const int iy0 = static_cast<int>(std::floor(std::min(to_image_y(0), to_image_y(h)))) - m_ants_dy - 1;
+    const int ix1 = static_cast<int>(std::ceil(std::max(to_image_x(0), to_image_x(w)))) - m_ants_dx + 1;
+    const int iy1 = static_cast<int>(std::ceil(std::max(to_image_y(0), to_image_y(h)))) - m_ants_dy + 1;
     std::size_t n = 0;
-    for (const auto& s : *m_ants) {
+    m_ants->visit({ix0, iy0, ix1 - ix0, iy1 - iy0}, [&](const core::select::Seg& s) {
         const double x0 = sx(s.x0), y0 = sy(s.y0), x1 = sx(s.x1), y1 = sy(s.y1);
-        if (std::max(x0, x1) < -1 || std::min(x0, x1) > w + 1 || std::max(y0, y1) < -1 || std::min(y0, y1) > h + 1) continue;
+        if (std::max(x0, x1) < -1 || std::min(x0, x1) > w + 1 || std::max(y0, y1) < -1 || std::min(y0, y1) > h + 1) return;
         cr->move_to(x0, y0);
         cr->line_to(x1, y1);
         ++n;
-    }
+    });
     if (n) {
         cr->set_source_rgb(1, 1, 1);
         cr->stroke_preserve();

@@ -13,8 +13,13 @@
 #   PREFIX/share/icons/hicolor/NxN[@2]/apps/io.github.scott8420.Klimt.png
 #       (s027: The Dancer -- 16 to 512 px, sharpened at 1x, plain at @2)
 #   PREFIX/share/icons/hicolor/symbolic/apps/io.github.scott8420.Klimt-symbolic.svg
+#   PREFIX/bin/klimt-thumbnailer                         (s049: the file manager's preview)
+#   PREFIX/share/thumbnailers/klimt.thumbnailer          (s049)
+#   PREFIX/share/mime/packages/io.github.scott8420.Klimt.xml   (s049: the .klimt type)
 #   PREFIX/share/klimt/install-manifest.txt   (what uninstall.sh takes out)
 #
+# s049: GNOME runs thumbnailers in a sandbox that sees /usr (so /usr/local)
+# but not your home -- previews of .klimt files in Files need --system.
 # Installing again over an install replaces it. Your documents, settings,
 # recents and saved presets are never touched.
 set -euo pipefail
@@ -39,7 +44,8 @@ prefix="${prefix%/}"
 
 if (( build )); then ./build.sh; fi
 BIN="$SRC/build/klimt"
-if [[ ! -x "$BIN" ]]; then
+THUMB="$SRC/build/klimt-thumbnailer"
+if [[ ! -x "$BIN" || ! -x "$THUMB" ]]; then
     echo "No build/klimt here -- run ./build.sh first (or ./install.sh --build)." >&2
     exit 1
 fi
@@ -66,8 +72,13 @@ icons=()
 for f in data/icons/hicolor/*/apps/"$APP_ID".png; do [[ -e "$f" ]] && icons+=("${f#data/icons/hicolor/}"); done
 (( ${#icons[@]} )) || { echo "No app icons in data/icons/hicolor/ -- run scripts/make_app_icon.py." >&2; exit 1; }
 
+mimedir="$prefix/share/mime"
+thumbdir="$prefix/share/thumbnailers"
 files=(
     "$bindir/klimt"
+    "$bindir/klimt-thumbnailer"
+    "$thumbdir/klimt.thumbnailer"
+    "$mimedir/packages/$APP_ID.xml"
     "$appdir/$APP_ID.desktop"
     "$icondir/symbolic/apps/$APP_ID-symbolic.svg"
     "$manifest"
@@ -77,9 +88,13 @@ for i in "${icons[@]}"; do files+=("$icondir/$i"); done
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 sed "s|@BINDIR@|$bindir|g" "data/$APP_ID.desktop.in" > "$tmp/$APP_ID.desktop"
+sed "s|@BINDIR@|$bindir|g" "data/klimt.thumbnailer.in" > "$tmp/klimt.thumbnailer"
 printf '%s\n' "# Klimt install manifest -- uninstall.sh removes these" "# prefix: $prefix" "${files[@]}" > "$tmp/manifest"
 
 "${SUDO[@]}" install -Dm755 "$BIN"                                              "$bindir/klimt"
+"${SUDO[@]}" install -Dm755 "$THUMB"                                            "$bindir/klimt-thumbnailer"
+"${SUDO[@]}" install -Dm644 "$tmp/klimt.thumbnailer"                            "$thumbdir/klimt.thumbnailer"
+"${SUDO[@]}" install -Dm644 "data/$APP_ID.mime.xml"                             "$mimedir/packages/$APP_ID.xml"
 "${SUDO[@]}" install -Dm644 "$tmp/$APP_ID.desktop"                              "$appdir/$APP_ID.desktop"
 for i in "${icons[@]}"; do
     "${SUDO[@]}" install -Dm644 "data/icons/hicolor/$i"                         "$icondir/$i"
@@ -96,6 +111,9 @@ fi
 if command -v update-desktop-database >/dev/null; then
     "${SUDO[@]}" update-desktop-database -q "$appdir" || true
 fi
+if command -v update-mime-database >/dev/null; then
+    "${SUDO[@]}" update-mime-database "$mimedir" || true
+fi
 
 build_tag="$(grep -o 'KLIMT_BUILD "[^"]*"' CMakeLists.txt | cut -d'"' -f2 || true)"
 echo "Klimt ${build_tag:-} installed to $prefix"
@@ -104,4 +122,7 @@ case ":$PATH:" in
     *":$bindir:"*) ;;
     *) echo "  note: $bindir isn't on your PATH -- the launcher works; to type 'klimt', add it to PATH." ;;
 esac
+if [[ "$prefix" != /usr* ]]; then
+    echo "  note: .klimt previews in Files need ./install.sh --system (the thumbnailer's sandbox can't see $prefix)."
+fi
 echo "  remove with: ./uninstall.sh$( [[ "$prefix" == "$HOME/.local" ]] || echo " --prefix $prefix" )"

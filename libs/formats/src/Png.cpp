@@ -28,11 +28,23 @@ void on_error(png_structp png, png_const_charp msg) {
     png_longjmp(png, 1);
 }
 void on_warning(png_structp, png_const_charp) {}
-}  // namespace
 
-std::optional<Raster> read_png(const std::string& path, std::string& error, const Progress& p) {
-    File file(path, "rb");
-    if (!file.f) { error = "can't be opened"; return std::nullopt; }
+// s049: PNGs inside a zip (OpenRaster's layers, a .klimt's preview) are read
+// from and written to memory.
+struct MemIn { const std::uint8_t* d; std::size_t n, at = 0; };
+void mem_read(png_structp png, png_bytep out, png_size_t len) {
+    auto* m = static_cast<MemIn*>(png_get_io_ptr(png));
+    if (len > m->n - m->at) png_error(png, "unexpected end of data");
+    std::memcpy(out, m->d + m->at, len);
+    m->at += len;
+}
+void mem_write(png_structp png, png_bytep in, png_size_t len) {
+    auto* v = static_cast<std::vector<std::uint8_t>*>(png_get_io_ptr(png));
+    v->insert(v->end(), in, in + len);
+}
+void mem_flush(png_structp) {}
+
+std::optional<Raster> read_png_io(std::FILE* file, MemIn* mem, std::string& error, const Progress& p) {
     PngError err;
     png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, &err, on_error, on_warning);
     if (!png) { error = "out of memory"; return std::nullopt; }
@@ -48,7 +60,8 @@ std::optional<Raster> read_png(const std::string& path, std::string& error, cons
         error = std::string("not a readable PNG: ") + err.msg;
         return std::nullopt;
     }
-    png_init_io(png, file.f);
+    if (mem) png_set_read_fn(png, mem, mem_read);
+    else png_init_io(png, file);
     png_set_user_limits(png, kMaxSide, kMaxSide);
     png_read_info(png, info);
 
@@ -120,7 +133,8 @@ std::optional<Raster> read_png(const std::string& path, std::string& error, cons
     return out;
 }
 
-bool write_png(const std::string& path, const Raster& r, std::string& error, const Progress& p) {
+bool write_png_io(std::FILE* file, std::vector<std::uint8_t>* mem, const std::string& path, const Raster& r,
+                  std::string& error, const Progress& p, int level) {
     const auto& src = r.pixels;
     const pixel::Format sf = src.format();
     if (sf.mode != pixel::Mode::Gray && sf.mode != pixel::Mode::RGB) {
@@ -130,8 +144,6 @@ bool write_png(const std::string& path, const Raster& r, std::string& error, con
     if (src.width() <= 0 || src.height() <= 0) { error = "an empty image"; return false; }
     pixel::Format f = sf;
     if (f.depth == pixel::Depth::F32) f.depth = pixel::Depth::U16;   // PNG has no float
-    File file(path, "wb");
-    if (!file.f) { error = "can't be written"; return false; }
     PngError err;
     png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, &err, on_error, on_warning);
     png_infop info = png ? png_create_info_struct(png) : nullptr;
@@ -142,10 +154,11 @@ bool write_png(const std::string& path, const Raster& r, std::string& error, con
     if (setjmp(png_jmpbuf(png))) {
         png_destroy_write_struct(&png, &info);
         error = std::string("PNG: ") + err.msg;
-        std::remove(path.c_str());
+        if (!mem) std::remove(path.c_str());
         return false;
     }
-    png_init_io(png, file.f);
+    if (mem) png_set_write_fn(png, mem, mem_write, mem_flush);
+    else png_init_io(png, file);
     // A profile libpng won't accept (wrong colour space, damaged) is dropped
     // with a warning rather than failing the whole file.
     png_set_benign_errors(png, 1);
@@ -154,7 +167,7 @@ bool write_png(const std::string& path, const Raster& r, std::string& error, con
     png_set_IHDR(png, info, static_cast<png_uint_32>(src.width()), static_cast<png_uint_32>(src.height()),
                  f.depth == pixel::Depth::U16 ? 16 : 8, type, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
                  PNG_FILTER_TYPE_DEFAULT);
-    png_set_compression_level(png, 6);
+    png_set_compression_level(png, level);
     if (r.dpi > 0) {
         const auto ppm = static_cast<png_uint_32>(std::lround(r.dpi / 0.0254));
         png_set_pHYs(png, info, ppm, ppm, PNG_RESOLUTION_METER);
@@ -181,13 +194,38 @@ bool write_png(const std::string& path, const Raster& r, std::string& error, con
     if (cancelled) {
         png_destroy_write_struct(&png, &info);
         error = "cancelled";
-        std::remove(path.c_str());
+        if (!mem) std::remove(path.c_str());
         return false;
     }
     png_write_end(png, info);
     png_destroy_write_struct(&png, &info);
     p.at(1);
     return true;
+}
+}  // namespace
+
+std::optional<Raster> read_png(const std::string& path, std::string& error, const Progress& p) {
+    File file(path, "rb");
+    if (!file.f) { error = "can't be opened"; return std::nullopt; }
+    return read_png_io(file.f, nullptr, error, p);
+}
+
+std::optional<Raster> read_png_bytes(const std::uint8_t* data, std::size_t n, std::string& error, const Progress& p) {
+    if (n < 8 || std::memcmp(data, "\x89PNG\r\n\x1a\n", 8) != 0) { error = "not a PNG"; return std::nullopt; }
+    MemIn m{data, n};
+    return read_png_io(nullptr, &m, error, p);
+}
+
+bool write_png(const std::string& path, const Raster& r, std::string& error, const Progress& p) {
+    if (r.pixels.width() <= 0 || r.pixels.height() <= 0) { error = "an empty image"; return false; }
+    File file(path, "wb");
+    if (!file.f) { error = "can't be written"; return false; }
+    return write_png_io(file.f, nullptr, path, r, error, p, 6);
+}
+
+bool write_png_bytes(const Raster& r, std::vector<std::uint8_t>& out, std::string& error, const Progress& p, int level) {
+    out.clear();
+    return write_png_io(nullptr, &out, {}, r, error, p, level);
 }
 
 }  // namespace klimt::formats

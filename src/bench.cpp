@@ -4,6 +4,11 @@
 //   ./build/klimt_bench 16         the same at 16-bit
 //   ./build/klimt_bench size       s047: Image Size -- 7 layers of 1200 x 1600
 //                                  to half (WEAKNESSES 27), the time it takes
+//   ./build/klimt_bench ants       s049: the marching ants of a ragged 6000 x
+//                                  4000 selection -- traced, and one frame
+//                                  drawn (Cairo, as the canvas does), before
+//                                  (every segment, full size) and after (the
+//                                  view's level, its cells only) -- WEAKNESSES 25
 //
 // Composites every tile once, on ONE thread (the app spreads tiles over the
 // workers), and prints milliseconds per tile. A Debug build is several times
@@ -11,6 +16,9 @@
 #include "core/Canvas.hpp"
 #include "core/Composite.hpp"
 #include "core/Document.hpp"
+#include "core/Selection.hpp"   // s049
+
+#include <cairo.h>
 
 #include <chrono>
 #include <cmath>
@@ -51,8 +59,92 @@ int bench_size() {
 }
 }  // namespace
 
+// s049: WEAKNESSES 25 -- the ants, before and after.
+namespace S = klimt::core::select;
+namespace {
+double ms_since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+// One frame of ants into a vw x vh surface at `zoom`, centred on (cx, cy):
+// the canvas's draw_ants (white under, dashed black over). `segs` visited
+// by `each`. Returns the segments stroked.
+template <class Each>
+std::size_t frame(cairo_t* cr, int vw, int vh, double zoom, double cx, double cy, Each&& each) {
+    const auto sx = [&](int x) { return std::round(vw / 2.0 + (x - cx) * zoom) + 0.5; };
+    const auto sy = [&](int y) { return std::round(vh / 2.0 + (y - cy) * zoom) + 0.5; };
+    cairo_set_line_width(cr, 1);
+    cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
+    std::size_t n = 0;
+    each([&](const S::Seg& s) {
+        const double x0 = sx(s.x0), y0 = sy(s.y0), x1 = sx(s.x1), y1 = sy(s.y1);
+        if (std::max(x0, x1) < -1 || std::min(x0, x1) > vw + 1 || std::max(y0, y1) < -1 || std::min(y0, y1) > vh + 1) return;
+        cairo_move_to(cr, x0, y0);
+        cairo_line_to(cr, x1, y1);
+        ++n;
+    });
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_set_dash(cr, nullptr, 0, 0);
+    cairo_stroke_preserve(cr);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    const double dash[] = {4, 4};
+    cairo_set_dash(cr, dash, 2, 3);
+    cairo_stroke(cr);
+    return n;
+}
+int bench_ants() {
+    const int W = 6000, H = 4000, VW = 1600, VH = 1000;
+    const P::Format mf{P::Depth::U8, P::Mode::Gray, false};
+    // A Wand on a noisy photo: a disc of speckle, islands everywhere in it.
+    const auto mask = P::TileMap(mf, W, H).paint({0, 0, W, H}, [&](int x, int y, const P::Px&) {
+        P::Px p;
+        const double dx = x - W / 2.0, dy = y - H / 2.0;
+        const unsigned v = (static_cast<unsigned>(x / 3) * 73856093u) ^ (static_cast<unsigned>(y / 3) * 19349663u);
+        p.c[0] = (dx * dx + dy * dy < 1800.0 * 1800.0 && ((v >> 9) % 100) < 50) ? 1.f : 0.f;
+        return p;
+    });
+    cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, VW, VH);
+    cairo_t* cr = cairo_create(surf);
+    std::printf("ants: a ragged 6000 x 4000 selection, a %d x %d view\n", VW, VH);
+    auto t0 = std::chrono::steady_clock::now();
+    const auto all = S::outline(mask);
+    const double trace0 = ms_since(t0);
+    std::printf("  before: traced at full size     %8zu segments  %7.0f ms (once per selection)\n", all.size(), trace0);
+    struct View { const char* name; double zoom; };
+    for (const View v : {View{"fit (25 %)", 0.25}, View{"100 %", 1.0}, View{"12.5 %", 0.125}}) {
+        const int level = S::ants_level(v.zoom);
+        t0 = std::chrono::steady_clock::now();
+        const auto a = S::ants(mask, level);
+        const double trace = ms_since(t0);
+        // Before: every segment, each tested against the view.
+        double before = 0, after = 0;
+        std::size_t nb = 0, na = 0, visited = 0;
+        const int reps = 5;
+        for (int r = 0; r < reps; ++r) {
+            t0 = std::chrono::steady_clock::now();
+            nb = frame(cr, VW, VH, v.zoom, W / 2.0, H / 2.0, [&](auto&& f) { for (const auto& s : all) f(s); });
+            before += ms_since(t0);
+            t0 = std::chrono::steady_clock::now();
+            const int ix0 = static_cast<int>(std::floor(W / 2.0 - VW / 2.0 / v.zoom)) - 1, iy0 = static_cast<int>(std::floor(H / 2.0 - VH / 2.0 / v.zoom)) - 1;
+            const int ix1 = static_cast<int>(std::ceil(W / 2.0 + VW / 2.0 / v.zoom)) + 1, iy1 = static_cast<int>(std::ceil(H / 2.0 + VH / 2.0 / v.zoom)) + 1;
+            visited = 0;
+            na = frame(cr, VW, VH, v.zoom, W / 2.0, H / 2.0, [&](auto&& f) {
+                a->visit({ix0, iy0, ix1 - ix0, iy1 - iy0}, [&](const S::Seg& s) { ++visited; f(s); });
+            });
+            after += ms_since(t0);
+        }
+        std::printf("  %-11s before: %8zu stroked of %zu, %7.1f ms a frame\n", v.name, nb, all.size(), before / reps);
+        std::printf("  %-11s after:  %8zu stroked (%zu visited) at 1/%d, %7.1f ms a frame; traced in %.0f ms\n", "", na, visited,
+                    1 << level, after / reps, trace);
+    }
+    cairo_destroy(cr);
+    cairo_surface_destroy(surf);
+    return 0;
+}
+}  // namespace
+
 int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "size") return bench_size();
+    if (argc > 1 && std::string(argv[1]) == "ants") return bench_ants();   // s049
     const int depth = argc > 1 ? std::atoi(argv[1]) : 8;
     const P::Format f{depth == 16 ? P::Depth::U16 : depth == 32 ? P::Depth::F32 : P::Depth::U8, P::Mode::RGB, true};
     const int W = 4000, H = 3000;

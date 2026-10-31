@@ -40,6 +40,9 @@ if [[ -f "$manifest" ]]; then
 else
     files=(
         "$prefix/bin/klimt"
+        "$prefix/bin/klimt-thumbnailer"
+        "$prefix/share/thumbnailers/klimt.thumbnailer"
+        "$prefix/share/mime/packages/$APP_ID.xml"
         "$prefix/share/applications/$APP_ID.desktop"
         "$prefix/share/icons/hicolor/scalable/apps/$APP_ID.svg"
     )
@@ -66,6 +69,9 @@ if (( ${#present[@]} )); then
     fi
     if command -v update-desktop-database >/dev/null && [[ -d "$prefix/share/applications" ]]; then
         "${SUDO[@]}" update-desktop-database -q "$prefix/share/applications" || true
+    fi
+    if command -v update-mime-database >/dev/null && [[ -d "$prefix/share/mime/packages" ]]; then   # s049
+        "${SUDO[@]}" update-mime-database "$prefix/share/mime" || true
     fi
     echo "Klimt uninstalled from $prefix"
 else

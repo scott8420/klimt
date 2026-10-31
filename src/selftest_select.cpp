@@ -9,7 +9,9 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <algorithm>
 #include <map>
+#include <tuple>
 #include <set>
 #include <string>
 
@@ -121,6 +123,85 @@ void selftest_select(const Check& check) {
         bool closed = !ends.empty();
         for (const auto& [p, n] : ends) if (n % 2) closed = false;
         check("outline: an ellipse's outline is closed", closed, std::to_string(ends.size()) + " corners");
+    }
+
+    std::cout << "\n-- s049: the ants at the view's zoom, culled per cell --\n";
+    {
+        // Every unit edge a set of segments covers.
+        using Edge = std::tuple<int, int, int>;   // (horizontal?, line, at)
+        const auto units = [](const std::vector<S::Seg>& v) {
+            std::vector<Edge> e;
+            for (const auto& s : v) {
+                if (s.y0 == s.y1) for (int x = s.x0; x < s.x1; ++x) e.emplace_back(1, s.y0, x);
+                else for (int y = s.y0; y < s.y1; ++y) e.emplace_back(0, s.x0, y);
+            }
+            std::sort(e.begin(), e.end());
+            return e;
+        };
+        check("ants: level by zoom -- 0 down to 1/2, then floor(log2(1/zoom)), at most 6",
+              S::ants_level(4) == 0 && S::ants_level(1) == 0 && S::ants_level(0.5) == 0 && S::ants_level(0.49) == 1 &&
+              S::ants_level(0.25) == 2 && S::ants_level(0.2) == 2 && S::ants_level(0.125) == 3 && S::ants_level(0.001) == 6, "");
+        // Ragged: a Wand on noise -- many islands.
+        const int W = 1100, H = 700;
+        const auto noise = P::TileMap(kMask, W, H).paint({0, 0, W, H}, [](int x, int y, const P::Px&) {
+            P::Px p;
+            const unsigned v = (static_cast<unsigned>(x) * 73856093u) ^ (static_cast<unsigned>(y) * 19349663u);
+            p.c[0] = ((v >> 7) % 100) < 45 ? 1.f : 0.f;
+            return p;
+        });
+        const auto full = S::outline(noise);
+        const auto a0 = S::ants(noise, 0);
+        check("ants: level 0 is the outline itself (the same unit edges)", a0 && units(a0->segs) == units(full), "");
+        bool inside = a0.has_value();
+        if (a0)
+            for (int row = 0; row < a0->rows; ++row)
+                for (int col = 0; col < a0->cols; ++col) {
+                    const auto b = static_cast<std::size_t>(row * a0->cols + col);
+                    for (auto i = a0->first[b]; i < a0->first[b + 1]; ++i) {
+                        const auto& s = a0->segs[i];
+                        const int c = a0->cell;
+                        if (std::min(s.x0, s.x1) < col * c || std::max(s.x0, s.x1) > (col + 1) * c ||
+                            std::min(s.y0, s.y1) < row * c || std::max(s.y0, s.y1) > (row + 1) * c) inside = false;
+                    }
+                }
+        check("ants: every segment lies within its cell", inside, "");
+        const auto a3 = S::ants(noise, 3);
+        check("ants: 1/8 traces far fewer segments on a ragged selection",
+              a3 && a3->size() * 8 < a0->size(), (a3 ? std::to_string(a3->size()) : "") + " vs " + std::to_string(a0->size()));
+        bool grid = a3.has_value();
+        if (a3) for (const auto& s : a3->segs)
+            for (const int v : {s.x0, s.x1}) if (v % 8 && v != W) grid = false;
+        if (a3) for (const auto& s : a3->segs)
+            for (const int v : {s.y0, s.y1}) if (v % 8 && v != H) grid = false;
+        check("ants: at 1/8 every corner is on the 8-px grid (or the image's edge)", grid, "");
+        const auto r8 = S::rect_mask(kMask, W, H, {64, 32, 512, 256});
+        const auto r8a = S::ants(r8, 3);
+        check("ants: a shape on the grid traces the same at 1/8 as at full size",
+              r8a && units(r8a->segs) == units(S::outline(r8)), "");
+        const auto sliver = S::rect_mask(kMask, W, H, {300, 100, 1, 400});
+        const auto sl = S::ants(sliver, 4);
+        check("ants: a 1-px sliver still shows at 1/16 (any pixel turns its block on)",
+              sl && units(sl->segs) == units(S::outline(S::rect_mask(kMask, W, H, {288, 96, 16, 416}))),
+              sl ? std::to_string(units(sl->segs).size()) : "");   // the 16-px blocks it touches: x 288..304, y 96..512
+        // Culling: a view visits only its cells, and misses nothing in it.
+        const P::Rect view{400, 300, 200, 150};
+        std::size_t seen = 0, meet = 0;
+        if (a0) {
+            a0->visit(view, [&](const S::Seg&) { ++seen; });
+            std::set<std::tuple<int, int, int, int>> got;
+            a0->visit(view, [&](const S::Seg& s) { got.insert({s.x0, s.y0, s.x1, s.y1}); });
+            bool missed = false;
+            for (const auto& s : a0->segs) {
+                const bool hits = std::max(s.x0, s.x1) >= view.x && std::min(s.x0, s.x1) <= view.x + view.w &&
+                                  std::max(s.y0, s.y1) >= view.y && std::min(s.y0, s.y1) <= view.y + view.h;
+                if (hits) { ++meet; if (!got.count({s.x0, s.y0, s.x1, s.y1})) missed = true; }
+            }
+            check("ants: a view visits every segment it meets", !missed && meet > 0, std::to_string(meet));
+        }
+        check("ants: ... and not the whole selection", seen > 0 && seen * 2 < (a0 ? a0->size() : 0),
+              std::to_string(seen) + " of " + std::to_string(a0 ? a0->size() : 0));
+        bool stop_ok = !S::ants(noise, 2, [] { return true; });
+        check("ants: a cancel gives nothing", stop_ok, "");
     }
 
     std::cout << "\n-- selection: the verbs --\n";

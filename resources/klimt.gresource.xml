@@ -39,6 +39,10 @@
        icons by scripts/make_app_icon.py. Not an icon, so its own prefix. -->
   <gresource prefix="/io/github/scott8420/Klimt/images">
     <file alias="klimt-about-panel.jpg">images/klimt-about-panel.jpg</file>
+    <!-- s049: the About button -- The Dancer's face, in colour (Scott), made
+         by scripts/make_about_button.py: 24 px for 1x screens, 48 for 2x. -->
+    <file alias="klimt-about-button-24.png">images/klimt-about-button-24.png</file>
+    <file alias="klimt-about-button-48.png">images/klimt-about-button-48.png</file>
   </gresource>
   <!-- s027: the About window's License tab reads the project's own LICENSE,
        so the two can't drift. -->

@@ -1,0 +1,4 @@
+[Thumbnailer Entry]
+TryExec=@BINDIR@/klimt-thumbnailer
+Exec=@BINDIR@/klimt-thumbnailer -s %s %i %o
+MimeType=image/x-klimt;

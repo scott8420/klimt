@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s048")
+set(KLIMT_BUILD "s049")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -96,6 +96,7 @@ add_library(klimt_core STATIC
     # FILES (s007): .klimt in and out (a zip, libzip), images in, File > New,
     # Export -- all pure over a snapshot, so they run on a worker.
     src/core/File.cpp
+    src/core/Ora.cpp       # s049: OpenRaster in and out (Krita, GIMP, MyPaint)
     # THE SELECTION (s008): a mask on the tile grid; shapes, set arithmetic,
     # feather, the ants' outline, fill / delete through it.
     src/core/Selection.cpp
@@ -157,13 +158,21 @@ target_include_directories(klimt_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_
 
 # ── s010: the compositor's speed, headless (./build/klimt_bench [8|16|32]) ──────
 add_executable(klimt_bench src/bench.cpp)
-target_link_libraries(klimt_bench PRIVATE klimt_core Threads::Threads)
+pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)   # s049: the ants bench draws as the canvas does
+target_link_libraries(klimt_bench PRIVATE klimt_core Threads::Threads PkgConfig::CAIRO)
+
+# ── s049: the file manager's preview of a .klimt (data/klimt.thumbnailer.in).
+# libs/formats and libzip only -- no GTK, starts fast, fits the sandbox.
+add_executable(klimt-thumbnailer src/thumbnailer.cpp)
+target_link_libraries(klimt-thumbnailer PRIVATE klimt_formats PkgConfig::LIBZIP)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp)
-target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp)
+target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads PkgConfig::LIBZIP)   # s049: reads the zips it writes
 # The selftest checks every tool's icon is in the resource bundle (s005).
-target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+                                                  KLIMT_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")   # s049: runs klimt-thumbnailer
+add_dependencies(klimt_selftest klimt-thumbnailer)
 
 # ── App resources (gresource) -- the RESOURCE-PIPELINE paradigm ────────────────
 # glib-compile-resources embeds resources/klimt.gresource.xml into a C source;
@@ -179,6 +188,7 @@ set(KLIMT_RESOURCES_C   "${CMAKE_CURRENT_BINARY_DIR}/klimt-resources.c")
 file(GLOB KLIMT_RESOURCE_FILES
      "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/scalable/apps/*.svg"
      "${CMAKE_CURRENT_SOURCE_DIR}/resources/images/*.jpg"   # s027: the About painting
+     "${CMAKE_CURRENT_SOURCE_DIR}/resources/images/*.png"   # s049: the About button
      "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")                  # s027: the License tab
 add_custom_command(
     OUTPUT  "${KLIMT_RESOURCES_C}"

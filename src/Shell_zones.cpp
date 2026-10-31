@@ -18,6 +18,8 @@
 #include <gtkmm/stackswitcher.h>
 #include <gtkmm/styleprovider.h>
 #include <gdkmm/display.h>
+#include <gdkmm/texture.h>   // s049: the About button's picture
+#include <gtkmm/image.h>
 
 // Shell_zones.cpp -- ZONES. The window's frame (docs/ui.md), the dock, and the
 // menu model.
@@ -52,7 +54,25 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
 
     // ── the header: the app mark | the document | undo, redo, Export, menu ──
     auto header = Gtk::make_managed<Gtk::HeaderBar>();
-    m_logo_button.set_icon_name("klimt-logo-symbolic");
+    // s049 (Scott): The Dancer's face in colour, not the symbolic mark --
+    // "after seeing the full picture a user will recognise her". 24 px; the
+    // 48 px picture on a 2x screen, chosen again when the scale changes.
+    {
+        auto* face = Gtk::make_managed<Gtk::Image>();
+        face->set_pixel_size(24);
+        const auto pick = [face] {
+            const bool hi = face->get_scale_factor() > 1;
+            try {
+                face->set(Gdk::Texture::create_from_resource(hi ? "/io/github/scott8420/Klimt/images/klimt-about-button-48.png"
+                                                                : "/io/github/scott8420/Klimt/images/klimt-about-button-24.png"));
+            } catch (const Glib::Error&) {
+                face->set_from_icon_name("klimt-logo-symbolic");
+            }
+        };
+        pick();
+        face->property_scale_factor().signal_changed().connect(pick);
+        m_logo_button.set_child(*face);
+    }
     m_logo_button.set_has_frame(false);
     m_logo_button.set_tooltip_text("About Klimt");
     m_logo_button.set_action_name("win.about");

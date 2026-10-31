@@ -3,6 +3,7 @@
 #include "core/Transfer.hpp"   // s022: converted()
 #include "core/Composite.hpp"
 #include "core/Text.hpp"   // s046
+#include "core/Ora.hpp"    // s049
 
 #include <zip.h>
 #include "json.hpp"
@@ -875,6 +876,7 @@ std::optional<Contents> open(const std::string& path, std::string& error, const 
         if (k) give_alpha(*k);
         return k;
     }
+    if (kind == formats::Kind::ORA) return ora::open(path, error, p);   // s049
     auto r = formats::read_image(path, error, p);
     if (!r) return std::nullopt;
     Contents c;
@@ -1036,6 +1038,35 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         error = zip_strerror(z);
         return false;
     }
+    // s049: the picture, as OpenRaster keeps it -- `mergedimage.png` (8-bit,
+    // at most kPreviewSide a side) and `Thumbnails/thumbnail.png` (256) --
+    // so a file manager shows a preview without knowing Klimt's tiles.
+    // Ignored on reading. A failure to make them never fails the save.
+    std::vector<std::uint8_t> merged_png, thumb_png;
+    {
+        formats::Progress cancel_only;
+        cancel_only.cancelled = p.cancelled;
+        // Composited at the largest halving that still covers kPreviewSide
+        // (the s046 pyramid's likeness): a big document costs a quarter or
+        // an eighth of a composite, not a whole one.
+        int k = 0;
+        while (k < 6 && std::max(c.image.width, c.image.height) / (1 << (k + 1)) >= kPreviewSide) ++k;
+        std::optional<P::TileMap> flat;
+        if (k == 0) flat = flatten(c.image, c.layers, cancel_only);
+        else if (auto r = reduced(c.image, c.layers, k, nullptr, p.cancelled)) flat = flatten(r->image, r->layers, cancel_only);
+        if (flat) {
+            std::string ignored;
+            const P::TileMap merged = ora::thumbnail(*flat, kPreviewSide);
+            ora::png_bytes(merged, merged_png, ignored, cancel_only, 3);
+            ora::png_bytes(ora::thumbnail(merged, 256), thumb_png, ignored, cancel_only, 6);
+        }
+        if (p.stop()) { error = "cancelled"; return false; }
+    }
+    if ((!merged_png.empty() && !add("mergedimage.png", merged_png.data(), merged_png.size(), ZIP_CM_STORE, 0)) ||
+        (!thumb_png.empty() && !add("Thumbnails/thumbnail.png", thumb_png.data(), thumb_png.size(), ZIP_CM_STORE, 0))) {
+        error = zip_strerror(z);
+        return false;
+    }
 
     ZipState st{&p};
     zip_register_progress_callback_with_state(z, 0.01, zip_progress, nullptr, &st);
@@ -1115,6 +1146,10 @@ std::optional<P::TileMap> flatten(const Image& im, const std::map<Document::Id, 
 bool export_image(const std::string& path, formats::Kind kind, const Image& im,
                   const std::map<Document::Id, Layer>& layers, std::string& error,
                   const formats::Progress& p, const formats::WriteOptions& o) {
+    if (kind != formats::Kind::PNG && kind != formats::Kind::JPEG && kind != formats::Kind::TIFF && kind != formats::Kind::WebP) {
+        error = "export as PNG, JPEG, TIFF or WebP";
+        return false;
+    }
     auto flat = flatten(im, layers, p);
     if (!flat) { error = "cancelled"; return false; }
     formats::Raster r;
@@ -1139,9 +1174,10 @@ bool export_image(const std::string& path, formats::Kind kind, const Image& im,
         case formats::Kind::PNG:  return formats::write_png(path, r, error, rest);
         case formats::Kind::JPEG: return formats::write_jpeg(path, r, error, rest, o);
         case formats::Kind::TIFF: return formats::write_tiff(path, r, error, rest, o);
+        case formats::Kind::WebP: return formats::write_webp(path, r, error, rest, o);   // s049
         default: break;
     }
-    error = "export as PNG, JPEG or TIFF";
+    error = "export as PNG, JPEG, TIFF or WebP";
     return false;
 }
 

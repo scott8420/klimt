@@ -22,10 +22,10 @@
 
 namespace klimt::formats {
 
-enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt };
+enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA };   // s049: WebP, OpenRaster
 // By the file's first bytes, not its name (a .png that is a JPEG opens).
 Kind sniff(const std::string& path);
-// "PNG", "JPEG", "TIFF", "Klimt", "" -- for messages.
+// "PNG", "JPEG", "TIFF", "Klimt", "WebP", "OpenRaster", "" -- for messages.
 const char* kind_name(Kind k);
 
 struct Progress {
@@ -53,6 +53,11 @@ std::optional<Raster> read_image(const std::string& path, std::string& error, co
 std::optional<Raster> read_png (const std::string& path, std::string& error, const Progress& p = {});
 std::optional<Raster> read_jpeg(const std::string& path, std::string& error, const Progress& p = {});
 std::optional<Raster> read_tiff(const std::string& path, std::string& error, const Progress& p = {});
+// s049: WebP, lossy or lossless, 8-bit RGB(A); an animation's first frame.
+std::optional<Raster> read_webp(const std::string& path, std::string& error, const Progress& p = {});
+// s049: a PNG held in memory (an entry of a zip: OpenRaster's layers).
+std::optional<Raster> read_png_bytes(const std::uint8_t* data, std::size_t n, std::string& error,
+                                     const Progress& p = {});
 
 // Writers take the raster's own format where the file can hold it, and say
 // what they changed in `error` when they can't: PNG is Gray / RGB at 8 or 16
@@ -61,12 +66,21 @@ std::optional<Raster> read_tiff(const std::string& path, std::string& error, con
 struct WriteOptions {
     int  jpeg_quality = 92;          // 1..100
     bool tiff_deflate = true;        // else uncompressed
+    int  webp_quality = 90;          // s049: 0..100, lossy
+    bool webp_lossless = false;      // s049: exact pixels (quality then sets the effort)
 };
 bool write_png (const std::string& path, const Raster& r, std::string& error, const Progress& p = {});
 bool write_jpeg(const std::string& path, const Raster& r, std::string& error, const Progress& p = {},
                 const WriteOptions& o = {});
 bool write_tiff(const std::string& path, const Raster& r, std::string& error, const Progress& p = {},
                 const WriteOptions& o = {});
+// s049: WebP is 8-bit Gray / RGB with or without alpha (Gray is written as
+// RGB; 16 / 32f are rounded to 8). The profile rides in an ICCP chunk.
+bool write_webp(const std::string& path, const Raster& r, std::string& error, const Progress& p = {},
+                const WriteOptions& o = {});
+// s049: a PNG into memory (zlib `level` 0..9).
+bool write_png_bytes(const Raster& r, std::vector<std::uint8_t>& out, std::string& error,
+                     const Progress& p = {}, int level = 6);
 
 // ── for readers: rows in, tiles out ─────────────────────────────────────────
 // Feed every row top to bottom, as STORED bytes of the format (native
