@@ -177,7 +177,7 @@ void ExportDialog::sync() {
                                   : "Lossy, like a JPEG but smaller, and transparency survives. 75 - 90 for photos.");
 }
 
-void ExportDialog::fill_ora(const core::ora::Plan& plan) {
+void ExportDialog::fill_ora(const core::ora::Plan& plan, formats::Kind kind) {
     while (auto* c = m_ora_list.get_first_child()) m_ora_list.remove(*c);
     const auto section = [this](const std::string& title, const std::vector<std::string>& lines) {
         auto* t = Gtk::make_managed<Gtk::Label>(title);
@@ -186,20 +186,31 @@ void ExportDialog::fill_ora(const core::ora::Plan& plan) {
         t->set_margin_top(m_ora_list.get_first_child() ? 6 : 0);
         m_ora_list.append(*t);
         for (const auto& s : lines) {
-            auto* l = Gtk::make_managed<Gtk::Label>("•  " + s);
+            auto* l = Gtk::make_managed<Gtk::Label>("\u2022  " + s);
             l->set_xalign(0);
             l->set_wrap(true);
             l->set_max_width_chars(46);
             m_ora_list.append(*l);
         }
     };
+    const bool psd = kind == formats::Kind::PSD, pdf = kind == formats::Kind::PDF;
+    if (pdf) {   // s051: the picture always crosses whole; the question is the type
+        if (!plan.kept.empty()) section("Kept as type", plan.kept);
+        if (!plan.baked.empty()) section("Drawn as pixels -- the look kept", plan.baked);
+        if (plan.kept.empty() && plan.baked.empty()) section("The picture", {"Every layer as Klimt shows it, one page at the image's size."});
+        if (!plan.left_out.empty()) section("Not in the file", plan.left_out);
+        m_ora_list.append(*dim("One page the picture's size at its resolution. Type stays type where nothing above it blends -- Composix and any PDF reader keep it sharp.", true));
+        return;
+    }
     if (plan.baked.empty() && plan.left_out.empty()) {
-        section("Everything crosses", {"Layers, groups, names, visibility, opacity and blend modes, as they are."});
+        section("Everything crosses", {psd ? "Layers, groups, names, visibility, opacity, Fill, blend modes, clipping and masks, as they are."
+                                           : "Layers, groups, names, visibility, opacity and blend modes, as they are."});
     } else {
         if (!plan.baked.empty()) section("Baked into the layer's pixels -- the look survives", plan.baked);
-        if (!plan.left_out.empty()) section("Not in the file -- ORA can't hold it", plan.left_out);
+        if (!plan.left_out.empty()) section(psd ? "Not in the file" : "Not in the file -- ORA can't hold it", plan.left_out);
     }
-    m_ora_list.append(*dim("Layers for Krita, GIMP and MyPaint. Your .klimt keeps everything.", true));
+    m_ora_list.append(*dim(psd ? "Layers for Photoshop, Affinity, GIMP, Krita and Photopea; the merged picture for everything else. Your .klimt keeps everything."
+                               : "Layers for Krita, GIMP and MyPaint. Your .klimt keeps everything.", true));
 }
 
 void ExportDialog::ask(formats::Kind kind, const std::string& file_name, const formats::WriteOptions& o,
@@ -213,6 +224,8 @@ void ExportDialog::ask(formats::Kind kind, const std::string& file_name, const f
         case formats::Kind::WebP: page = "webp"; what = "WebP"; break;
         case formats::Kind::TIFF: page = "tiff"; what = "TIFF"; break;
         case formats::Kind::ORA:  page = "ora";  what = "OpenRaster"; break;
+        case formats::Kind::PSD:  page = "ora";  what = "Photoshop"; break;   // s051: the same list
+        case formats::Kind::PDF:  page = "ora";  what = "PDF"; break;         // s051: kept / drawn as pixels
         default: break;
     }
     set_title(std::string("Export ") + what);
@@ -222,7 +235,7 @@ void ExportDialog::ask(formats::Kind kind, const std::string& file_name, const f
     m_webp_lossless.set_active(o.webp_lossless);
     m_png_level.set_value(o.png_level);
     m_tiff_compression.set_selected(o.tiff_deflate ? 0 : 1);
-    if (kind == formats::Kind::ORA) fill_ora(plan);
+    if (kind == formats::Kind::ORA || kind == formats::Kind::PSD || kind == formats::Kind::PDF) fill_ora(plan, kind);
     m_pages.set_visible_child(page);
     sync();
     present();

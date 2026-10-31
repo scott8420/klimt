@@ -45,6 +45,7 @@ const char* kind_name(Kind k) {
         case Kind::WebP:  return "WebP";
         case Kind::ORA:   return "OpenRaster";
         case Kind::PSD:   return "Photoshop";
+        case Kind::PDF:   return "PDF";
         case Kind::Unknown: break;
     }
     return "";
@@ -59,6 +60,7 @@ std::optional<Raster> read_image(const std::string& path, std::string& error, co
         case Kind::Klimt: error = "a Klimt document, not an image"; return std::nullopt;
         case Kind::ORA:   error = "an OpenRaster document, not an image"; return std::nullopt;
         case Kind::PSD:   error = "a Photoshop document, not an image"; return std::nullopt;
+        case Kind::PDF:   break;   // never sniffed
         case Kind::Unknown: break;
     }
     std::ifstream in(path, std::ios::binary);

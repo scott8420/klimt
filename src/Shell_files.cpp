@@ -4,7 +4,9 @@
 #include "ExportDialog.hpp"   // s050
 #include "core/Transfer.hpp"   // s022: place
 #include "core/Session.hpp"    // s023
-#include "core/Ora.hpp"        // s049: Export as OpenRaster
+#include "core/Ora.hpp"
+#include "core/Pdf.hpp"        // s051: Export as PDF
+#include "core/Psd.hpp"        // s049: Export as OpenRaster
 #include <glibmm/miscutils.h>
 #include "Log.hpp"
 
@@ -477,13 +479,15 @@ void Shell::on_export() {
     auto dlg = Gtk::FileDialog::create();
     dlg->set_title("Export");
     auto filters = Gio::ListStore<Gtk::FileFilter>::create();
-    auto any = filter("PNG, JPEG, TIFF, WebP or OpenRaster", {"png", "jpg", "jpeg", "tif", "tiff", "webp", "ora"});
+    auto any = filter("PNG, JPEG, TIFF, WebP, OpenRaster, Photoshop or PDF", {"png", "jpg", "jpeg", "tif", "tiff", "webp", "ora", "psd", "pdf"});
     filters->append(any);
     filters->append(filter("PNG", {"png"}));
     filters->append(filter("JPEG", {"jpg", "jpeg"}));
     filters->append(filter("TIFF", {"tif", "tiff"}));
     filters->append(filter("WebP", {"webp"}));                              // s049
     filters->append(filter("OpenRaster -- layers, for Krita (.ora)", {"ora"}));   // s049
+    filters->append(filter("Photoshop -- layers (.psd)", {"psd"}));             // s051
+    filters->append(filter("PDF -- the picture, type kept as type (.pdf)", {"pdf"}));   // s051
     dlg->set_filters(filters);
     dlg->set_default_filter(any);
     dlg->set_initial_name(stem_of(name_()) + ".png");
@@ -499,6 +503,8 @@ void Shell::on_export() {
         else if (ext == ".tif" || ext == ".tiff") kind = formats::Kind::TIFF;
         else if (ext == ".webp") kind = formats::Kind::WebP;   // s049
         else if (ext == ".ora") kind = formats::Kind::ORA;      // s049: the layers, not a flat image
+        else if (ext == ".psd") kind = formats::Kind::PSD;      // s051: the layers, for Photoshop and the rest
+        else if (ext == ".pdf") kind = formats::Kind::PDF;      // s051: for Composix and print
         else if (ext != ".png") path += ".png";
         // s050: the format's own settings, asked now; the export starts on OK.
         const std::string name = fs::path(path).filename().string();
@@ -512,7 +518,10 @@ void Shell::on_export() {
         }
         m_export_path = path;
         m_export_kind = kind;
-        const auto plan = kind == formats::Kind::ORA ? core::ora::plan(m_doc.image(), m_doc.snapshot()) : core::ora::Plan{};
+        const auto plan = kind == formats::Kind::ORA   ? core::ora::plan(m_doc.image(), m_doc.snapshot())
+                          : kind == formats::Kind::PSD ? core::psd::plan(m_doc.image(), m_doc.snapshot())
+                          : kind == formats::Kind::PDF ? core::pdf::plan(m_doc.image(), m_doc.snapshot()).list
+                                                       : core::ora::Plan{};
         m_export_dialog->ask(kind, name, m_prefs.export_options, plan);
     });
 }
@@ -526,8 +535,10 @@ void Shell::export_to(const std::string& path, formats::Kind kind, const formats
                                                  -> core::Jobs::Landing {
         std::string err;
         std::vector<std::string> notes;
-        const bool ok = kind == formats::Kind::ORA ? core::ora::save(path, im, layers, err, notes, progress_of(t))
-                                                   : core::file::export_image(path, kind, im, layers, err, progress_of(t), o);
+        const bool ok = kind == formats::Kind::ORA   ? core::ora::save(path, im, layers, err, notes, progress_of(t))
+                        : kind == formats::Kind::PSD ? core::psd::save(path, im, layers, err, notes, progress_of(t))   // s051
+                        : kind == formats::Kind::PDF ? core::pdf::save(path, im, layers, fs::path(path).stem().string(), err, notes, progress_of(t))
+                                                     : core::file::export_image(path, kind, im, layers, err, progress_of(t), o);
         if (!ok) {
             if (t.cancelled()) return [] {};
             return [this, name, err] { toast("Couldn't export \u201c" + name + "\u201d: " + err); };

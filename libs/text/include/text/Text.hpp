@@ -24,6 +24,9 @@
 #include <string>
 #include <vector>
 
+// s051: draw() takes a Cairo context (cairo.h's own typedef, repeated: allowed).
+typedef struct _cairo cairo_t;
+
 namespace klimt::text {
 
 enum class Align : std::uint8_t { Left, Center, Right, Justify };
@@ -146,6 +149,11 @@ struct Coverage {
     std::vector<std::uint8_t> rgb;    // empty, or at.w * at.h * 3
 };
 Coverage render(const Spec& s, int clip_w, int clip_h);
+// s051: the same lines DRAWN onto a Cairo context as type -- glyphs, not
+// pixels (a PDF surface keeps them as text, its fonts embedded). The context
+// is in image pixels; the Spec's colour at `alpha` times its own alpha (run
+// colours as set). Returns whether anything was drawn.
+bool draw(cairo_t* cr, const Spec& s, double alpha = 1);
 
 // The rectangle the text's lines take (logical, not ink), image pixels, the
 // axis-aligned bounds through the matrix. Empty text: the caret's line.

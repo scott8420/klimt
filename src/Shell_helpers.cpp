@@ -162,10 +162,14 @@ void Shell::update_layer_actions() {
 
 // Undo / Redo say what they would do, and grey when there is nothing.
 void Shell::update_undo_ui() {
-    if (m_act_undo) m_act_undo->set_enabled(m_journal.can_undo());
+    // s051 (W55): an open text visit can always be undone -- on_undo ends it
+    // first, then takes it back whole. Before, a visit in a fresh document
+    // (nothing in the journal yet) left Undo disabled: Ctrl+Z did nothing,
+    // the visit stayed open, and the next tool letters were typed as text.
+    if (m_act_undo) m_act_undo->set_enabled(m_journal.can_undo() || m_te.on);
     if (m_act_redo) m_act_redo->set_enabled(m_journal.can_redo());
     const std::string u = m_journal.undo_label(), r = m_journal.redo_label();
-    m_undo_button.set_tooltip_text(u.empty() ? "Nothing to undo" : "Undo " + u + "  (Ctrl+Z)");
+    m_undo_button.set_tooltip_text(u.empty() ? (m_te.on ? "Undo the typing  (Ctrl+Z)" : "Nothing to undo") : "Undo " + u + "  (Ctrl+Z)");
     m_redo_button.set_tooltip_text(r.empty() ? "Nothing to redo" : "Redo " + r + "  (Ctrl+Shift+Z)");
     if (m_edit_menu) {
         m_edit_menu->remove_all();

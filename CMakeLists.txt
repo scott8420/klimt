@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s050")
+set(KLIMT_BUILD "s051")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -98,6 +98,8 @@ add_library(klimt_core STATIC
     src/core/File.cpp
     src/core/Ora.cpp       # s049: OpenRaster in and out (Krita, GIMP, MyPaint)
     src/core/Psd.cpp       # s050: Photoshop documents in
+    src/core/PsdWrite.cpp  # s051: and out
+    src/core/Pdf.cpp       # s051: Export as PDF -- the picture, type kept as type
     # THE SELECTION (s008): a mask on the tile grid; shapes, set arithmetic,
     # feather, the ants' outline, fill / delete through it.
     src/core/Selection.cpp
@@ -155,13 +157,15 @@ pkg_check_modules(LIBZIP REQUIRED IMPORTED_TARGET libzip>=1.6)
 target_link_libraries(klimt_core PRIVATE PkgConfig::LIBZIP)
 find_package(ZLIB REQUIRED)   # s050: PSD's ZIP channels (libpng's own dependency -- nothing new to install)
 target_link_libraries(klimt_core PRIVATE ZLIB::ZLIB)
+# s051: cairo-pdf writes Export as PDF (cairo comes with GTK; the core stays GTK-free).
+pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)   # s049: the ants bench too
+target_link_libraries(klimt_core PRIVATE PkgConfig::CAIRO)
 # Vendored nlohmann/json (header-only, MIT), PRIVATE -- an implementation detail
 # of the pump, no consumer inherits the include (CANON: surprise-free build).
 target_include_directories(klimt_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 # ── s010: the compositor's speed, headless (./build/klimt_bench [8|16|32]) ──────
 add_executable(klimt_bench src/bench.cpp)
-pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)   # s049: the ants bench draws as the canvas does
 target_link_libraries(klimt_bench PRIVATE klimt_core Threads::Threads PkgConfig::CAIRO)
 
 # ── s049: the file manager's preview of a .klimt (data/klimt.thumbnailer.in).
@@ -170,7 +174,7 @@ add_executable(klimt-thumbnailer src/thumbnailer.cpp)
 target_link_libraries(klimt-thumbnailer PRIVATE klimt_formats PkgConfig::LIBZIP)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp src/selftest_psd.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp src/selftest_psd.cpp src/selftest_pdf.cpp)
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads PkgConfig::LIBZIP ZLIB::ZLIB)   # s049: reads the zips it writes
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"

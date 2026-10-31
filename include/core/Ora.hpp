@@ -34,6 +34,7 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
 // `notes`, so the dialog and the toast never disagree).
 struct Plan {
     std::vector<std::string> baked, left_out;
+    std::vector<std::string> kept;   // s051: PDF's -- what stays as it is (type kept as type); ORA / PSD leave it empty
 };
 Plan plan(const Image& im, const std::map<Document::Id, Layer>& layers);
 

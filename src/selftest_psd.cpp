@@ -11,6 +11,7 @@
 #include "core/Psd.hpp"
 #include "formats/Formats.hpp"
 #include "pixel/Pixel.hpp"
+#include "text/Text.hpp"
 
 #include <zlib.h>
 
@@ -18,6 +19,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <map>
 #include <functional>
 #include <string>
 #include <unistd.h>
@@ -468,5 +471,215 @@ void selftest_psd(const Check& check) {
         std::string err;
         const auto c = core::file::open(f, err);
         check("psd: scrambled bytes -- opened or refused, never a crash", c.has_value() || !err.empty(), err);
+    }
+    // ── s051: PSD WRITE -- a document out and back in, and its merged picture.
+    {
+        using L = core::Layer;
+        const int W = 300, H = 200;
+        const P::Format f8{P::Depth::U8, P::Mode::RGB, true};
+        core::Image im;
+        im.width = W; im.height = H; im.format = f8; im.dpi = 240;
+        im.icc = std::make_shared<const Bytes>(Bytes{9, 8, 7});
+        const auto map = [&](const P::Format& f, P::Rect r, P::Px c) {
+            return std::make_shared<const P::TileMap>(P::TileMap(f, W, H).fill(r, c));
+        };
+        std::map<std::string, L> ls;
+        L paper; paper.name = "Paper"; paper.pos = 1; paper.pixels = map(f8, {0, 0, W, H}, P::rgba(250 / 255.f, 240 / 255.f, 220 / 255.f));
+        L folder; folder.kind = core::Kind::Group; folder.name = "Folder Ünïcode ✓"; folder.pos = 2;
+        folder.blend = core::Blend::Normal; folder.opacity = 60;
+        L green; green.name = "Green"; green.parent = "G"; green.pos = 1;
+        green.pixels = map(f8, {20, 20, 100, 80}, P::rgba(0.f, 200 / 255.f, 0.f));
+        {   // a mask hiding a square inside Green; Klimt's mask holds what's HIDDEN
+            const P::Format g{P::Depth::U8, P::Mode::Gray, false};
+            P::Px one{}; one.c[0] = 1.f;
+            green.mask = std::make_shared<const P::TileMap>(P::TileMap(g, W, H).fill({30, 30, 20, 20}, one));
+        }
+        L red; red.name = "Red"; red.parent = "G"; red.pos = 2; red.clipped = true; red.blend = core::Blend::Multiply;
+        red.pixels = map(f8, {60, 40, 140, 110}, P::rgba(1.f, 0.f, 0.f));
+        L pass; pass.kind = core::Kind::Group; pass.name = "Through"; pass.pos = 3; pass.blend = core::Blend::PassThrough;
+        L blue; blue.name = "Blue"; blue.parent = "T"; blue.pos = 1; blue.visible = false; blue.fill = 40; blue.blend = core::Blend::Screen;
+        blue.pixels = map(f8, {150, 10, 60, 60}, P::rgba(0.f, 0.f, 1.f));
+        {
+            const P::Format g{P::Depth::U8, P::Mode::Gray, false};
+            blue.mask = std::make_shared<const P::TileMap>(P::TileMap(g, W, H));   // hides nothing
+            blue.mask_on = false;
+        }
+        L half; half.name = "Half"; half.parent = "T"; half.pos = 2; half.fill = 50; half.blend = core::Blend::Overlay;
+        half.pixels = map(f8, {200, 120, 80, 60}, P::rgba(0.2f, 0.4f, 0.9f, 0.5f));
+        L shadowed; shadowed.name = "Shadowed"; shadowed.pos = 4;
+        shadowed.pixels = map(f8, {120, 130, 40, 30}, P::rgba(1.f, 1.f, 0.f));
+        shadowed.styles.drop.on = true;
+        L adj; adj.kind = core::Kind::Adjustment; adj.name = "Levels"; adj.pos = 5; adj.visible = false;
+        ls = {{"L1", paper}, {"G", folder}, {"L3", green}, {"L4", red}, {"T", pass}, {"L5", blue}, {"L6", half},
+              {"L7", shadowed}, {"L8", adj}};
+        const std::string fw = at("written8.psd");
+        std::string err;
+        std::vector<std::string> notes;
+        const bool ok = psd::save(fw, im, ls, err, notes);
+        check("psd write 8: saves", ok, err);
+        const auto pl = psd::plan(im, ls);
+        check("psd write: the plan -- styles baked, the adjustment layer left out",
+              pl.baked.size() == 1 && pl.baked[0] == "1 layer's styles" && pl.left_out.size() == 1 &&
+                  pl.left_out[0] == "1 adjustment layer left out",
+              (pl.baked.empty() ? "" : pl.baked[0]) + " / " + (pl.left_out.empty() ? "" : pl.left_out[0]));
+        check("psd write: the toast's notes are the plan's left-out lines", notes == pl.left_out, "");
+        check("psd write: no .partial left behind", !fs::exists(fw + ".partial"), "");
+        const auto c = ok ? core::file::open(fw, err) : std::nullopt;
+        check("psd write 8: Klimt opens it again", c.has_value(), err);
+        if (c) {
+            const auto* G = named(*c, "Folder Ünïcode ✓");
+            const auto* Gr = named(*c, "Green");
+            const auto* R = named(*c, "Red");
+            const auto* T = named(*c, "Through");
+            const auto* B = named(*c, "Blue");
+            const auto* Hf = named(*c, "Half");
+            const auto* S = named(*c, "Shadowed");
+            check("psd write 8: every drawn layer and group back, the adjustment left out",
+                  G && Gr && R && T && B && Hf && S && named(*c, "Paper") && !named(*c, "Levels") && c->layers.size() == 8,
+                  std::to_string(c->layers.size()));
+            check("psd write 8: 8-bit RGB, 240 dpi, the profile", c->image.format == f8 && near(c->image.dpi, 240, 0.01) &&
+                      c->image.icc && *c->image.icc == Bytes({9, 8, 7}), std::to_string(c->image.dpi));
+            if (G && Gr && R && T && B && Hf && S) {
+                const std::string gid = id_of(*c, G->name), tid = id_of(*c, "Through");
+                check("psd write 8: the group -- its Unicode name, Normal at 60 %, its children inside in order",
+                      G->kind == core::Kind::Group && G->blend == core::Blend::Normal && G->opacity == 60 && Gr->parent == gid &&
+                          R->parent == gid && Gr->pos < R->pos, "");
+                check("psd write 8: Pass Through kept", T->kind == core::Kind::Group && T->blend == core::Blend::PassThrough &&
+                      B->parent == tid && Hf->parent == tid, "");
+                check("psd write 8: clipping, Multiply", R->clipped && R->blend == core::Blend::Multiply && !Gr->clipped, "");
+                check("psd write 8: hidden, Screen, Fill 40", !B->visible && B->blend == core::Blend::Screen && B->fill == 40,
+                      std::to_string(B->fill));
+                check("psd write 8: Overlay, Fill 50, half-transparent pixels", Hf->blend == core::Blend::Overlay && Hf->fill == 50 &&
+                      near(Hf->pixels->get(210, 130).c[3], 0.5, 0.01), "");
+                check("psd write 8: the mask -- hides its square, shows elsewhere", Gr->mask && Gr->mask_on &&
+                      near(Gr->mask->get(35, 35).c[0], 1) && near(Gr->mask->get(25, 25).c[0], 0) && near(Gr->mask->get(5, 5).c[0], 0), "");
+                check("psd write 8: a mask switched off stays off (and kept though it hides nothing)", B->mask && !B->mask_on, "");
+                check("psd write 8: the styled layer baked -- its shadow is pixels now, its styles off",
+                      !S->styles.any() && S->pixels->get(123, 162).c[3] > 0.2f, std::to_string(S->pixels->get(123, 162).c[3]));
+            }
+            // The look, everywhere: Klimt's composite of what came back = the document's.
+            const auto a = core::file::flatten(im, ls);
+            const auto b = core::file::flatten(c->image, c->layers);
+            double worst = 1;
+            if (a && b) {
+                worst = 0;
+                for (int y = 0; y < H; ++y)
+                    for (int x = 0; x < W; ++x) {
+                        const auto pa = a->get(x, y), pb = b->get(x, y);
+                        for (int k = 0; k < 4; ++k) worst = std::max(worst, static_cast<double>(std::abs(pa.c[static_cast<std::size_t>(k)] - pb.c[static_cast<std::size_t>(k)])));
+                    }
+            }
+            check("psd write 8: the look comes back -- every pixel within 2 levels", worst <= 2.0 / 255 + 1e-6, std::to_string(worst * 255));
+        }
+        // The merged picture alone (what Composix and file managers read): the
+        // file with its layer section emptied opens as that picture.
+        {
+            std::ifstream in(fw, std::ios::binary);
+            Bytes all((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            const auto u32 = [&](std::size_t i) { return (std::uint32_t{all[i]} << 24) | (std::uint32_t{all[i + 1]} << 16) | (std::uint32_t{all[i + 2]} << 8) | all[i + 3]; };
+            std::size_t i = 26;
+            i += 4 + u32(i);   // colour mode data
+            i += 4 + u32(i);   // resources
+            const std::size_t lm = i;
+            const bool alpha_flag = static_cast<std::int16_t>((all[lm + 8] << 8) | all[lm + 9]) < 0;
+            check("psd write: the layer count is negative -- the merged picture's transparency is its 4th channel",
+                  alpha_flag && ((all[12] << 8) | all[13]) == 4, "");
+            Bytes flat(all.begin(), all.begin() + static_cast<std::ptrdiff_t>(lm));
+            be32(flat, 0);
+            flat.insert(flat.end(), all.begin() + static_cast<std::ptrdiff_t>(lm + 4 + u32(lm)), all.end());
+            const std::string ff = at("written8_flat.psd");
+            write(ff, flat);
+            const auto m = core::file::open(ff, err);
+            const auto* bg = m ? named(*m, "Background") : nullptr;
+            const auto want = core::file::flatten(im, ls);
+            check("psd write: the merged picture is the composite (RLE)", bg && want &&
+                  near(bg->pixels->get(70, 50).c[0], want->get(70, 50).c[0], 1.5 / 255) &&
+                  near(bg->pixels->get(70, 50).c[1], want->get(70, 50).c[1], 1.5 / 255) &&
+                  near(bg->pixels->get(5, 5).c[2], 220 / 255.0, 1.5 / 255), err);
+        }
+        // Transparent where nothing is drawn: matted with white in the merged picture.
+        {
+            std::map<std::string, L> one{{"L1", red}};
+            one["L1"].parent = ""; one["L1"].pos = 1; one["L1"].clipped = false; one["L1"].blend = core::Blend::Normal;
+            const std::string ft = at("clear.psd");
+            std::vector<std::string> n2;
+            check("psd write: a transparent document saves", psd::save(ft, im, one, err, n2), err);
+            std::ifstream in(ft, std::ios::binary);
+            Bytes all((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            // The last row of the merged picture: its first pixel is clear -- R G B white, A 0.
+            // (RLE: a 300-wide row of one value packs as runs; read the merged section's first run of each channel.)
+            const auto u32 = [&](std::size_t i) { return (std::uint32_t{all[i]} << 24) | (std::uint32_t{all[i + 1]} << 16) | (std::uint32_t{all[i + 2]} << 8) | all[i + 3]; };
+            std::size_t i = 26;
+            i += 4 + u32(i); i += 4 + u32(i); i += 4 + u32(i);
+            const std::size_t comp = i, counts = i + 2, data = counts + 4 * static_cast<std::size_t>(H) * 2;
+            std::size_t at_ch[4];
+            std::size_t o = data;
+            for (int ch = 0; ch < 4; ++ch) {
+                at_ch[ch] = o;
+                for (int y = 0; y < H; ++y) {
+                    const std::size_t k = counts + 2 * (static_cast<std::size_t>(ch) * H + static_cast<std::size_t>(y));
+                    o += (all[k] << 8) | all[k + 1];
+                }
+            }
+            // Row 0, x 0 is clear (Red starts at x 60): each channel's first run byte, then its value.
+            const auto first = [&](int ch) { return all[at_ch[ch] + 1]; };
+            check("psd write: clear pixels matted with white, transparency 0 (Photoshop's merged picture)",
+                  ((all[comp] << 8) | all[comp + 1]) == 1 && first(0) == 255 && first(1) == 255 && first(2) == 255 && first(3) == 0,
+                  std::to_string(first(0)) + " " + std::to_string(first(3)));
+        }
+        // 16-bit: Lr16, the samples exact.
+        {
+            const P::Format f16{P::Depth::U16, P::Mode::RGB, true};
+            core::Image i16 = im;
+            i16.format = f16;
+            L fine; fine.name = "Fine"; fine.pos = 1;
+            fine.pixels = map(f16, {10, 10, 100, 50}, P::rgba(12345 / 65535.f, 40000 / 65535.f, 7 / 65535.f));
+            const std::string f6 = at("written16.psd");
+            std::vector<std::string> n3;
+            const bool ok16 = psd::save(f6, i16, {{"L1", fine}}, err, n3);
+            std::ifstream in(f6, std::ios::binary);
+            const std::string all((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            const auto c16 = ok16 ? core::file::open(f6, err) : std::nullopt;
+            const auto* Fl = c16 ? named(*c16, "Fine") : nullptr;
+            check("psd write 16: the layers in Lr16 (Photoshop's way), 16-bit back exactly",
+                  ok16 && all.find("Lr16") != std::string::npos && Fl && c16->image.format == f16 &&
+                      std::lround(Fl->pixels->get(50, 30).c[0] * 65535) == 12345 && std::lround(Fl->pixels->get(50, 30).c[2] * 65535) == 7 &&
+                      Fl->pixels->get(5, 5).c[3] == 0,
+                  err);
+        }
+        // Text bakes; a non-RGB document goes as RGB.
+        {
+            L t; t.kind = core::Kind::Text; t.name = "Title"; t.pos = 2;
+            t.text = std::make_shared<const klimt::text::Spec>();
+            t.pixels = map(f8, {10, 150, 50, 20}, P::rgba(0.f, 0.f, 0.f));
+            std::map<std::string, L> two{{"L1", paper}, {"L2", t}};
+            const auto plt = psd::plan(im, two);
+            check("psd write: a text layer is said baked as pixels, named", plt.baked.size() == 1 &&
+                  plt.baked[0].find("1 text layer as pixels") == 0, plt.baked.empty() ? "" : plt.baked[0]);
+            const std::string ft = at("text.psd");
+            std::vector<std::string> n4;
+            const bool okt = psd::save(ft, im, two, err, n4);
+            const auto ct = okt ? core::file::open(ft, err) : std::nullopt;
+            const auto* Tt = ct ? named(*ct, "Title") : nullptr;
+            check("psd write: the text layer comes back as a pixel layer of its name and pixels",
+                  Tt && Tt->kind == core::Kind::Pixel && near(Tt->pixels->get(20, 160).c[3], 1), err);
+        }
+        // Refused in words: past Photoshop's 30,000 px.
+        {
+            core::Image big = im;
+            big.width = 30001;
+            std::vector<std::string> n5;
+            const bool okb = psd::save(at("big.psd"), big, {}, err, n5);
+            check("psd write: past 30,000 px a side is refused in words", !okb && err.find("30,000") != std::string::npos, err);
+        }
+        // Cancelled: nothing written.
+        {
+            Fm::Progress stop;
+            stop.cancelled = [] { return true; };
+            const std::string fc = at("cancelled.psd");
+            std::vector<std::string> n6;
+            const bool okc = psd::save(fc, im, ls, err, n6, stop);
+            check("psd write: cancelled -- false, no file", !okc && !fs::exists(fc) && !fs::exists(fc + ".partial"), err);
+        }
     }
 }

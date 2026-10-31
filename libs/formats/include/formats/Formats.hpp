@@ -22,7 +22,7 @@
 
 namespace klimt::formats {
 
-enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA, PSD };   // s049: WebP, OpenRaster; s050: Photoshop
+enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA, PSD, PDF };   // s049: WebP, OpenRaster; s050: Photoshop; s051: PDF (written only, never sniffed)
 // By the file's first bytes, not its name (a .png that is a JPEG opens).
 Kind sniff(const std::string& path);
 // "PNG", "JPEG", "TIFF", "Klimt", "WebP", "OpenRaster", "" -- for messages.

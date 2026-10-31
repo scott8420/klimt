@@ -733,6 +733,40 @@ Coverage render(const Spec& s, int clip_w, int clip_h) {
     return out;
 }
 
+bool draw(cairo_t* cr, const Spec& s, double alpha) {
+    if (!cr || s.text.empty() || alpha <= 0) return false;
+    Laid L;
+    lay_out(s, L);
+    const Spec n = normalised(s);
+    const std::size_t nset = set_lines(n, L);
+    if (nset == 0) return false;
+    cairo_save(cr);
+    cairo_matrix_t cm;
+    cairo_matrix_init(&cm, L.m[0], L.m[1], L.m[2], L.m[3], L.m[4], L.m[5]);
+    cairo_transform(cr, &cm);
+    cairo_translate(cr, L.ox, L.oy);
+    const double a = std::clamp(alpha * n.colour[3], 0.0, 1.0);
+    cairo_set_source_rgba(cr, n.colour[0], n.colour[1], n.colour[2], a);
+    // A run's own colour is Pango's (opaque): with see-through type, the lines
+    // go in a group painted at the alpha -- still glyphs inside it.
+    const bool coloured = std::any_of(n.runs.begin(), n.runs.end(), [](const Run& r) { return r.look.colour.has_value(); });
+    const bool group = a < 1 && coloured;
+    if (group) {
+        cairo_push_group(cr);
+        cairo_set_source_rgba(cr, n.colour[0], n.colour[1], n.colour[2], 1);
+    }
+    for (std::size_t k = 0; k < nset; ++k) {
+        cairo_move_to(cr, L.lines[k].ox, L.lines[k].base);
+        pango_cairo_show_layout_line(cr, pango_layout_get_line_readonly(L.lay, static_cast<int>(k)));
+    }
+    if (group) {
+        cairo_pop_group_to_source(cr);
+        cairo_paint_with_alpha(cr, a);
+    }
+    cairo_restore(cr);
+    return true;
+}
+
 std::array<Box, 4> frame(const Spec& s) {
     Laid L;
     lay_out(s, L);

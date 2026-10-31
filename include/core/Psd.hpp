@@ -1,7 +1,6 @@
 #pragma once
-// core::psd -- Photoshop documents in (s050; REQUIREMENTS "Added" 3;
-// docs/file-format.md "Photoshop (.psd)"). Read only: Klimt saves its own
-// .klimt and exports ORA for layered exchange.
+// core::psd -- Photoshop documents in (s050) and out (s051; REQUIREMENTS
+// "Added" 3; docs/file-format.md "Photoshop (.psd)").
 //
 // What crosses: pixel layers at their places, groups (open or closed, Pass
 // Through kept), names (the Unicode one when present), visibility, opacity,
@@ -16,6 +15,7 @@
 // words: PSB (large documents), CMYK / Gray / Lab / Indexed / Bitmap, 32-bit.
 // Pure over its arguments: runs on a worker.
 #include "core/File.hpp"
+#include "core/Ora.hpp"
 
 #include <optional>
 #include <string>
@@ -24,6 +24,23 @@
 namespace klimt::core::psd {
 
 std::optional<file::Contents> open(const std::string& path, std::string& error, const formats::Progress& p = {});
+
+// s051: write a .psd (atomically). What crosses as it is: pixel layers at
+// their places (cut to their pixels' box), groups (Pass Through kept), names
+// (Mac Roman + the Unicode "luni"), visibility, opacity, Fill, every blend
+// mode, clipping, layer and group masks (on / off; Density / Feather baked
+// into the mask, Defringe into the colours); 8- or 16-bit RGB (32-bit as
+// 16); resolution and profile; the merged picture (RLE, matted with white,
+// its transparency the first extra channel) for readers that take only it.
+// BAKED -- drawn alone into the layer's pixels, the look kept: text layers
+// (named; not live type), live filters, styles, every layer of a non-RGB
+// document. LEFT OUT: adjustment, filter and path layers, a group's styles,
+// pixels beyond the canvas. `notes` hears the left-out lines, as ORA.
+using Plan = ora::Plan;
+bool save(const std::string& path, const Image& im, const std::map<Document::Id, Layer>& layers,
+          std::string& error, std::vector<std::string>& notes, const formats::Progress& p = {});
+// What save() will do, said BEFORE it writes (the Export dialog).
+Plan plan(const Image& im, const std::map<Document::Id, Layer>& layers);
 
 // Photoshop's four-character blend key ("mul ", "pass") -> Klimt's mode;
 // nullopt when Klimt has no such mode. And back (the selftest writes PSDs).

@@ -22,14 +22,14 @@ class ExportDialog : public Gtk::Window {
 public:
     explicit ExportDialog(Gtk::Window& parent);
     ~ExportDialog() override;
-    // `plan` is read for ORA only.
+    // `plan` is read for ORA, PSD and PDF only.
     void ask(formats::Kind kind, const std::string& file_name, const formats::WriteOptions& o,
              const core::ora::Plan& plan = {});
     sigc::signal<void(formats::WriteOptions)>& signal_ok() { return m_ok; }
 
 private:
     void sync();   // the labels that follow the values
-    void fill_ora(const core::ora::Plan& plan);
+    void fill_ora(const core::ora::Plan& plan, formats::Kind kind);   // s051: PSD and PDF show the same list
     formats::WriteOptions read() const;
 
     formats::Kind         m_kind = formats::Kind::PNG;

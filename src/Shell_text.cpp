@@ -231,6 +231,7 @@ void Shell::text_open(const std::string& id, bool made) {
     }, 530);
     text_follow();
     text_show();
+    update_undo_ui();   // s051 (W55): a visit is something to undo, even in a fresh document
     if (auto lg = log::get(log::Area::Shell)) lg->info("text: visit {} ({})", id, made ? "new" : "edit");
 }
 
@@ -245,6 +246,7 @@ void Shell::text_close() {
     const bool kept = L::text_end(m_journal, m_doc, id, made);
     m_canvas.set_text_overlay({});
     update_layer_actions();
+    update_undo_ui();   // s051 (W55)
     if (auto lg = log::get(log::Area::Shell)) lg->info("text: visit ends ({})", kept ? "a step" : "nothing");
 }
 

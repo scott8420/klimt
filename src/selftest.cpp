@@ -118,6 +118,7 @@ void selftest_text(const std::function<void(const std::string&, bool, const std:
 void selftest_pyramid(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s046 m3
 void selftest_ora(const std::function<void(const std::string&, bool, const std::string&)>& check);       // s049
 void selftest_psd(const std::function<void(const std::string&, bool, const std::string&)>& check);       // s050
+void selftest_pdf(const std::function<void(const std::string&, bool, const std::string&)>& check);       // s051
 void selftest_render(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s044
 void selftest_paths(const std::function<void(const std::string&, bool, const std::string&)>& check);     // s035
 void selftest_isolate(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s035 m7
@@ -1242,6 +1243,7 @@ int main() {
     selftest_files([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_ora([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s049
     selftest_psd([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s050
+    selftest_pdf([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s051
     selftest_dirty([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_select([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_paint([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
