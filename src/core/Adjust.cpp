@@ -28,6 +28,7 @@ constexpr Info kInfo[] = {
     {AdjustKind::SelectiveColour,"selective-colour","Selective Colour"},
     {AdjustKind::GradientMap,"gradient-map",       "Gradient Map"},
     {AdjustKind::Duotone,   "duotone",             "Duotone"},   // s065
+    {AdjustKind::ColourLookup,"colour-lookup",     "Colour Lookup"},   // s066
 };
 
 double clamp01(double v) { return std::clamp(v, 0.0, 1.0); }
@@ -321,7 +322,7 @@ std::optional<AdjustKind> from_key(std::string_view k) {
 const std::vector<AdjustKind>& kinds() {
     static const std::vector<AdjustKind> v{AdjustKind::BrightCon, AdjustKind::Levels, AdjustKind::Curves, AdjustKind::Exposure,
                                            AdjustKind::Vibrance, AdjustKind::HueSat, AdjustKind::ColourBalance, AdjustKind::BlackWhite,
-                                           AdjustKind::PhotoFilter, AdjustKind::ChannelMixer,
+                                           AdjustKind::PhotoFilter, AdjustKind::ChannelMixer, AdjustKind::ColourLookup,
                                            AdjustKind::Invert, AdjustKind::Posterize, AdjustKind::Threshold,
                                            AdjustKind::GradientMap, AdjustKind::SelectiveColour, AdjustKind::Duotone};
     return v;
@@ -450,13 +451,15 @@ bool identity(const Adjust& a) {
             return true;
         case AdjustKind::GradientMap:
         case AdjustKind::Duotone: return false;   // their own effect
+        case AdjustKind::ColourLookup: return !a.lut.p;   // s066: no table yet
     }
     return true;
 }
 
 bool settingless(AdjustKind k) { return k == AdjustKind::Invert; }
 bool wants_histogram(AdjustKind k) {
-    return k == AdjustKind::Levels || k == AdjustKind::Curves || k == AdjustKind::Threshold || k == AdjustKind::Duotone;   // s065: behind each ink's plate
+    return k == AdjustKind::Levels || k == AdjustKind::Curves || k == AdjustKind::Threshold || k == AdjustKind::Duotone ||   // s065: behind each ink's plate
+           k == AdjustKind::BlackWhite;   // s066: its Auto reads the colours
 }
 
 std::string refusal(const Adjust& a) {
@@ -464,6 +467,7 @@ std::string refusal(const Adjust& a) {
     const Adjust n = normalised(a);
     if (!(n == a)) return "settings out of range";
     for (const auto& c : a.curves) if (c.size() > 16) return "more than 16 points on a curve";
+    if (a.lut.p) if (auto why = lut::refusal(*a.lut.p); !why.empty()) return "colour lookup: " + why;   // s066
     return {};
 }
 
@@ -542,6 +546,7 @@ std::shared_ptr<const Compiled> compile(const Adjust& a) {
                 lut[static_cast<std::size_t>(i)] = static_cast<float>(clamp01(lut_kind(a, tables, ch, static_cast<double>(i) / (kLut - 1))));
         }
     }
+    if (a.kind == AdjustKind::ColourLookup) c->table = a.lut.p;   // s066
     if (a.kind == AdjustKind::Duotone)   // s065: each ink's amount, by grey
         for (const auto& k : a.inks) {
             std::vector<float> p(kLut);
@@ -584,6 +589,9 @@ void run_rgb(const Compiled& c, float& r, float& g, float& b) {
             r = static_cast<float>(clamp01(R)); g = static_cast<float>(clamp01(G)); b = static_cast<float>(clamp01(B));
             return;
         }
+        case AdjustKind::ColourLookup:   // s066: through the table
+            if (c.table) lut::apply(*c.table, r, g, b);
+            return;
         case AdjustKind::GradientMap: {   // s063: the luminosity down the gradient's table
             const float l = static_cast<float>(luma(std::clamp(r, 0.f, 1.f), std::clamp(g, 0.f, 1.f), std::clamp(b, 0.f, 1.f)));
             r = lut_at(c.lut[0], l); g = lut_at(c.lut[1], l); b = lut_at(c.lut[2], l);
@@ -614,6 +622,37 @@ void run_rgb(const Compiled& c, float& r, float& g, float& b) {
     }
 }
 
+float dither_at(int x, int y) {   // s066: Gradient.cpp's fixed hash
+    std::uint32_t h = static_cast<std::uint32_t>(x) * 374761393u + static_cast<std::uint32_t>(y) * 668265263u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return static_cast<float>((h ^ (h >> 16)) & 0xffffu) / 65535.f - 0.5f;
+}
+
+namespace {
+// s066: a Gradient Map's Dither -- each channel nudged by its own fixed noise,
+// one 8-bit step wide, so the steps of a long gentle gradient break up.
+bool dithers(const Compiled& c) { return c.kind == AdjustKind::GradientMap && c.a.grad_dither; }
+void dither_rgb(int x, int y, float& r, float& g, float& b) {
+    constexpr float q = 1.f / 255;
+    r = std::clamp(r + dither_at(x, y) * q, 0.f, 1.f);
+    g = std::clamp(g + dither_at(x + 40503, y + 7) * q, 0.f, 1.f);
+    b = std::clamp(b + dither_at(x + 81001, y + 13) * q, 0.f, 1.f);
+}
+}  // namespace
+
+void run(const Compiled& c, float* p, std::size_t n, int x0, int y0, int w) {
+    if (!dithers(c) || w <= 0) { run(c, p, n); return; }
+    for (std::size_t i = 0; i < n; ++i, p += 4) {
+        const float a = p[3];
+        if (a <= 0.f) continue;
+        float r = p[0] / a, g = p[1] / a, b = p[2] / a;
+        run_rgb(c, r, g, b);
+        const auto k = static_cast<int>(i);
+        dither_rgb(x0 + k % w, y0 + k / w, r, g, b);
+        p[0] = r * a; p[1] = g * a; p[2] = b * a;
+    }
+}
+
 void run(const Compiled& c, float* p, std::size_t n) {
     if (c.kind == AdjustKind::None) return;
     for (std::size_t i = 0; i < n; ++i, p += 4) {
@@ -631,7 +670,7 @@ std::optional<pixel::TileMap> applied(const pixel::TileMap& src, const Adjust& a
     if (f.mode != pixel::Mode::RGB && f.mode != pixel::Mode::Gray) return std::nullopt;
     if (identity(a)) return src;
     const auto c = compile(a);
-    const bool gray = f.mode == pixel::Mode::Gray;
+    const bool gray = f.mode == pixel::Mode::Gray, dith = dithers(*c);
     const auto ai = static_cast<std::size_t>(f.channels() - 1);
     pixel::Rect r{0, 0, src.width(), src.height()};
     if (sel) {
@@ -650,10 +689,12 @@ std::optional<pixel::TileMap> applied(const pixel::TileMap& src, const Adjust& a
             if (gray) {
                 float v = o.c[0], g = v, b = v;
                 run_rgb(*c, v, g, b);
+                if (dith) dither_rgb(x, y, v, g, b);
                 p.c[0] = o.c[0] + ((v + g + b) / 3 - o.c[0]) * k;
             } else {
                 float R = o.c[0], G = o.c[1], B = o.c[2];
                 run_rgb(*c, R, G, B);
+                if (dith) dither_rgb(x, y, R, G, B);
                 p.c[0] = o.c[0] + (R - o.c[0]) * k;
                 p.c[1] = o.c[1] + (G - o.c[1]) * k;
                 p.c[2] = o.c[2] + (B - o.c[2]) * k;
@@ -770,9 +811,106 @@ Histogram histogram(const std::vector<std::uint32_t>& argb) {
         const auto un = [a](std::uint32_t v) { return std::min<std::uint32_t>(255, (v * 255 + a / 2) / a); };
         const std::uint32_t r = un((px >> 16) & 0xff), g = un((px >> 8) & 0xff), b = un(px & 0xff);
         ++h[1][r]; ++h[2][g]; ++h[3][b];
+        ++h.colours[(r >> 3) << 10 | (g >> 3) << 5 | (b >> 3)];
         ++h[0][std::min<std::uint32_t>(255, (299 * r + 587 * g + 114 * b + 500) / 1000)];
     }
     return h;
+}
+
+namespace {
+// s066: one colour bin, as Black & White's mix sees it: grey = mn + d1 x the
+// secondary's weight + d2 x the primary's (black_white above).
+struct BwBin { double mn, d1, d2, n; int ws, wp; };
+std::vector<BwBin> bw_bins(const Histogram& h, double& total, double& coloured) {
+    std::vector<BwBin> v;
+    total = coloured = 0;
+    enum { Re, Ye, Gr, Cy, Bl, Ma };
+    for (std::size_t i = 0; i < kColourBins; ++i) {
+        const std::uint32_t n = h.colours[i];
+        if (n == 0) continue;
+        const double r = (static_cast<double>(i >> 10 & 31) + 0.5) / 32, g = (static_cast<double>(i >> 5 & 31) + 0.5) / 32,
+                     b = (static_cast<double>(i & 31) + 0.5) / 32;
+        double mx, md, mn; int wp, ws;
+        if (r >= g && r >= b) { mx = r; wp = Re; if (g >= b) { md = g; mn = b; ws = Ye; } else { md = b; mn = g; ws = Ma; } }
+        else if (g >= b)      { mx = g; wp = Gr; if (r >= b) { md = r; mn = b; ws = Ye; } else { md = b; mn = r; ws = Cy; } }
+        else                  { mx = b; wp = Bl; if (r >= g) { md = r; mn = g; ws = Ma; } else { md = g; mn = r; ws = Cy; } }
+        v.push_back({mn, md - mn, mx - md, static_cast<double>(n), ws, wp});
+        total += n;
+        if (mx - mn > 1.5 / 32) coloured += n;
+    }
+    return v;
+}
+}  // namespace
+
+std::array<std::uint32_t, 256> bw_histogram(const Adjust& a, const Histogram& h) {
+    std::array<std::uint32_t, 256> out{};
+    double total = 0, coloured = 0;
+    for (const auto& b : bw_bins(h, total, coloured)) {
+        const double g = clamp01(b.mn + b.d1 * a.bw[static_cast<std::size_t>(b.ws)] / 100.0 + b.d2 * a.bw[static_cast<std::size_t>(b.wp)] / 100.0);
+        out[static_cast<std::size_t>(std::lround(g * 255))] += static_cast<std::uint32_t>(b.n);
+    }
+    return out;
+}
+
+Adjust bw_auto(const Adjust& in, const Histogram& h) {
+    Adjust a = in;
+    double total = 0, coloured = 0;
+    const auto bins = bw_bins(h, total, coloured);
+    if (total <= 0 || coloured < total * 0.002) return a;   // a grey picture: nothing to mix
+    const auto fresh_bw = fresh(AdjustKind::BlackWhite).bw;
+    // How good a mix is: the spread of its greys (standard deviation), less
+    // what it drives past black or white beyond what the default mix already
+    // does, less a light pull toward the defaults -- so a hue the picture has
+    // little of stays where Photoshop starts it.
+    // How far a mix pushes greys to the ends: past black / white (clipped),
+    // or into the last 6 % at either end (blocked up / blown out).
+    struct Ends { double clipped, extreme; };
+    const auto ends = [&](const std::array<int, 6>& w) {
+        Ends e{0, 0};
+        for (const auto& b : bins) {
+            const double g = b.mn + b.d1 * w[static_cast<std::size_t>(b.ws)] / 100.0 + b.d2 * w[static_cast<std::size_t>(b.wp)] / 100.0;
+            if (g < -0.5 / 255 || g > 1 + 0.5 / 255) e.clipped += b.n;
+            if (g < 0.06 || g > 0.94) e.extreme += b.n;
+        }
+        e.clipped /= total; e.extreme /= total;
+        return e;
+    };
+    const Ends start = ends(fresh_bw);
+    const double free_clip = start.clipped + 0.002, free_extreme = start.extreme + 0.01;
+    const auto score = [&](const std::array<int, 6>& w) {
+        double s = 0, s2 = 0;
+        for (const auto& b : bins) {
+            const double g = clamp01(b.mn + b.d1 * w[static_cast<std::size_t>(b.ws)] / 100.0 + b.d2 * w[static_cast<std::size_t>(b.wp)] / 100.0);
+            s += g * b.n; s2 += g * g * b.n;
+        }
+        const double m = s / total, sd = std::sqrt(std::max(0.0, s2 / total - m * m));
+        const Ends e = ends(w);
+        double pull = 0;
+        for (std::size_t i = 0; i < 6; ++i) { const double d = (w[i] - fresh_bw[i]) / 100.0; pull += d * d; }
+        return sd - 20 * std::max(0.0, e.clipped - free_clip) - 4 * std::max(0.0, e.extreme - free_extreme) - 0.01 * pull;
+    };
+    std::array<int, 6> w = fresh_bw;
+    double best = score(w);
+    // Coordinate ascent: each slider over its range in 20s, then in 5s round
+    // the best, until nothing moves.
+    for (int pass = 0; pass < 8; ++pass) {
+        bool moved = false;
+        for (std::size_t i = 0; i < 6; ++i) {
+            for (const int step : {20, 5}) {
+                const int lo = step == 20 ? -200 : std::max(-200, w[i] - 20), hi = step == 20 ? 300 : std::min(300, w[i] + 20);
+                for (int v = lo; v <= hi; v += step) {
+                    if (v == w[i]) continue;
+                    auto t = w;
+                    t[i] = v;
+                    const double sc = score(t);
+                    if (sc > best + 1e-9) { best = sc; w = t; moved = true; }
+                }
+            }
+        }
+        if (!moved) break;
+    }
+    a.bw = w;
+    return normalised(a);
 }
 
 }  // namespace klimt::core::adjust

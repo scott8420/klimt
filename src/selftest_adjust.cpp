@@ -115,7 +115,7 @@ void selftest_adjust(const Check& check) {
         const auto n = A::normalised(c);
         check("adjust: curve points sorted", n.curves[0].size() == 3 && n.curves[0][1].x == 0.5 && n.curves[0][0].x == 0, "");
         check("adjust: keys round trip", A::from_key(A::key(AdjustKind::HueSat)) == AdjustKind::HueSat &&
-                                         !A::from_key("colour-lookup"), "");
+                                         !A::from_key("solid-colour"), "");
     }
 
     std::cout << "\n-- adjustments: adjustment layers (s013) --\n";
@@ -849,5 +849,136 @@ void selftest_adjust(const Check& check) {
         { std::ofstream f(file); f << "{ not json"; }
         check("presets: a broken file -- none, no crash", core::load_adjust_presets(file).empty(), "");
         fs::remove_all(dir);
+    }
+
+    std::cout << "\n-- adjustments: Black & White Auto, Gradient Map Dither (s066) --\n";
+    {
+        using K = core::AdjustKind;
+        const auto argb = [](int r, int g, int b) {
+            return 0xff000000u | static_cast<std::uint32_t>(r) << 16 | static_cast<std::uint32_t>(g) << 8 | static_cast<std::uint32_t>(b);
+        };
+        // A red flower on green leaves, near the same grey under the default mix.
+        std::vector<std::uint32_t> px;
+        for (int i = 0; i < 3000; ++i) px.push_back(argb(200, 60, 60));
+        for (int i = 0; i < 7000; ++i) px.push_back(argb(60, 160, 60));
+        const auto h = A::histogram(px);
+        check("histogram: the colours binned too (32 a channel)",
+              h.colours[(200u >> 3) << 10 | (60u >> 3) << 5 | (60u >> 3)] == 3000 && h.colours[(60u >> 3) << 10 | (160u >> 3) << 5 | (60u >> 3)] == 7000, "");
+        auto bw = A::fresh(K::BlackWhite);
+        bw.bw_tint = true; bw.tint_hue = 200;
+        const auto grey = [](const core::Adjust& a, float r, float g, float b) { A::apply_rgb(a, r, g, b); return static_cast<double>(r + g + b) / 3; };
+        const auto gap = [&](const core::Adjust& a) { return std::abs(grey(a, 200 / 255.f, 60 / 255.f, 60 / 255.f) - grey(a, 60 / 255.f, 160 / 255.f, 60 / 255.f)); };
+        const auto au = A::bw_auto(bw, h);
+        check("bw auto: red and green pulled apart -- the gap at least 0.2 wider than the default mix's",
+              gap(au) > gap(bw) + 0.2 && A::refusal(au).empty(), num(gap(bw)) + " -> " + num(gap(au)));
+        const double gr = grey(au, 200 / 255.f, 60 / 255.f, 60 / 255.f), gg = grey(au, 60 / 255.f, 160 / 255.f, 60 / 255.f);
+        check("bw auto: neither colour blocked up or blown out (inside 6 % .. 94 %)", gr >= 0.055 && gr <= 0.945 && gg >= 0.055 && gg <= 0.945, num(gr) + "," + num(gg));
+        check("bw auto: hues the picture hasn't got keep their sliders (cyans, blues, magentas, yellows); the tint kept",
+              au.bw[1] == 60 && au.bw[3] == 60 && au.bw[4] == 20 && au.bw[5] == 80 && au.bw_tint && au.tint_hue == 200,
+              std::to_string(au.bw[1]) + "," + std::to_string(au.bw[3]) + "," + std::to_string(au.bw[4]));
+        std::vector<std::uint32_t> greys;
+        for (int v = 0; v < 256; ++v) greys.push_back(argb(v, v, v));
+        check("bw auto: a grey picture -- nothing to mix, unchanged", A::bw_auto(bw, A::histogram(greys)) == bw, "");
+        check("bw auto: an empty histogram -- unchanged", A::bw_auto(bw, A::Histogram{}) == bw, "");
+        check("bw auto: wants the histogram (the colours)", A::wants_histogram(K::BlackWhite), "");
+        const auto bh = A::bw_histogram(au, h);
+        std::uint64_t sum = 0;
+        for (const auto v : bh) sum += v;
+        std::size_t peak = 0;
+        for (std::size_t b = 0; b < 256; ++b) if (bh[b] > bh[peak]) peak = b;
+        check("bw histogram: every pixel counted, the greens' peak where the mix puts them",
+              sum == 10000 && bh[peak] == 7000 && std::abs(static_cast<double>(peak) / 255 - gg) < 0.03, std::to_string(peak));
+
+        // Dither: a flat grey through black-to-white, 16 x 16.
+        auto gm = A::fresh(K::GradientMap);
+        const auto plain = A::compile(gm);
+        gm.grad_dither = true;
+        const auto dith = A::compile(gm);
+        const auto flat = [] { std::vector<float> v(16 * 16 * 4); for (std::size_t i = 0; i < v.size(); i += 4) { v[i] = v[i + 1] = v[i + 2] = 0.5f; v[i + 3] = 1; } return v; };
+        auto a = flat(), b = flat(), c = flat(), d = flat();
+        A::run(*plain, a.data(), 256);
+        A::run(*plain, b.data(), 256, 32, 64, 16);
+        A::run(*dith, c.data(), 256, 32, 64, 16);
+        A::run(*dith, d.data(), 256, 32, 64, 16);
+        double lo = 1, hi = 0, mean = 0, worst = 0;
+        std::size_t differ = 0;
+        for (std::size_t i = 0; i < c.size(); i += 4) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                lo = std::min<double>(lo, c[i + k]); hi = std::max<double>(hi, c[i + k]); mean += c[i + k];
+                worst = std::max<double>(worst, std::abs(c[i + k] - a[i + k]));
+            }
+            if (c[i] != c[i + 1] || c[i] != c[i + 2]) ++differ;
+        }
+        mean /= 256 * 3;
+        check("dither: off -- where the pixels are changes nothing", a == b, "");
+        check("dither: on -- a flat grey grained, within half an 8-bit step, the channels apart, the average kept",
+              hi - lo > 0.5 / 255 && worst <= 0.5 / 255 + 1e-6 && differ > 200 && std::abs(mean - a[0]) < 0.1 / 255, num(hi - lo) + " " + num(mean - a[0]));
+        check("dither: fixed -- the same pixels grain the same on every redraw", c == d, "");
+        check("dither: 'where' changes the grain", [&] { auto e = flat(); A::run(*dith, e.data(), 256, 48, 64, 16); return e != c; }(), "");
+    }
+
+    std::cout << "\n-- adjustments: Colour Lookup (s066) --\n";
+    {
+        using K = core::AdjustKind;
+        namespace T = klimt::core::lut;
+        auto cl = A::fresh(K::ColourLookup);
+        check("lookup: a kind of its own; starts with no table -- does nothing, as Photoshop's",
+              A::from_key("colour-lookup") == K::ColourLookup && A::label(K::ColourLookup) == "Colour Lookup" && !cl.lut.p &&
+              A::identity(cl) && A::refusal(cl).empty(), "");
+        // An identity 2-cube, then one that swaps red and blue.
+        std::string why;
+        const auto id2 = T::parse_cube("TITLE \"Same\"\n# a comment\nLUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n", why);
+        check("lookup: a .cube read -- TITLE, size, rows red fastest", id2 && id2->name == "Same" && id2->n == 2 && id2->rgb.size() == 24, why);
+        std::string swap = "LUT_3D_SIZE 2\nDOMAIN_MIN 0 0 0\nDOMAIN_MAX 1 1 1\n";
+        for (int b = 0; b < 2; ++b) for (int g = 0; g < 2; ++g) for (int r = 0; r < 2; ++r)
+            swap += std::to_string(b) + " " + std::to_string(g) + " " + std::to_string(r) + "\n";
+        const auto sw = T::parse_cube(swap, why);
+        float r = 0.8f, g = 0.3f, b = 0.1f;
+        if (sw) T::apply(*sw, r, g, b);
+        check("lookup: through the table, mixed between samples -- red and blue swapped", sw && near(r, 0.1) && near(g, 0.3) && near(b, 0.8),
+              num(r) + "," + num(g) + "," + num(b));
+        cl.lut.p = std::make_shared<const core::Lut>(*sw);
+        check("lookup: with a table it isn't the identity; the layer runs it", !A::identity(cl) && [&] {
+            float R = 0.8f, G = 0.3f, B = 0.1f; A::apply_rgb(cl, R, G, B); return near(R, 0.1) && near(B, 0.8); }(), "");
+        std::string w1, w2, w3, w4;
+        check("lookup: a bad .cube refused, with the reason -- short of rows, no size, a word in the numbers, too big",
+              !T::parse_cube("LUT_3D_SIZE 2\n0 0 0\n", w1) && !T::parse_cube("0 0 0\n", w2) &&
+              !T::parse_cube("LUT_3D_SIZE 2\n0 0 x\n", w3) && !T::parse_cube("LUT_3D_SIZE 99\n", w4) &&
+              !w1.empty() && !w2.empty() && !w3.empty() && !w4.empty(), w1 + " / " + w4);
+        const auto one = T::parse_cube("LUT_1D_SIZE 2\n1 1 1\n0 0 0\n", why);   // invert, per channel
+        float ir = 0.2f, ig = 0.5f, ib = 0.9f;
+        if (one) T::apply(*one, ir, ig, ib);
+        check("lookup: a 1D .cube made 3D -- each channel through its curve", one && one->n == core::kLookSize &&
+              near(ir, 0.8) && near(ig, 0.5) && near(ib, 0.1), num(ir));
+        bool looks_ok = T::looks().size() == 8;
+        for (const auto& n : T::looks()) {
+            const auto t = T::look(n);
+            looks_ok = looks_ok && t.name == n && t.n == core::kLookSize && T::refusal(t).empty();
+        }
+        float lr = 0.1f, lg = 0.6f, lb = 0.9f;
+        T::apply(T::look("Sepia Print"), lr, lg, lb);
+        check("lookup: Klimt's eight looks, each a full 33-cube; Sepia Print browns a blue", looks_ok && lr > lg && lg > lb && T::look("nope").n == 0,
+              num(lr) + "," + num(lb));
+        // The .klimt keeps the table: 16-bit samples, base64.
+        cl.lut.p = std::make_shared<const core::Lut>(T::look("Teal & Orange"));
+        const auto back = core::file::adjust_parse(core::file::adjust_text(cl));
+        check("lookup: the .klimt keeps the table -- the same, sample for sample, name and all", back && back->lut.p && back->lut.p.get() != cl.lut.p.get() &&
+              *back == cl, "");
+        const auto enc = T::encode(*sw);
+        check("lookup: a broken table in a file refused (short data, a size that doesn't match)",
+              !T::decode("x", 2, enc.substr(0, enc.size() - 8)) && !T::decode("x", 3, enc) && T::decode("x", 2, enc).has_value(), "");
+        auto bad = A::fresh(K::ColourLookup);
+        bad.lut.p = std::make_shared<const core::Lut>(core::Lut{"x", 2, std::vector<float>(24, 2.f)});
+        check("lookup: a table with samples past 0..1 refused", !A::refusal(bad).empty(), A::refusal(bad));
+        // In a document: an adjustment layer swapping red and blue over the red square.
+        Fix t;
+        const auto id = t.adj(K::ColourLookup);
+        check("lookup layer: no table -- the red square stays red", near(t.seen(150, 150).r, 1, 0.02), "");
+        auto with = A::fresh(K::ColourLookup);
+        with.lut.p = std::make_shared<const core::Lut>(*sw);
+        t.set(id, with);
+        const auto px = t.seen(150, 150);
+        check("lookup layer: the red square turns blue; the white background stays white", near(px.r, 0, 0.02) && near(px.b, 1, 0.02) &&
+              near(t.seen(20, 20).r, 1, 0.02), num(px.r) + "," + num(px.b));
     }
 }

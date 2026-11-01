@@ -169,6 +169,9 @@ json adjust_json(const Adjust& a) {
             j["mix"] = a.bw;
             break;
         }
+        case AdjustKind::ColourLookup:   // s066: the table itself, 16-bit samples in base64
+            if (a.lut.p) j["lut"] = {{"name", a.lut.p->name}, {"size", a.lut.p->n}, {"data", lut::encode(*a.lut.p)}};
+            break;
         case AdjustKind::Invert:
         case AdjustKind::None: break;
     }
@@ -717,6 +720,14 @@ std::optional<Adjust> adjust_from(const json& j) {
         for (std::size_t i = 0; i < a.mono.size(); ++i) a.mono[i] = m[i].get<int>();
     }
     a.monochrome = j.value("monochrome", false);
+    if (j.contains("lut")) {   // s066
+        const auto& t = j.at("lut");
+        if (!t.is_object() || !t.contains("size") || !t.contains("data") || !t.at("size").is_number_integer() || !t.at("data").is_string())
+            return std::nullopt;
+        auto back = lut::decode(t.value("name", std::string{}), t.at("size").get<int>(), t.at("data").get<std::string>());
+        if (!back) return std::nullopt;
+        a.lut.p = std::make_shared<const Lut>(std::move(*back));
+    }
     return a;
 }
 

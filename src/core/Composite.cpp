@@ -170,7 +170,7 @@ struct Walker {
             }
         }
         adj = dst;
-        adjust::run(*adjust::compile(l.adjust), adj.data(), kPx);
+        adjust::run(*adjust::compile(l.adjust), adj.data(), kPx, col * kTile, row * kTile, kTile);   // s066: where, for Dither
         const float* res = adj.data();
         if (l.blend != pixel::Blend::Normal && l.blend != pixel::Blend::PassThrough) {
             mixed = dst;
@@ -610,6 +610,7 @@ adjust::Histogram histogram_of(const Image& im, const Layers& layers, int max_ti
         const auto one = adjust::histogram(px);
         for (std::size_t c = 0; c < h.size(); ++c)
             for (std::size_t b = 0; b < 256; ++b) h[c][b] += one[c][b];
+        for (std::size_t b = 0; b < adjust::kColourBins; ++b) h.colours[b] += one.colours[b];
     }
     return h;
 }

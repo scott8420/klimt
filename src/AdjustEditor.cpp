@@ -7,11 +7,16 @@
 #include <gtkmm/gesturedrag.h>
 #include <gtkmm/grid.h>
 #include <gtkmm/stringlist.h>
+#include <gtkmm/filedialog.h>
+#include <gtkmm/window.h>
+#include <gtkmm/filefilter.h>
+#include <giomm/liststore.h>
 #include <glibmm/main.h>
 #include <glibmm/markup.h>
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 namespace klimt {
 
@@ -136,6 +141,15 @@ void AdjustEditor::set(const core::Adjust& a) {
     if (kind_changed) { m_point = -1; rebuild(); }
     else if (m_inks_box && m_a.inks.size() != m_ink_ui.size()) rebuild_inks();   // s065: an undo added / took an ink
     paint();
+}
+
+// s066: Klimt's looks, made once each and shared -- picking one again is
+// the same table (cheap to compare, cheap to copy).
+static std::shared_ptr<const core::Lut> shared_look(const std::string& name) {
+    static std::map<std::string, std::shared_ptr<const core::Lut>> made;
+    auto& p = made[name];
+    if (!p) p = std::make_shared<const core::Lut>(core::lut::look(name));
+    return p;
 }
 
 void AdjustEditor::set_histogram(const std::optional<core::adjust::Histogram>& h) {
@@ -293,6 +307,10 @@ void AdjustEditor::rebuild() {
     if (m_dropper != A::Dropper::None) { m_dropper = A::Dropper::None; m_dropper_sig.emit(m_dropper); }
     m_band_handle = -1;
     m_grad_preset = nullptr;
+    m_lut_dd = nullptr;   // s066
+    m_lut_note = nullptr;
+    m_lut_strip = nullptr;
+    m_lut_error.clear();
     m_stop_colour = nullptr;
     m_stop_at = nullptr;
     m_stop_del = nullptr;
@@ -332,6 +350,21 @@ void AdjustEditor::rebuild() {
             if (!m_hist) return;
             m_a = A::auto_tone(m_a, *m_hist);
             m_point = -1;
+            emit();
+            paint();
+        });
+        head->append(*m_auto);
+    } else if (m_a.kind == AdjustKind::BlackWhite) {
+        // s066: Black & White's Auto -- the six sliders from the picture's colours.
+        m_auto = Gtk::make_managed<Gtk::Button>("Auto");
+        m_auto->set_name("adjust.auto");
+        m_auto->add_css_class("flat");
+        m_auto->set_tooltip_text("Auto -- the mix from the picture's own colours: its greys spread as wide as they "
+                                 "go without blocking up or blowing out (a starting point)");
+        m_auto->set_sensitive(m_hist.has_value());
+        m_auto->signal_clicked().connect([this] {
+            if (!m_hist) return;
+            m_a = A::bw_auto(m_a, *m_hist);
             emit();
             paint();
         });
@@ -595,6 +628,53 @@ void AdjustEditor::rebuild() {
             rebuild_inks();
             break;
         }
+        case AdjustKind::ColourLookup: {   // s066
+            auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            auto l = Gtk::make_managed<Gtk::Label>("Look");
+            l->set_xalign(0.0f);
+            l->set_size_request(76, -1);
+            l->add_css_class("dim-label");
+            row->append(*l);
+            m_lut_names = Gtk::StringList::create({});
+            m_lut_dd = Gtk::make_managed<Gtk::DropDown>(m_lut_names);
+            m_lut_dd->set_name("adjust.lookup");
+            m_lut_dd->set_hexpand(true);
+            m_lut_dd->set_tooltip_text("None, one of Klimt's looks, or the table from a .cube file");
+            m_lut_dd->property_selected().signal_changed().connect([this] {
+                if (m_painting) return;
+                const guint i = m_lut_dd->get_selected();
+                const auto& looks = core::lut::looks();
+                if (i == 0) m_a.lut.p.reset();
+                else if (i <= looks.size()) m_a.lut.p = shared_look(looks[i - 1]);
+                else if (m_lut_file) m_a.lut.p = m_lut_file;
+                else { load_cube(); paint(); return; }
+                m_lut_error.clear();
+                emit();
+                paint();
+            });
+            row->append(*m_lut_dd);
+            auto load = Gtk::make_managed<Gtk::Button>("Load…");
+            load->set_name("adjust.lookup-load");
+            load->set_tooltip_text("A 3D LUT from a .cube file (Photoshop, Resolve, most LUT packs)");
+            load->signal_clicked().connect([this] { load_cube(); });
+            row->append(*load);
+            m_body.append(*row);
+            m_lut_strip = Gtk::make_managed<Gtk::DrawingArea>();
+            m_lut_strip->set_name("adjust.lookup-strip");
+            m_lut_strip->set_content_height(72);
+            m_lut_strip->set_tooltip_text("The colours as they are (above) and through the look (below)");
+            m_lut_strip->set_draw_func(sigc::mem_fun(*this, &AdjustEditor::draw_lookup));
+            m_body.append(*m_lut_strip);
+            m_lut_note = Gtk::make_managed<Gtk::Label>();
+            m_lut_note->set_name("adjust.lookup-note");
+            m_lut_note->set_xalign(0.0f);
+            m_lut_note->set_wrap(true);
+            m_lut_note->add_css_class("dim-label");
+            m_body.append(*m_lut_note);
+            if (m_a.lut.p && *shared_look(m_a.lut.p->name) != *m_a.lut.p) m_lut_file = m_a.lut.p;
+            lookup_rows();
+            break;
+        }
         case AdjustKind::GradientMap: {
             auto names = Gtk::StringList::create({});
             for (const auto& p : grad_presets()) names->append(p.name);
@@ -696,7 +776,7 @@ void AdjustEditor::rebuild() {
             });
             m_dither = Gtk::make_managed<Gtk::CheckButton>("Dither");
             m_dither->set_name("adjust.gradient-dither");
-            m_dither->set_tooltip_text("Kept with the layer (and in PSD) -- not drawn yet");
+            m_dither->set_tooltip_text("Break up banding with a fine, fixed grain (one 8-bit step)");
             m_dither->signal_toggled().connect([this] {
                 if (m_painting) return;
                 m_a.grad_dither = m_dither->get_active();
@@ -925,6 +1005,27 @@ void AdjustEditor::paint() {
     if (m_mono) m_mono->set_active(m_a.monochrome);   // s063
     totals();
     if (m_absolute) (m_a.selective_absolute ? m_absolute : m_relative)->set_active(true);   // s063
+    if (m_lut_dd) {   // s066
+        if (m_a.lut.p && *shared_look(m_a.lut.p->name) != *m_a.lut.p) m_lut_file = m_a.lut.p;   // an undo brought a file's back
+        lookup_rows();
+        guint pick = 0;
+        if (m_a.lut.p) {
+            const auto& looks = core::lut::looks();
+            pick = static_cast<guint>(looks.size() + 1);
+            for (std::size_t i = 0; i < looks.size(); ++i)
+                if (looks[i] == m_a.lut.p->name && m_a.lut.p.get() == shared_look(looks[i]).get()) pick = static_cast<guint>(i + 1);
+            if (pick == looks.size() + 1)   // a look's table read back from a file: still that look
+                for (std::size_t i = 0; i < looks.size(); ++i)
+                    if (looks[i] == m_a.lut.p->name && *shared_look(looks[i]) == *m_a.lut.p) pick = static_cast<guint>(i + 1);
+        }
+        m_lut_dd->set_selected(pick);
+        std::string note;
+        if (!m_lut_error.empty()) note = m_lut_error;
+        else if (m_a.lut.p) note = std::to_string(m_a.lut.p->n) + " × " + std::to_string(m_a.lut.p->n) + " × " + std::to_string(m_a.lut.p->n) + " table";
+        else note = "No look -- pick one, or load a .cube";
+        m_lut_note->set_text(note);
+        m_lut_strip->queue_draw();
+    }
     if (m_grad_preset) {
         m_stop = std::clamp(m_stop, 0, static_cast<int>(m_a.grad.size()) - 1);
         m_grad_preset->set_selected(grad_preset_of(m_a.grad));
@@ -1164,8 +1265,9 @@ void AdjustEditor::draw_plate(std::size_t i, const Cairo::RefPtr<Cairo::Context>
     cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.06);
     cr->rectangle(g.x0, g.top, W, H);
     cr->fill();
-    if (m_hist) {   // the picture's greys
-        const auto& bins = (*m_hist)[0];
+    if (m_hist) {   // the picture's greys (s066: the mix's, when the grey comes from it)
+        const auto mixed = m_a.grey_bw ? A::bw_histogram(m_a, *m_hist) : std::array<std::uint32_t, 256>{};
+        const auto& bins = m_a.grey_bw ? mixed : (*m_hist)[0];
         std::vector<std::uint32_t> sorted(bins.begin(), bins.end());
         std::sort(sorted.begin(), sorted.end());
         const double peak = std::max<double>(1, static_cast<double>(sorted[250]));
@@ -1861,6 +1963,76 @@ void AdjustEditor::curves_release() {
     }
     m_point_off = false;
     paint();
+}
+
+
+// s066: the Look dropdown -- None, the looks, then the file's table (or the
+// way to load one).
+void AdjustEditor::lookup_rows() {
+    if (!m_lut_names) return;
+    const bool was = m_painting;
+    m_painting = true;
+    std::vector<Glib::ustring> rows{"None"};
+    for (const auto& n : core::lut::looks()) rows.emplace_back(n);
+    rows.emplace_back(m_lut_file ? "File: " + (m_lut_file->name.empty() ? std::string("(untitled)") : m_lut_file->name)
+                                 : std::string("From a .cube file…"));
+    bool same = m_lut_names->get_n_items() == rows.size();
+    for (guint i = 0; same && i < rows.size(); ++i) same = m_lut_names->get_string(i) == rows[i];
+    if (!same) {
+        const guint keep = m_lut_dd ? m_lut_dd->get_selected() : 0;
+        m_lut_names->splice(0, m_lut_names->get_n_items(), rows);
+        if (m_lut_dd) m_lut_dd->set_selected(std::min<guint>(keep, static_cast<guint>(rows.size() - 1)));
+    }
+    m_painting = was;
+}
+
+void AdjustEditor::load_cube() {
+    auto* win = dynamic_cast<Gtk::Window*>(get_root());
+    if (!win) return;
+    auto dlg = Gtk::FileDialog::create();
+    dlg->set_title("Load a Colour Lookup (.cube)");
+    auto f = Gtk::FileFilter::create();
+    f->set_name("3D LUT (.cube)");
+    f->add_pattern("*.cube");
+    f->add_pattern("*.CUBE");
+    auto filters = Gio::ListStore<Gtk::FileFilter>::create();
+    filters->append(f);
+    dlg->set_filters(filters);
+    dlg->open(*win, [this, dlg](Glib::RefPtr<Gio::AsyncResult>& res) {
+        Glib::RefPtr<Gio::File> file;
+        try { file = dlg->open_finish(res); } catch (...) { return; }   // cancelled
+        if (!file || m_a.kind != AdjustKind::ColourLookup) return;
+        std::string why;
+        auto t = core::lut::load_cube(file->get_path(), why);
+        if (!t) {
+            m_lut_error = "Couldn't use " + file->get_basename() + ": " + why;
+            paint();
+            return;
+        }
+        m_lut_error.clear();
+        m_lut_file = std::make_shared<const core::Lut>(std::move(*t));
+        m_a.lut.p = m_lut_file;
+        emit();
+        paint();
+    });
+}
+
+void AdjustEditor::draw_lookup(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+    // Hue across, from dark to light down each half; the lower half through the table.
+    const int cols = std::max(1, w / 3), rows = 6;
+    const double cw = static_cast<double>(w) / cols, half = (h - 4) / 2.0, rh = half / rows;
+    for (int band = 0; band < 2; ++band)
+        for (int y = 0; y < rows; ++y)
+            for (int x = 0; x < cols; ++x) {
+                const double hue = static_cast<double>(x) / cols, l = 0.12 + 0.76 * y / (rows - 1);
+                double r, g, b;
+                A::from_hsl(hue, x < cols / 12 ? 0.0 : 0.75, l, r, g, b);   // a grey ramp at the left
+                float R = static_cast<float>(r), G = static_cast<float>(g), B = static_cast<float>(b);
+                if (band == 1 && m_a.lut.p) core::lut::apply(*m_a.lut.p, R, G, B);
+                cr->set_source_rgb(R, G, B);
+                cr->rectangle(x * cw, band * (half + 4) + y * rh, cw + 0.5, rh + 0.5);
+                cr->fill();
+            }
 }
 
 }  // namespace klimt

@@ -12,6 +12,7 @@
 #include "core/Adjust.hpp"
 #include "core/AdjustPresets.hpp"
 
+#include <gtkmm/stringlist.h>
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
 #include <gtkmm/checkbutton.h>
@@ -98,6 +99,11 @@ private:
     // s063: Gradient Map -- the bar, its stops below it (click under the bar
     // to add one, drag to move, drag off to remove) and the midpoints.
     void draw_gradient(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
+    // s066: Colour Lookup -- the hues and tones as they are above, through the
+    // table below; the Look dropdown's rows; a .cube loaded.
+    void draw_lookup(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
+    void lookup_rows();
+    void load_cube();
     void gradient_press(double x, double y);
     void gradient_drag(double x, double y);
     void gradient_release();
@@ -112,6 +118,14 @@ private:
 
     core::Adjust m_a;
     core::AdjustKind m_built = core::AdjustKind::None;
+    // s066: Colour Lookup's controls; the last table read from a file, kept
+    // while you try the looks (as an ink keeps its Levels and Curve).
+    Gtk::DropDown* m_lut_dd = nullptr;
+    Glib::RefPtr<Gtk::StringList> m_lut_names;
+    Gtk::Label* m_lut_note = nullptr;
+    Gtk::DrawingArea* m_lut_strip = nullptr;
+    std::shared_ptr<const core::Lut> m_lut_file;
+    std::string m_lut_error;
     bool m_painting = false;
     std::optional<core::adjust::Histogram> m_hist;
 

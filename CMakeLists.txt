@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s065")
+set(KLIMT_BUILD "s066")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -129,6 +129,7 @@ add_library(klimt_core STATIC
     src/core/Fade.cpp         # s020: Edit > Fade
     src/core/BrushPresets.cpp # s021: saved brushes
     src/core/AdjustPresets.cpp # s065: saved adjustments
+    src/core/Lut.cpp          # s066: Colour Lookup's tables (.cube, Klimt's looks)
     src/core/Transfer.cpp     # s022: layers between documents
     src/core/Session.cpp      # s023: the open tabs, remembered
     src/core/ColourRange.cpp  # s024: Select > Color Range
@@ -151,7 +152,7 @@ if(KLIMT_FAST_PIXELS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_options(klimt_pixel PRIVATE -O2)
     set_source_files_properties(src/core/Composite.cpp src/core/Paint.cpp src/core/Canvas.cpp
                                 src/core/Move.cpp src/core/Selection.cpp src/core/Transform.cpp src/core/Gradient.cpp
-                                src/core/Adjust.cpp src/core/Filter.cpp src/core/Heal.cpp src/core/StylesRender.cpp src/core/Fade.cpp src/core/Patterns.cpp
+                                src/core/Adjust.cpp src/core/Lut.cpp src/core/Filter.cpp src/core/Heal.cpp src/core/StylesRender.cpp src/core/Fade.cpp src/core/Patterns.cpp
                                 src/core/Path.cpp src/core/Paths.cpp src/core/Isolate.cpp src/core/Matte.cpp
                                 PROPERTIES COMPILE_OPTIONS "-O2")
 endif()

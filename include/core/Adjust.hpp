@@ -16,6 +16,7 @@
 // neighbours), so a tile adjusts by itself and the compositor stays per tile.
 // The maths works on encoded RGB 0..1, the way Photoshop's do on an RGB
 // document; alpha is never touched.
+#include "core/Lut.hpp"
 #include "pixel/Pixel.hpp"
 
 #include <array>
@@ -38,7 +39,9 @@ enum class AdjustKind : std::uint8_t { None, Levels, Curves, HueSat, BrightCon, 
                                        // s063: the rest of WEAKNESSES 34.
                                        ColourBalance, ChannelMixer, SelectiveColour, GradientMap,
                                        // s065
-                                       Duotone };
+                                       Duotone,
+                                       // s066
+                                       ColourLookup };
 
 // Levels on one channel: input black / white points and gamma (the middle
 // slider, 0.1 .. 9.99, 1 = none), output black / white. All 0..1.
@@ -90,6 +93,13 @@ struct Ink {
     bool operator==(const Ink&) const = default;
 };
 inline constexpr std::size_t kMaxInks = 4;
+
+// s066: a Colour Lookup's table, shared (a 33-cube is 430 KB -- copies of an
+// Adjust share it); equal when the tables are, wherever they live.
+struct LutRef {
+    std::shared_ptr<const Lut> p;
+    bool operator==(const LutRef& o) const { return p == o.p || (p && o.p && *p == *o.p); }
+};
 
 struct Adjust {
     AdjustKind kind = AdjustKind::None;
@@ -146,7 +156,7 @@ struct Adjust {
     // s063: Gradient Map -- each pixel's luminosity looked up along the
     // gradient (black to white to start: Photoshop's foreground to
     // background). Two to kGradStops stops, by `at`. Reverse runs it the
-    // other way; Dither is kept (and carried to PSD) but not drawn yet.
+    // other way; Dither (s066: drawn) breaks up banding with fixed noise.
     std::vector<GradStop> grad{{0, 0.5, {0, 0, 0}}, {1, 0.5, {1, 1, 1}}};
     bool grad_reverse = false, grad_dither = false;
     // s065: Duotone -- one to four inks printed over white paper, each by its
@@ -155,6 +165,9 @@ struct Adjust {
     std::vector<Ink> inks{{{0, 0, 0}, false, {0, 1, 1.6, 0, 1}, {{0, 0}, {1, 1}}},
                           {{166 / 255.0, 124 / 255.0, 82 / 255.0}, false, {}, {{0, 0}, {1, 1}}}};
     bool grey_bw = false;
+    // s066: Colour Lookup -- the table (none to start: does nothing, as
+    // Photoshop's), from a .cube or one of Klimt's looks.
+    LutRef lut;
     bool operator==(const Adjust&) const = default;
 };
 
@@ -203,11 +216,18 @@ struct Compiled {
     std::array<std::vector<float>, 3> lut;   // Levels, Curves, Brightness / Contrast; s061: Invert, Posterize, Exposure
     Adjust a;                                // Hue / Saturation runs per pixel
     std::vector<std::vector<float>> plates;  // s065: Duotone -- each ink's amount by grey
+    std::shared_ptr<const Lut> table;         // s066: Colour Lookup
 };
 // Cached: the compositor asks for the same few per tile.
 std::shared_ptr<const Compiled> compile(const Adjust& a);
 // PREMULTIPLIED RGBA, n pixels, in place; alpha unchanged.
 void run(const Compiled& c, float* rgba, std::size_t n);
+// s066: the same, knowing where the pixels are -- row-major, `w` wide, the
+// first at (x0, y0) -- so a Gradient Map's Dither is drawn (one 8-bit step of
+// fixed noise per pixel: no banding, the same on every redraw).
+void run(const Compiled& c, float* rgba, std::size_t n, int x0, int y0, int w);
+// The dither's noise at a pixel, -0.5 .. 0.5.
+float dither_at(int x, int y);
 // Straight colour through a compiled form.
 void run_rgb(const Compiled& c, float& r, float& g, float& b);
 
@@ -220,9 +240,21 @@ std::optional<pixel::TileMap> applied(const pixel::TileMap& src, const Adjust& a
 
 // 256 bins per channel (0 = luminosity, 1..3 = R, G, B) of Cairo ARGB32
 // pixels (premultiplied; transparent pixels are left out) -- what Levels
-// draws behind its sliders.
-using Histogram = std::array<std::array<std::uint32_t, 256>, 4>;
+// draws behind its sliders. s066: and the colours themselves, 32 levels a
+// channel (index r << 10 | g << 5 | b) -- what Black & White's Auto reads.
+inline constexpr std::size_t kColourBins = 32 * 32 * 32;
+struct Histogram : std::array<std::array<std::uint32_t, 256>, 4> {
+    std::array<std::uint32_t, kColourBins> colours{};
+};
 Histogram histogram(const std::vector<std::uint32_t>& argb);
+// s066: Black & White's Auto -- the six sliders from the picture's own
+// colours: the mix that spreads its greys widest (the most contrast between
+// colours that luminosity would merge) without driving more of them into the
+// last 6 % at either end than the default mix does; a hue the picture hasn't got keeps its slider. Tint and the rest of
+// `a` kept. Duotone's mix too (grey_bw). No colour at all: `a` unchanged.
+Adjust bw_auto(const Adjust& a, const Histogram& h);
+// s066: the grey histogram (256 bins) a Black & White mix gives the colours.
+std::array<std::uint32_t, 256> bw_histogram(const Adjust& a, const Histogram& h);
 // s064: Auto, Photoshop's default ("Enhance Per Channel Contrast"): each of
 // R, G, B stretched so its darkest and lightest -- past `clip` of the pixels
 // at each end -- become black and white. Levels: the channels' input points;
