@@ -309,4 +309,25 @@ void selftest_adjust(const Check& check) {
         const auto h = A::histogram(px);
         check("histogram: counts, transparent left out", h[1][255] == 2 && h[1][0] == 1 && h[2][0] == 3, "");
     }
+    // s056 (WEAKNESSES 32): what an adjustment layer's histogram depends on.
+    {
+        namespace Px = klimt::pixel;
+        const Px::Format f{Px::Depth::U8, Px::Mode::RGB, true};
+        const auto px = [&](float v) { return std::make_shared<const Px::TileMap>(Px::TileMap(f, 300, 200).fill({0, 0, 300, 200}, Px::rgba(v, v, v))); };
+        core::Layers ls;
+        core::Layer bg; bg.name = "Bg"; bg.pos = 1; bg.pixels = px(0.2f); ls["L1"] = bg;
+        core::Layer lv; lv.name = "Levels"; lv.kind = core::Kind::Adjustment; lv.pos = 2; lv.adjust.kind = core::AdjustKind::Levels; ls["L2"] = lv;
+        core::Layer top; top.name = "Top"; top.pos = 3; top.pixels = px(0.9f); ls["L3"] = top;
+        const auto key = core::histogram_key(ls, "L2");
+        auto a = ls; a["L2"].adjust.kind = core::AdjustKind::Curves; a["L2"].opacity = 40;
+        auto b = ls; b["L3"].pixels = px(0.5f);
+        auto c = ls; c["L1"].pixels = px(0.6f);
+        auto d = ls; d["L1"].visible = false;
+        auto e = ls; e["L3"].pos = 1.5;   // Top moved under the Levels
+        check("histogram: s056 -- the layer's own settings change nothing it counts", core::histogram_key(a, "L2") == key, "");
+        check("histogram: s056 -- painting a layer ABOVE it changes nothing it counts", core::histogram_key(b, "L2") == key, "");
+        check("histogram: s056 -- painting the layer below: counted again", !(core::histogram_key(c, "L2") == key), "");
+        check("histogram: s056 -- hiding the layer below: counted again", !(core::histogram_key(d, "L2") == key), "");
+        check("histogram: s056 -- a layer moved under it: counted again", !(core::histogram_key(e, "L2") == key), "");
+    }
 }

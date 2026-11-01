@@ -25,12 +25,36 @@ void Shell::on_adjust_new(core::AdjustKind k) {
 
 void Shell::on_histogram(const core::Document::Id& id) {
     const auto im = m_doc.image();
-    auto layers = std::make_shared<const core::Layers>(core::below(m_doc.snapshot(), id));
-    start_job("Histogram", [this, id, im, layers](core::Jobs::Token& t) -> core::Jobs::Landing {
+    const auto all = m_doc.snapshot();
+    auto layers = std::make_shared<const core::Layers>(core::below(all, id));
+    m_hist_for = id;
+    m_hist_key = core::histogram_key(all, id);
+    m_hist_image = im;
+    const unsigned gen = ++m_hist_gen;
+    start_job("Histogram", [this, id, im, layers, gen](core::Jobs::Token& t) -> core::Jobs::Landing {
         const auto h = core::histogram_of(im, *layers, 64, [&t] { return t.cancelled(); });
         if (t.cancelled()) return [] {};
-        return [this, id, h] { m_properties.set_histogram(id, h); };
+        return [this, id, h, gen] { if (gen == m_hist_gen) m_properties.set_histogram(id, h); };
     });
+}
+
+// s056 (WEAKNESSES 32): told on every document change. 400 ms after the last
+// one, the shown histogram is counted again -- if what's below its layer
+// changed (histogram_key): dragging the layer's own Levels, or painting above
+// it, costs nothing.
+void Shell::histogram_soon() {
+    if (m_properties.histogram_layer().empty()) return;
+    m_hist_soon.disconnect();
+    m_hist_soon = Glib::signal_timeout().connect([this] {
+        const auto id = m_properties.histogram_layer();
+        if (id.empty() || !m_doc.get(id)) return false;
+        if (m_journal.in_gesture()) return true;   // mid-stroke: ask again in 400 ms
+        const auto all = m_doc.snapshot();
+        if (id == m_hist_for && m_doc.image() == m_hist_image && core::histogram_key(all, id) == m_hist_key) return false;
+        if (auto lg = log::get(log::Area::Shell)) lg->info("histogram: what's below “{}” changed -- counted again", m_doc.get(id)->name);
+        on_histogram(id);
+        return false;
+    }, 400);
 }
 
 void Shell::on_adjust_apply(core::AdjustKind k) {

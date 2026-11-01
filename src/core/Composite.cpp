@@ -570,6 +570,12 @@ Layers below(const Layers& all, const Document::Id& id) {
     return out;
 }
 
+Layers histogram_key(const Layers& all, const Document::Id& id) {
+    Layers out = below(all, id);
+    for (auto it = out.begin(); it != out.end();) it = it->second.visible ? std::next(it) : out.erase(it);
+    return out;
+}
+
 adjust::Histogram histogram_of(const Image& im, const Layers& layers, int max_tiles, const std::function<bool()>& cancelled) {
     adjust::Histogram h{};
     const int cols = (im.width + kTile - 1) / kTile, rows = (im.height + kTile - 1) / kTile, n = cols * rows;

@@ -269,6 +269,14 @@ private:
     void fade_preview_stop();                    // category: fade: drop the preview and its job
     void fade_run();                             // category: fade: OK -- a job, ONE step
     void on_histogram(const core::Document::Id& id);   // category: adjust: what's below an adjustment layer, counted (a job)
+    // s056 (WEAKNESSES 32): the histogram follows edits below its layer --
+    // after a quiet moment, and only when what's below changed.
+    void histogram_soon();
+    sigc::connection m_hist_soon;
+    core::Document::Id m_hist_for;   // the layer the last count was for
+    core::Layers m_hist_key;         // and what was below it then (histogram_key)
+    core::Image m_hist_image;
+    unsigned m_hist_gen = 0;         // a landing older than the newest count is dropped
 
     // ── helpers ────────────────────────────────────────────────────────────
     void load_demo();                             // category: helper: a demo document, LOADED (not undoable)

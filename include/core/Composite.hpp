@@ -76,6 +76,11 @@ TileSet changed_tiles(const Image& before_im, const Layers& before, const Image&
 // after it (its later siblings, and its groups' later siblings, up to the
 // top) hidden. What an adjustment layer's histogram is made from.
 Layers below(const Layers& all, const Document::Id& id);
+// s056 (WEAKNESSES 32): what the histogram under `id` depends on -- below()
+// with every hidden layer dropped. Equal keys, the same histogram: the
+// layer's own settings, a layer above it, a hidden layer's pixels change
+// nothing; a layer below it painted, moved, shown or hidden does.
+Layers histogram_key(const Layers& all, const Document::Id& id);
 // s013: the histogram of the composite of `layers` -- every tile when there
 // are few, else an even spread of `max_tiles` of them.
 adjust::Histogram histogram_of(const Image& im, const Layers& layers, int max_tiles = 64,

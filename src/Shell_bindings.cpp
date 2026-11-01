@@ -340,7 +340,7 @@ void Shell::bind_actions() {  // bindings
     // UI when Undo / Redo change; the store's changes repaint the panel, whose
     // repaint (and any selection change) reaches Properties and the status.
     m_doc.set_door([this] { return m_journal.open(); });
-    m_doc.set_on_change([this] { m_layers.queue_repaint(); queue_render(); queue_ants(); update_channels(); });
+    m_doc.set_on_change([this] { m_layers.queue_repaint(); queue_render(); queue_ants(); update_channels(); histogram_soon(); });
     m_canvas.signal_ants_level().connect([this] { queue_ants(); });   // s049: the zoom crossed an ants level
     m_canvas.set_on_zoom([this](double z) {
         m_status.set_zoom(std::to_string(static_cast<int>(z * 100 + 0.5)) + "%");

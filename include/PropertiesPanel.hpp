@@ -38,6 +38,8 @@ public:
     // asked, and hands it back for that layer).
     sigc::signal<void(const Id&)>& signal_histogram_wanted() { return m_hist_wanted; }
     void set_histogram(const Id& id, const core::adjust::Histogram& h);
+    // s056: the Levels / Curves layer whose histogram is showing ("" none).
+    Id histogram_layer() const { return m_hist_id == m_adjust_id ? m_hist_id : Id{}; }
     // s018: a live filter's settings wanted (double-click it): its layer, its place.
     sigc::signal<void(const Id&, std::size_t)>& signal_live_edit() { return m_live_edit; }
     // s018 m4: the layer whose FILTER MASK the brushes paint ("" none) -- the
