@@ -369,6 +369,16 @@ void Shell::bind_actions() {  // bindings
     // Help > Open Demo.
     update_title();
 
+    // s071: the monitor's profile -- once shown, and when the window moves
+    // to another monitor.
+    signal_map().connect([this] {
+        read_monitor_profile();
+        if (auto surf = get_surface())
+            g_signal_connect(surf->gobj(), "enter-monitor", G_CALLBACK(+[](GdkSurface*, GdkMonitor*, gpointer self) {
+                static_cast<Shell*>(self)->read_monitor_profile();
+            }), this);
+    });
+
     // ── the window's own keys ───────────────────────────────────────────────
     // NOT accelerators: an accelerator fires before the focused widget, so it
     // would take Ctrl+Z, Tab and the tool letters from every text box. The

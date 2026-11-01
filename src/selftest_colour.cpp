@@ -4,6 +4,8 @@
 #include "core/File.hpp"
 #include "core/Document.hpp"
 #include "core/Profile.hpp"
+#include "core/Live.hpp"
+#include "core/Styles.hpp"
 #include "core/Text.hpp"
 #include "tint/Tint.hpp"
 
@@ -354,5 +356,65 @@ void selftest_colour(const Check& check) {
         check("find: Klimt's own by name, a file by path; \"\" and a gone file nothing",
               Pr::find("Plain CMYK (no dot gain)").has_value() && !Pr::find("").has_value() && !Pr::find("/gone/x.icc").has_value() &&
               !Pr::find("No Such Profile").has_value(), "");
+    }
+
+    std::cout << "\n-- colour management: layer styles through the profile; the preview (s071) --\n";
+    {
+        auto ad = doc(P::Mode::RGB, P::rgba(1, 0, 0), adobe);
+        core::Layer* L = nullptr;
+        for (auto& [id, l] : ad.layers) if (l.kind == core::Kind::Pixel && l.pixels) { L = &l; break; }
+        if (L) {
+            L->styles.overlay.on = true;
+            L->styles.overlay.colour = {0, 1, 0};
+            const auto with = core::live::look(*L, &ad.image), plain = core::live::look(*L);
+            const auto want = core::from_srgb(ad.image, 0, 1, 0);
+            const auto w = with->get(5, 5), p = plain->get(5, 5);
+            check("styles: an Adobe RGB document's Color Overlay green goes in through its profile (not the raw sRGB numbers)",
+                  near(w.c[0], want.c[0], 0.01) && near(w.c[1], want.c[1], 0.01) && near(w.c[2], want.c[2], 0.01) && w.c[0] > 0.2f && near(p.c[0], 0, 0.01),
+                  num(w.c[0]) + "," + num(w.c[1]) + "," + num(w.c[2]) + " / plain " + num(p.c[0]));
+            const auto sr = doc(P::Mode::RGB, P::rgba(1, 0, 0), nullptr);
+            check("styles: an untagged document's colour profile is none (plain, as before)", !core::colour_profile(sr.image) && core::colour_profile(ad.image) == adobe, "");
+        } else check("styles: a pixel layer to style", false, "");
+        T::set_working(T::Space::CMYK, cmyk);
+        check("colour_profile: an untagged CMYK follows the working CMYK", core::colour_profile(doc(P::Mode::CMYK, ink(0, 0, 0, 0), nullptr).image) == cmyk, "");
+        T::set_working(T::Space::CMYK, nullptr);
+    }
+
+    std::cout << "\n-- colour management: the monitor's profile (s071) --\n";
+    {
+        namespace Pr = klimt::core::profile;
+        using D = Pr::MonitorDevice;
+        const std::vector<D> ds{{"HDMI-1", false, {}}, {"DP-1", false, {"/a.icc", "/b.icc"}}, {"eDP-1", true, {"/laptop.icc"}}};
+        check("monitor: the window's connector picks its device's default profile; unknown -> the primary; none at all -> \"\"",
+              Pr::monitor_profile(ds, "DP-1") == "/a.icc" && Pr::monitor_profile(ds, "HDMI-1") == "/laptop.icc" &&
+              Pr::monitor_profile(ds, "") == "/laptop.icc" && Pr::monitor_profile({{"X", false, {"/x.icc"}}}, "Y") == "/x.icc" &&
+              Pr::monitor_profile({}, "DP-1").empty(), "");
+        T::set_screen(std::make_shared<const T::Icc>(T::srgb()));
+        const bool srgb_none = !T::screen();
+        T::set_screen(std::make_shared<const T::Icc>(T::Icc{1, 2, 3}));
+        const bool junk_none = !T::screen();
+        T::set_screen(cmyk);
+        check("screen: an sRGB, junk or non-RGB monitor profile -- the screen stays sRGB", srgb_none && junk_none && !T::screen() && !T::to_screen(nullptr), "");
+        T::set_screen(adobe);   // a wide-gamut monitor
+        const auto ch = [](std::uint32_t v, int sh) { return static_cast<int>(v >> sh & 0xff); };
+        std::vector<std::uint32_t> px{0xffff0000u, 0xff808080u, 0x00000000u};
+        if (const auto d = T::to_screen(nullptr)) d->run(px.data(), px.size());
+        check("screen Adobe RGB: sRGB's red sent as less red numbers (the monitor's red is redder); grey stays grey; transparent stays",
+              T::screen() == adobe && ch(px[0], 16) < 0xf0 && std::abs(ch(px[1], 16) - ch(px[1], 8)) <= 1 && px[2] == 0, std::to_string(ch(px[0], 16)));
+        const auto sd = doc(P::Mode::RGB, P::rgba(1, 0, 0), nullptr);
+        std::vector<std::uint32_t> t{0xffff0000u};
+        core::shown_argb(sd.image, t);
+        std::vector<std::uint32_t> a{0xffff0000u};
+        core::shown_argb(doc(P::Mode::RGB, P::rgba(1, 0, 0), adobe).image, a);
+        check("screen: an untagged document's tiles go to the monitor; an Adobe RGB one on an Adobe RGB monitor is left as it is",
+              t[0] == px[0] && a[0] == 0xffff0000u, std::to_string(t[0]) + " / " + std::to_string(a[0]));
+        std::vector<std::uint32_t> pr{0xff808080u};
+        if (const auto d = T::proof(nullptr, cmyk, true, false, false)) d->run(pr.data(), pr.size());
+        check("screen: a proof ends on the monitor too (made apart from the sRGB one)", T::proof(nullptr, cmyk, true, false, false) != nullptr &&
+              std::abs(ch(pr[0], 16) - ch(pr[0], 0)) <= 2, "");
+        T::set_screen(nullptr);
+        std::vector<std::uint32_t> back{0xffff0000u};
+        core::shown_argb(sd.image, back);
+        check("screen: cleared -- untagged tiles untouched again", back[0] == 0xffff0000u && !T::to_screen(nullptr), "");
     }
 }

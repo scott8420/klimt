@@ -1,4 +1,5 @@
 #include "core/File.hpp"
+#include "tint/Tint.hpp"   // s071: the preview to sRGB
 #include "core/Patterns.hpp"   // s028 m4
 #include "core/Transfer.hpp"   // s022: converted()
 #include "core/Composite.hpp"
@@ -1370,7 +1371,28 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         else if (auto r = reduced(c.image, c.layers, k, nullptr, p.cancelled)) flat = flatten(r->image, r->layers, cancel_only);
         if (flat) {
             std::string ignored;
-            const P::TileMap merged = ora::thumbnail(*flat, kPreviewSide);
+            P::TileMap merged = ora::thumbnail(*flat, kPreviewSide);
+            // s071: a wide-RGB document's preview turned to sRGB -- a file
+            // manager shows it as Klimt does (the tiles keep their numbers).
+            if (c.image.format.mode == P::Mode::RGB && c.image.icc && !tint::is_srgb(c.image.icc))
+                if (const auto link = tint::to_srgb(c.image.icc, tint::Space::RGB)) {
+                    const int w = merged.width(), h = merged.height();
+                    const std::size_t n = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+                    std::vector<float> in(n * 3), out(n * 3);
+                    for (int y = 0; y < h; ++y)
+                        for (int x = 0; x < w; ++x) {
+                            const auto px = merged.get(x, y);
+                            const std::size_t i = (static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)) * 3;
+                            for (std::size_t k = 0; k < 3; ++k) in[i + k] = px.c[k];
+                        }
+                    link->run(in.data(), out.data(), n);
+                    merged = merged.paint({0, 0, w, h}, [&](int x, int y, const P::Px& o) {
+                        P::Px px = o;
+                        const std::size_t i = (static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)) * 3;
+                        for (std::size_t k = 0; k < 3; ++k) px.c[k] = out[i + k];
+                        return px;
+                    });
+                }
             ora::png_bytes(merged, merged_png, ignored, cancel_only, 3);
             ora::png_bytes(ora::thumbnail(merged, 256), thumb_png, ignored, cancel_only, 6);
         }

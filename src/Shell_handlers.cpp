@@ -26,7 +26,10 @@ void Shell::on_shortcuts() {
 }
 
 void Shell::on_about() {
-    if (!m_about) m_about = std::make_unique<AboutWindow>(*this);
+    if (!m_about) {
+        m_about = std::make_unique<AboutWindow>(*this);
+        m_about->set_monitor([this] { return m_monitor_name; });   // s071
+    }
     m_about->present();
 }
 

@@ -27,14 +27,20 @@
 // The right column is four tabs (s027): About, Credits, License, System;
 // the painting stays. See docs/resources-and-dialog-lifetime.md.
 // ─────────────────────────────────────────────────────────────────────────────
+#include <functional>
+#include <string>
+
 namespace klimt {
 
 class AboutWindow : public Gtk::Window {
 public:
     explicit AboutWindow(Gtk::Window& parent);
     ~AboutWindow() override;
+    // s071: the monitor's profile, asked each time the System tab fills.
+    void set_monitor(std::function<std::string()> f) { m_monitor = std::move(f); }
 
 private:
+    std::function<std::string()> m_monitor;
     // s027: the System tab is filled each time the window maps -- the scale
     // and the display are only known once it is on a screen.
     void fill_system();

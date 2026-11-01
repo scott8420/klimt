@@ -54,6 +54,11 @@ std::string profile_name(const Image& im);
 // (`shown_argb`, in place) and the colour the Eyedropper hands the colour
 // pair (`shown`). The way in is from_srgb(Image, ...) above.
 bool display_managed(const Image& im);
+// s071: the profile a picked (sRGB) colour goes in through for this document
+// -- its own (Gray / CMYK / Lab usable, or a non-sRGB RGB), the working space
+// for an untagged Gray / CMYK, else nullptr (the plain conversion). Layer
+// styles' colours follow it.
+std::shared_ptr<const std::vector<std::uint8_t>> colour_profile(const Image& im);
 void shown_argb(const Image& im, std::vector<std::uint32_t>& argb);
 // s069: VIEW > PROOF COLORS / GAMUT WARNING -- the same tiles shown as
 // `press` would print them, and / or what it can't reach marked grey. View

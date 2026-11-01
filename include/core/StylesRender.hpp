@@ -13,7 +13,11 @@ namespace klimt::core::styles {
 // styles drawn: shadows / glow under it, the content at `fill` %, the inner
 // effects and the stroke over it. The result grows past the content by the
 // effects' reach. A format without alpha comes back as it was.
-pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill);
+// s071: `colour` -- how a style's sRGB colour goes into the layer's
+// channels (the document's profile, from_srgb(Image, ...)); empty: the
+// plain conversion (from_srgb(Format, ...)).
+using ColourIn = std::function<pixel::Px(float r, float g, float b)>;
+pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill, const ColourIn& colour = {});
 
 // How far the styles reach past the content, in pixels.
 int reach(const Styles& s);

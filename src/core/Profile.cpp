@@ -272,6 +272,16 @@ Choice proof_choice(const std::string& remembered, const std::vector<std::string
     return all.front();
 }
 
+std::string monitor_profile(const std::vector<MonitorDevice>& devices, const std::string& connector) {
+    for (const auto& d : devices)
+        if (!connector.empty() && d.connector == connector && !d.profiles.empty()) return d.profiles.front();
+    for (const auto& d : devices)
+        if (d.primary && !d.profiles.empty()) return d.profiles.front();
+    for (const auto& d : devices)
+        if (!d.profiles.empty()) return d.profiles.front();
+    return {};
+}
+
 std::string remembered_as(const Choice& c) { return c.path.empty() ? c.name : c.path; }
 
 IccPtr builtin(pixel::Mode m) {

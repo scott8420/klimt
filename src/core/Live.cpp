@@ -21,6 +21,8 @@ struct Entry {
     std::vector<LiveFilter> stack;
     Styles styles;   // s019 (and the fill, which styles keep off their effects)
     int fill = 100;
+    std::shared_ptr<const std::vector<std::uint8_t>> colour;   // s071: the profile styles' colours went in through
+    pixel::Mode mode = pixel::Mode::RGB;
     std::shared_future<std::shared_ptr<const pixel::TileMap>> result;
     std::uint64_t used = 0;
 };
@@ -37,12 +39,23 @@ std::vector<LiveFilter> on_only(const std::vector<LiveFilter>& s) {
 }
 
 // The whole look of `src`: the stack, the filter mask, the styles.
+// s071: styles' colours through `icc` (the document's), or plain.
+styles::ColourIn colour_in(const std::shared_ptr<const std::vector<std::uint8_t>>& icc, const pixel::Format& f) {
+    if (!icc) return {};
+    return [icc, f](float r, float g, float b) {
+        Image im;
+        im.format = f;
+        im.icc = icc;
+        return from_srgb(im, r, g, b);
+    };
+}
+
 std::shared_ptr<const pixel::TileMap> whole(const pixel::TileMap& src, const std::vector<LiveFilter>& stack,
                                             const pixel::TileMap* mask, const Styles& st, int fill,
-                                            const pixel::TileMap* depth = nullptr) {
+                                            const pixel::TileMap* depth = nullptr, const styles::ColourIn& colour = {}) {
     auto out = run(src, stack, nullptr, {}, depth);
     if (out && mask) out = masked(src, *out, *mask);
-    if (out && st.any()) out = styles::drawn(*out, st, fill);
+    if (out && st.any()) out = styles::drawn(*out, st, fill, colour);
     return out ? std::make_shared<const pixel::TileMap>(std::move(*out)) : nullptr;
 }
 
@@ -69,7 +82,8 @@ pixel::TileMap cells_of(const pixel::TileMap& m, int c0, int r0, int c1, int r1)
 // beyond the image, or a filter that depends on where it is -- Add Noise).
 std::shared_ptr<const pixel::TileMap> partly(const pixel::TileMap& src, const pixel::TileMap& was_src,
                                              const pixel::TileMap& was, const std::vector<LiveFilter>& stack,
-                                             const pixel::TileMap* mask, const Styles& st, int fill) {
+                                             const pixel::TileMap* mask, const Styles& st, int fill,
+                                             const styles::ColourIn& colour = {}) {
     if (!(src.format() == was_src.format()) || src.width() != was_src.width() || src.height() != was_src.height() ||
         was.width() != src.width() || was.height() != src.height())
         return nullptr;
@@ -101,7 +115,7 @@ std::shared_ptr<const pixel::TileMap> partly(const pixel::TileMap& src, const pi
     const auto win_src = cells_of(src, w0, v0, w1, v1);
     std::optional<pixel::TileMap> win_mask;
     if (mask) win_mask = cells_of(*mask, w0, v0, w1, v1);
-    const auto look_win = whole(win_src, stack, win_mask ? &*win_mask : nullptr, st, fill);
+    const auto look_win = whole(win_src, stack, win_mask ? &*win_mask : nullptr, st, fill, nullptr, colour);
     if (!look_win || look_win->has_outside()) return nullptr;
     std::vector<pixel::TileMap::TileRef> grid;
     grid.reserve(static_cast<std::size_t>(cols) * static_cast<std::size_t>(rows));
@@ -201,8 +215,11 @@ int reach(const Layer& l) {
     return r;
 }
 
-std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
+std::shared_ptr<const pixel::TileMap> look(const Layer& l, const Image* im) {
     if (!active(l)) return l.pixels;
+    // s071: the profile the styles' colours go in through (only when styled).
+    const auto col = im && l.styles.any() ? colour_profile(*im) : nullptr;
+    const auto lmode = l.pixels->format().mode;
     const auto stack = on_only(l.filters);
     const auto depth = wants_mask(stack) ? l.mask : nullptr;   // s039
     std::shared_future<std::shared_ptr<const pixel::TileMap>> fut;
@@ -214,7 +231,7 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
         std::lock_guard g(g_mutex);
         for (auto& e : g_cache)
             if (e.src == l.pixels && e.mask == l.filter_mask && e.depth == depth && e.stack == stack && e.styles == l.styles &&
-                (!l.styles.any() || e.fill == l.fill)) { e.used = ++g_clock; fut = e.result; break; }
+                (!l.styles.any() || e.fill == l.fill) && e.colour == col && e.mode == lmode) { e.used = ++g_clock; fut = e.result; break; }
         if (!fut.valid()) {
             if (g_cache.size() >= kKeep) {   // the least used, finished entry goes
                 auto victim = g_cache.end();
@@ -228,13 +245,14 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
             std::uint64_t best = 0;
             for (const auto& e : g_cache)
                 if (e.mask == l.filter_mask && e.depth == depth && e.stack == stack && e.styles == l.styles && (!l.styles.any() || e.fill == l.fill) &&
+                    e.colour == col && e.mode == lmode &&
                     e.src && e.src->width() == l.pixels->width() && e.src->height() == l.pixels->height() && e.used > best) {
                     best = e.used;
                     parent_src = e.src;
                     parent = e.result;
                 }
             fut = mine.get_future().share();
-            g_cache.push_back({l.pixels, l.filter_mask, depth, stack, l.styles, l.fill, fut, ++g_clock});
+            g_cache.push_back({l.pixels, l.filter_mask, depth, stack, l.styles, l.fill, col, lmode, fut, ++g_clock});
             compute = true;
         }
     }
@@ -245,10 +263,10 @@ std::shared_ptr<const pixel::TileMap> look(const Layer& l) {
         std::shared_ptr<const pixel::TileMap> out;
         if (parent_src && parent.valid() && !depth) {   // s039: a depth map -- whole
             const auto was = parent.get();
-            if (was) out = partly(*l.pixels, *parent_src, *was, stack, l.filter_mask.get(), l.styles, l.fill);
+            if (was) out = partly(*l.pixels, *parent_src, *was, stack, l.filter_mask.get(), l.styles, l.fill, colour_in(col, l.pixels->format()));
             if (out) g_partly.fetch_add(1, std::memory_order_relaxed);
         }
-        if (!out) out = whole(*l.pixels, stack, l.filter_mask.get(), l.styles, l.fill, depth.get());   // s019: the effects, the fill on the content
+        if (!out) out = whole(*l.pixels, stack, l.filter_mask.get(), l.styles, l.fill, depth.get(), colour_in(col, l.pixels->format()));   // s019: the effects, the fill on the content
         mine.set_value(out ? out : l.pixels);
     }
     return fut.get();
@@ -660,7 +678,7 @@ Layers effective(const Layers& ls_in, const Image* im) {
                     only(fx.styles);
                     fx.fill = 0;   // the effect alone
                     Layer p = l;
-                    p.pixels = look(fx);
+                    p.pixels = look(fx, im);
                     p.filters.clear();
                     p.styles = Styles{};
                     p.fill = 100;
@@ -676,7 +694,7 @@ Layers effective(const Layers& ls_in, const Image* im) {
             }
             Layer m = l;
             m.styles = main;
-            l.pixels = main.any() || !l.filters.empty() || l.filter_mask ? look(m) : l.pixels;
+            l.pixels = main.any() || !l.filters.empty() || l.filter_mask ? look(m, im) : l.pixels;
             l.filters.clear();
             l.fill = main.any() ? 100 : l.fill;   // s019: the fill is in the look (the content's alone)
             l.styles = Styles{};
@@ -820,7 +838,7 @@ bool bake_live(DocJournal& j, Document& d, const Id& id) {
     auto l = stack_layer(d, id);
     if (!l || (l->filters.empty() && !l->styles.any())) return false;
     const bool styled = l->styles.any();
-    l->pixels = live::look(*l);
+    l->pixels = live::look(*l, &d.image());   // s071: styles' colours through the profile
     l->filters.clear();
     l->filter_mask = nullptr;
     if (styled) {   // s019: the effects into the pixels -- the fill is in them already

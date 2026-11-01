@@ -79,4 +79,15 @@ std::optional<Choice> find(const std::string& remembered, const std::vector<std:
 // else builtin().
 IccPtr mode_profile(pixel::Mode m);
 
+// s071: THE MONITOR's profile, from colord's display devices (read over
+// D-Bus by the shell): the device on `connector` (its "XRANDR_name", e.g.
+// "DP-1" -- GDK's connector name) with a profile; else the primary one;
+// else the first with any. Its default profile's file ("" -- none).
+struct MonitorDevice {
+    std::string connector;
+    bool        primary = false;
+    std::vector<std::string> profiles;   // files, the default first
+};
+std::string monitor_profile(const std::vector<MonitorDevice>& devices, const std::string& connector);
+
 }  // namespace klimt::core::profile

@@ -228,6 +228,8 @@ private:
     core::Proofing proofing() const;             // s069: what the tiles are shown through now
     const core::profile::Choice& proof_profile();   // s069: the press (from the prefs, once)
     void sync_proof();                           // s069: the View menu's check marks
+    std::string monitor_connector();             // s071: the window's monitor ("DP-1"; "" unknown)
+    void read_monitor_profile();                 // s071: its profile from colord, on a worker
     void apply_colour_settings();                // s070: the prefs' working spaces into tint; every tile again
     tint::Render conversion_render() const;      // s070: Colour Settings' intent / BPC
     tint::Render proof_render() const;           // s070: Proof Setup's
@@ -392,6 +394,8 @@ private:
     std::unique_ptr<ProfileDialog>   m_profile_assign, m_profile_convert;   // s068
     std::unique_ptr<ProfileDialog>   m_proof_setup;                          // s069
     std::unique_ptr<ColourSettingsDialog> m_colour_settings;                 // s070
+    std::string m_monitor_connector, m_monitor_name = "sRGB (not read yet)";   // s071
+    bool        m_monitor_asked = false;
     Glib::RefPtr<Gio::SimpleAction>  m_proof_act, m_gamut_act;              // s069: stateful (checked)
     std::unique_ptr<NumberDialog>    m_rotate_dialog;               // s011
     std::map<int, std::unique_ptr<NumberDialog>> m_modify_dialogs;  // s011 m4: one per Modify kind

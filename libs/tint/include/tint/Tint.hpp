@@ -94,6 +94,17 @@ inline constexpr std::uint32_t kGamutGrey = 0x80;   // 50% grey (Photoshop's def
 std::shared_ptr<const Display> proof(const IccRef& source, const IccRef& press, bool colours, bool paper, bool gamut,
                                      Render r = {});
 
+// s071: THE SCREEN -- the monitor's own profile (from colord). Every tile
+// goes from the composite's space (an RGB document's own, or sRGB) to it,
+// not to sRGB. nullptr (the default, and for an sRGB-like or unusable or
+// non-RGB profile): the screen is taken as sRGB, as before. Process-wide,
+// thread safe. The colour pickers and the Eyedropper still speak sRGB.
+void   set_screen(IccRef icc);
+IccRef screen();
+// The tiles' way: `source` (an RGB profile; nullptr: sRGB) to the screen.
+// nullptr when there's nothing to do (both sRGB). Cached.
+std::shared_ptr<const Display> to_screen(const IccRef& source);
+
 // s070: WORKING SPACES (Edit > Colour Settings) -- what an UNTAGGED Gray or
 // CMYK document's numbers are taken to mean. nullptr (the default): the
 // plain conversion of s007. Process-wide, thread safe; set from the UI

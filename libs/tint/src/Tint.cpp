@@ -154,13 +154,14 @@ private:
 std::map<const Icc*, std::pair<IccRef, std::shared_ptr<const Display>>> g_displays;
 // s069: proofs, by (source, press, flags); the refs keep the profiles alive.
 struct ProofKey {
-    const Icc* source; const Icc* press; int flags;
+    const Icc* source; const Icc* press; int flags; const Icc* screen;
     bool operator<(const ProofKey& o) const {
         return source != o.source ? std::less<const Icc*>()(source, o.source)
-             : press != o.press   ? std::less<const Icc*>()(press, o.press) : flags < o.flags;
+             : press != o.press   ? std::less<const Icc*>()(press, o.press)
+             : flags != o.flags   ? flags < o.flags : std::less<const Icc*>()(screen, o.screen);
     }
 };
-struct ProofEntry { IccRef source, press; std::shared_ptr<const Display> d; };
+struct ProofEntry { IccRef source, press; std::shared_ptr<const Display> d; IccRef screen = nullptr; };
 std::map<ProofKey, ProofEntry> g_proofs;
 std::map<const Icc*, std::pair<IccRef, bool>> g_srgb;
 
@@ -201,6 +202,7 @@ cmsUInt32Number lcms_intent(Intent i) {
 cmsUInt32Number bpc_flag(const Render& r) { return r.bpc && r.intent != Intent::Absolute ? cmsFLAGS_BLACKPOINTCOMPENSATION : 0; }
 std::mutex g_work_mu;
 IccRef g_work_gray, g_work_cmyk;
+IccRef g_screen;   // s071
 }  // namespace
 
 const char* intent_key(Intent i) {
@@ -233,6 +235,19 @@ void set_working(Space s, IccRef icc) {
     if (s == Space::Gray) g_work_gray = std::move(icc);
     else if (s == Space::CMYK) g_work_cmyk = std::move(icc);
 }
+void set_screen(IccRef icc) {
+    if (icc) {
+        const auto i = inspect(*icc);
+        if (!i.ok || i.space != Space::RGB || is_srgb(*icc) || !to_srgb(*icc, Space::RGB)) icc = nullptr;
+    }
+    std::lock_guard lk(g_work_mu);
+    g_screen = std::move(icc);
+}
+IccRef screen() {
+    std::lock_guard lk(g_work_mu);
+    return g_screen;
+}
+
 IccRef working(Space s) {
     std::lock_guard lk(g_work_mu);
     return s == Space::Gray ? g_work_gray : s == Space::CMYK ? g_work_cmyk : nullptr;
@@ -404,8 +419,9 @@ std::vector<float> gamut_table(cmsHPROFILE in, cmsHPROFILE press, Space ps) {
 std::shared_ptr<const Display> proof(const IccRef& source, const IccRef& press, bool colours, bool paper, bool gamut, Render r) {
     if ((!colours && !gamut) || !press || press->empty()) return nullptr;
     if (!colours) paper = false;   // the paper is the proof's, not the warning's
+    const IccRef scr = screen();   // s071: back to the monitor, not sRGB
     const ProofKey key{source.get(), press.get(), (colours ? 1 : 0) | (paper ? 2 : 0) | (gamut ? 4 : 0) |
-                                                  (r.bpc ? 8 : 0) | (static_cast<int>(r.intent) << 4)};
+                                                  (r.bpc ? 8 : 0) | (static_cast<int>(r.intent) << 4), scr.get()};
     {
         std::lock_guard lk(g_mu);
         if (auto it = g_proofs.find(key); it != g_proofs.end()) return it->second.d;
@@ -414,7 +430,7 @@ std::shared_ptr<const Display> proof(const IccRef& source, const IccRef& press, 
     Profile in(source && !source->empty() ? cmsOpenProfileFromMem(source->data(), static_cast<cmsUInt32Number>(source->size()))
                                           : cmsCreate_sRGBProfile());
     Profile pr = open(*press);
-    Profile web(cmsCreate_sRGBProfile());
+    Profile web(scr ? cmsOpenProfileFromMem(scr->data(), static_cast<cmsUInt32Number>(scr->size())) : cmsCreate_sRGBProfile());
     Space si = Space::Gray, sp = Space::Gray;
     if (in.h && pr.h && web.h && space_of(in.h, si) && si == Space::RGB && space_of(pr.h, sp)) {
         // The colours: through the press (Proof Colors), or just to the screen.
@@ -428,8 +444,8 @@ std::shared_ptr<const Display> proof(const IccRef& source, const IccRef& press, 
                                                          cmsFLAGS_NOCACHE | cmsFLAGS_COPY_ALPHA | bpc_flag(r) | cmsFLAGS_SOFTPROOFING);
             if (t) base = std::make_shared<LcmsDisplay>(t);
             else ok = false;
-        } else if (source) {
-            base = display(source);   // nullptr: sRGB already
+        } else {
+            base = to_screen(source);   // nullptr: sRGB to an sRGB screen -- nothing to do
         }
         if (ok && gamut) {
             auto de = gamut_table(in.h, pr.h, sp);
@@ -440,7 +456,37 @@ std::shared_ptr<const Display> proof(const IccRef& source, const IccRef& press, 
     }
     std::lock_guard lk(g_mu);
     if (g_proofs.size() > 32) g_proofs.clear();
-    g_proofs[key] = {source, press, d};
+    g_proofs[key] = {source, press, d, scr};
+    return d;
+}
+
+namespace {
+std::map<std::pair<const Icc*, const Icc*>, ProofEntry> g_screens;   // (source, screen) -> its display
+}  // namespace
+
+std::shared_ptr<const Display> to_screen(const IccRef& source) {
+    const IccRef scr = screen();
+    if (!scr) return display(source);   // the screen is sRGB: s067's way
+    const auto key = std::make_pair(source.get(), scr.get());
+    {
+        std::lock_guard lk(g_mu);
+        if (auto it = g_screens.find(key); it != g_screens.end()) return it->second.d;
+    }
+    std::shared_ptr<const Display> d;
+    Profile in(source && !source->empty() ? cmsOpenProfileFromMem(source->data(), static_cast<cmsUInt32Number>(source->size()))
+                                          : cmsCreate_sRGBProfile());
+    Profile out = open(*scr);
+    Space si = Space::Gray;
+    if (in.h && out.h && space_of(in.h, si) && si == Space::RGB) {
+        const bool little = std::endian::native == std::endian::little;
+        const cmsUInt32Number fmt = little ? TYPE_BGRA_8 : TYPE_ARGB_8;
+        if (cmsHTRANSFORM t = cmsCreateTransform(in.h, fmt, out.h, fmt, INTENT_RELATIVE_COLORIMETRIC,
+                                                 cmsFLAGS_BLACKPOINTCOMPENSATION | cmsFLAGS_NOCACHE | cmsFLAGS_COPY_ALPHA))
+            d = std::make_shared<LcmsDisplay>(t);
+    }
+    std::lock_guard lk(g_mu);
+    if (g_screens.size() > 32) g_screens.clear();
+    g_screens[key] = {source, scr, d};
     return d;
 }
 

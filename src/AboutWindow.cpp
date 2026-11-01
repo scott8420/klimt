@@ -280,6 +280,7 @@ void AboutWindow::fill_system() {
     s += "gtkmm       " + v3(GTKMM_MAJOR_VERSION, GTKMM_MINOR_VERSION, GTKMM_MICRO_VERSION) + "\n";
     s += "libadwaita  " + v3(adw_get_major_version(), adw_get_minor_version(), adw_get_micro_version()) + "\n";
     s += "Display     " + backend + ", scale " + std::to_string(get_scale_factor()) + "\n";
+    if (m_monitor) s += "Monitor     " + m_monitor() + "\n";   // s071
     s += "OS          " + os_name() + "\n";
     s += "Compiler    " __VERSION__;
     m_system->set_text(s);

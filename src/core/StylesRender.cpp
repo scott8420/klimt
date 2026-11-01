@@ -83,7 +83,7 @@ int reach(const Styles& s) {
     return r;
 }
 
-pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
+pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill, const ColourIn& colour) {
     const auto& fmt = content.format();
     if (!fmt.alpha || !s.any()) return content;
     const int C = fmt.channels(), cc = fmt.colour_channels();
@@ -140,7 +140,12 @@ pixel::TileMap drawn(const pixel::TileMap& content, const Styles& s, int fill) {
     };
     // The result, premultiplied: effects under, the content, effects over.
     std::vector<float> O(N * static_cast<std::size_t>(C), 0.f);
-    const auto colour_of = [&](const Rgb& c) { return from_srgb(fmt, c.r, c.g, c.b); };
+    const auto colour_of = [&](const Rgb& c) {   // s071: through the document's profile when given
+        if (!colour) return from_srgb(fmt, c.r, c.g, c.b);
+        auto p = colour(c.r, c.g, c.b);
+        if (fmt.alpha) p.c[static_cast<std::size_t>(fmt.channels() - 1)] = 1.f;
+        return p;
+    };
     // s025: an effect's BLEND MODE -- RGB with alpha (the compositor's own
     // layout), else Normal. `mix` a straight colour into a straight colour;
     // `over_mode` a flat colour at alpha a onto the result so far (O).

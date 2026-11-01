@@ -37,7 +37,9 @@ bool wants_mask(const std::vector<LiveFilter>& stack);
 bool active(const Layer& l);              // a pixel layer with pixels and a filter on
 bool any(const Layers& ls);               // any layer active
 // The layer's pixels as they look (cached; computed here when not yet).
-std::shared_ptr<const pixel::TileMap> look(const Layer& l);
+// s071: with the image, layer styles' colours go in through its profile
+// (colour_profile); without, the plain conversion. Cached per profile.
+std::shared_ptr<const pixel::TileMap> look(const Layer& l, const Image* im = nullptr);
 // The layers as they look: each active layer's pixels through its stack, its
 // stack then empty (so nothing runs twice).
 // s024: with the image, a GROUP with layer styles too: its contents

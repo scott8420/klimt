@@ -405,11 +405,21 @@ pixel::Px from_srgb(const Image& im, float r, float g, float b) {
 
 bool managed(const Image& im) { return mode_link(im, true) != nullptr; }
 
+std::shared_ptr<const std::vector<std::uint8_t>> colour_profile(const Image& im) {
+    if (mode_link(im, false)) return im.icc ? im.icc : tint::working(space_of(im.format.mode));
+    if (rgb_link(im, false)) return im.icc;
+    return nullptr;
+}
+
 bool display_managed(const Image& im) { return im.format.mode == pixel::Mode::RGB && tint::display(im.icc) != nullptr; }
 
 void shown_argb(const Image& im, std::vector<std::uint32_t>& argb) {
-    if (im.format.mode != pixel::Mode::RGB || argb.empty()) return;
-    if (const auto d = tint::display(im.icc)) d->run(argb.data(), argb.size());
+    if (argb.empty()) return;
+    // The composite's space: an RGB document's own (usable, not sRGB), else
+    // sRGB (Gray / CMYK / Lab composite in sRGB). s071: to the monitor's
+    // profile when one is known, else (s067) to sRGB.
+    const bool own = im.format.mode == pixel::Mode::RGB && im.icc && tint::to_srgb(im.icc, tint::Space::RGB);
+    if (const auto d = tint::to_screen(own ? im.icc : nullptr)) d->run(argb.data(), argb.size());
 }
 
 void shown_argb(const Image& im, std::vector<std::uint32_t>& argb, const Proofing& p) {
