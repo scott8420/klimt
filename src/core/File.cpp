@@ -134,6 +134,21 @@ json adjust_json(const Adjust& a) {
         case AdjustKind::PhotoFilter:
             j["colour"] = a.filter; j["density"] = a.density; j["luminosity"] = a.keep_luma;
             break;
+        case AdjustKind::ColourBalance:   // s063: shadows, midtones, highlights
+            j["balance"] = a.balance; j["luminosity"] = a.keep_luma;
+            break;
+        case AdjustKind::ChannelMixer:    // s063: red, green, blue outputs; the grey
+            j["mixer"] = a.mixer; j["mono"] = a.mono; j["monochrome"] = a.monochrome;
+            break;
+        case AdjustKind::SelectiveColour: // the nine colours' C M Y K
+            j["selective"] = a.selective; j["absolute"] = a.selective_absolute;
+            break;
+        case AdjustKind::GradientMap: {   // stops: [at, midpoint, r, g, b]
+            json st = json::array();
+            for (const auto& s : a.grad) st.push_back({s.at, s.mid, s.rgb[0], s.rgb[1], s.rgb[2]});
+            j["stops"] = std::move(st); j["reverse"] = a.grad_reverse; j["dither"] = a.grad_dither;
+            break;
+        }
         case AdjustKind::Invert:
         case AdjustKind::None: break;
     }
@@ -613,6 +628,36 @@ std::optional<Adjust> adjust_from(const json& j) {
     }
     a.density = j.value("density", 25);
     a.keep_luma = j.value("luminosity", true);
+    // s063
+    const auto rows = [&j](const char* k, auto& into) {   // an array of equal int arrays
+        if (!j.contains(k)) return true;
+        const auto& m = j.at(k);
+        if (!m.is_array() || m.size() != into.size()) return false;
+        for (std::size_t i = 0; i < into.size(); ++i) {
+            if (!m[i].is_array() || m[i].size() != into[i].size()) return false;
+            for (std::size_t c = 0; c < into[i].size(); ++c) into[i][c] = m[i][c].template get<int>();
+        }
+        return true;
+    };
+    if (!rows("balance", a.balance) || !rows("mixer", a.mixer) || !rows("selective", a.selective)) return std::nullopt;
+    a.selective_absolute = j.value("absolute", false);
+    if (j.contains("stops")) {
+        const auto& st = j.at("stops");
+        if (!st.is_array() || st.size() < 2 || st.size() > kGradStops) return std::nullopt;
+        a.grad.clear();
+        for (const auto& s : st) {
+            if (!s.is_array() || s.size() != 5) return std::nullopt;
+            a.grad.push_back({s[0].get<double>(), s[1].get<double>(), {s[2].get<double>(), s[3].get<double>(), s[4].get<double>()}});
+        }
+    }
+    a.grad_reverse = j.value("reverse", false);
+    a.grad_dither = j.value("dither", false);
+    if (j.contains("mono")) {
+        const auto& m = j.at("mono");
+        if (!m.is_array() || m.size() != a.mono.size()) return std::nullopt;
+        for (std::size_t i = 0; i < a.mono.size(); ++i) a.mono[i] = m[i].get<int>();
+    }
+    a.monochrome = j.value("monochrome", false);
     return a;
 }
 

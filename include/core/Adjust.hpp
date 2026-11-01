@@ -34,7 +34,9 @@ namespace klimt::core {
 // so the numbers already in use keep their meaning.
 // s062: Vibrance, Black & White, Photo Filter -- appended the same way.
 enum class AdjustKind : std::uint8_t { None, Levels, Curves, HueSat, BrightCon, Invert, Posterize, Threshold, Exposure,
-                                       Vibrance, BlackWhite, PhotoFilter };
+                                       Vibrance, BlackWhite, PhotoFilter,
+                                       // s063: the rest of WEAKNESSES 34.
+                                       ColourBalance, ChannelMixer, SelectiveColour, GradientMap };
 
 // Levels on one channel: input black / white points and gamma (the middle
 // slider, 0.1 .. 9.99, 1 = none), output black / white. All 0..1.
@@ -51,6 +53,16 @@ struct CurvePt {
 // Channel 0 of `levels` and `curves` is the composite (RGB); 1..3 are R, G,
 // B. A channel's own setting applies first, then the composite's.
 inline constexpr int kAdjustChannels = 4;
+
+// s063: one colour stop of a Gradient Map.
+struct GradStop {
+    double at = 0;                  // where along the gradient, 0..1
+    double mid = 0.5;               // between the stop before and this one, where
+                                    // the two mix half and half (0.05..0.95)
+    std::array<double, 3> rgb{};    // sRGB 0..1
+    bool operator==(const GradStop&) const = default;
+};
+inline constexpr std::size_t kGradStops = 32;   // the most a Gradient Map holds
 
 struct Adjust {
     AdjustKind kind = AdjustKind::None;
@@ -85,7 +97,29 @@ struct Adjust {
     // Warming Filter (85) to start), density 1..100 %, Preserve Luminosity.
     std::array<double, 3> filter{236 / 255.0, 138 / 255.0, 0.0};
     int  density = 25;
+    // Photo Filter's Preserve Luminosity; s063: Colour Balance's too.
     bool keep_luma = true;
+    // s063: Colour Balance -- per tone (shadows, midtones, highlights) the
+    // cyan-red, magenta-green, yellow-blue shifts, -100..100.
+    std::array<std::array<int, 3>, 3> balance{};
+    // s063: Channel Mixer -- each output (red, green, blue): how much of the
+    // red, green and blue goes into it, percent -200..200, and a constant
+    // -200..200 (100: white added). Monochrome: one grey, from `mono`.
+    std::array<std::array<int, 4>, 3> mixer{{{100, 0, 0, 0}, {0, 100, 0, 0}, {0, 0, 100, 0}}};
+    std::array<int, 4> mono{40, 40, 20, 0};
+    bool monochrome = false;
+    // s063: Selective Colour -- for each colour (reds, yellows, greens,
+    // cyans, blues, magentas, whites, neutrals, blacks) the cyan, magenta,
+    // yellow and black added or taken, percent -100..100; Relative (to the
+    // ink already there, Photoshop's default) or Absolute.
+    std::array<std::array<int, 4>, 9> selective{};
+    bool selective_absolute = false;
+    // s063: Gradient Map -- each pixel's luminosity looked up along the
+    // gradient (black to white to start: Photoshop's foreground to
+    // background). Two to kGradStops stops, by `at`. Reverse runs it the
+    // other way; Dither is kept (and carried to PSD) but not drawn yet.
+    std::vector<GradStop> grad{{0, 0.5, {0, 0, 0}}, {1, 0.5, {1, 1, 1}}};
+    bool grad_reverse = false, grad_dither = false;
     bool operator==(const Adjust&) const = default;
 };
 
@@ -120,6 +154,9 @@ std::vector<double> curve_table(const std::vector<CurvePt>& pts, int n);
 // PSD's Black & White tint.
 void to_hsl(double r, double g, double b, double& h, double& s, double& l);
 void from_hsl(double h, double s, double l, double& r, double& g, double& b);
+// s063: the gradient's colour at t (0..1), stops by `at`, each segment bent
+// so it is half and half at its midpoint.
+std::array<double, 3> gradient_at(const std::vector<GradStop>& stops, double t);
 // The adjustment on one straight (not premultiplied) colour, in place.
 void apply_rgb(const Adjust& a, float& r, float& g, float& b);
 

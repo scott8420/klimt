@@ -44,6 +44,30 @@ guint preset_of(const std::array<double, 3>& c) {
 }  // namespace s062
 using namespace s062;
 
+// s063: Gradient Map presets.
+namespace s063 {
+struct GradPreset { const char* name; std::vector<core::GradStop> stops; };
+const std::vector<GradPreset>& grad_presets() {
+    const auto c = [](int r, int g, int b) { return std::array<double, 3>{r / 255.0, g / 255.0, b / 255.0}; };
+    static const std::vector<GradPreset> v{
+        {"Black, White", {{0, 0.5, c(0, 0, 0)}, {1, 0.5, c(255, 255, 255)}}},
+        {"White, Black", {{0, 0.5, c(255, 255, 255)}, {1, 0.5, c(0, 0, 0)}}},
+        {"Sepia", {{0, 0.5, c(0, 0, 0)}, {0.45, 0.5, c(112, 66, 20)}, {1, 0.5, c(255, 244, 222)}}},
+        {"Blue Duotone", {{0, 0.5, c(0, 0, 0)}, {0.5, 0.5, c(30, 80, 160)}, {1, 0.5, c(255, 255, 255)}}},
+        {"Violet, Orange", {{0, 0.5, c(41, 10, 89)}, {1, 0.5, c(255, 124, 0)}}},
+        {"Blue, Red, Yellow", {{0, 0.5, c(10, 0, 178)}, {0.5, 0.5, c(255, 0, 0)}, {1, 0.5, c(255, 252, 0)}}},
+    };
+    return v;
+}
+guint grad_preset_of(const std::vector<core::GradStop>& g) {
+    const auto& v = grad_presets();
+    for (guint i = 0; i < v.size(); ++i) if (v[i].stops == g) return i;
+    return static_cast<guint>(v.size());
+}
+constexpr double kBarTop = 4, kBarBottom = 30, kMidY = 36, kStopTop = 40, kStripH = 58, kGradMargin = 10;
+}  // namespace s063
+using namespace s063;
+
 void tri_up(const Cairo::RefPtr<Cairo::Context>& cr, double x, double y, double s) {
     cr->move_to(x, y);
     cr->line_to(x - s, y + s * 1.6);
@@ -115,9 +139,11 @@ Gtk::Scale* AdjustEditor::slider(const char* name, const char* label, double lo,
     s->set_value_pos(Gtk::PositionType::RIGHT);
     s->set_hexpand(true);
     if (lo < 0 && hi > 0) s->add_mark(0, Gtk::PositionType::BOTTOM, "");
-    s->signal_value_changed().connect([this, s, field] {
-        if (m_painting) return;
-        *field = static_cast<int>(std::lround(s->get_value()));
+    // s063: through m_sliders, so a page dropdown can rebind the field.
+    const std::size_t idx = m_sliders.size();
+    s->signal_value_changed().connect([this, s, idx] {
+        if (m_painting || idx >= m_sliders.size()) return;
+        *m_sliders[idx].field = static_cast<int>(std::lround(s->get_value()));
         emit();
     });
     begin_end_on(*s);
@@ -125,6 +151,48 @@ Gtk::Scale* AdjustEditor::slider(const char* name, const char* label, double lo,
     m_body.append(*row);
     m_sliders.push_back({s, field});
     return s;
+}
+
+Gtk::Scale* AdjustEditor::pair_slider(const char* name, const char* left, const char* right, double lo, double hi, int* field) {
+    auto* s = slider(name, left, lo, hi, field);
+    auto r = Gtk::make_managed<Gtk::Label>(right);
+    r->set_xalign(0.0f);
+    r->set_size_request(56, -1);
+    r->add_css_class("dim-label");
+    r->insert_after(*s->get_parent(), *s);   // into the row, after the scale
+    s->get_prev_sibling()->set_size_request(56, -1);
+    return s;
+}
+
+Gtk::DropDown* AdjustEditor::pager(const char* name, const char* label, const std::vector<Glib::ustring>& pages, guint start,
+                                   std::function<int*(guint, std::size_t)> field_of) {
+    auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto l = Gtk::make_managed<Gtk::Label>(label);
+    l->set_xalign(0.0f);
+    l->set_size_request(76, -1);
+    l->add_css_class("dim-label");
+    row->append(*l);
+    m_page = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(pages));
+    m_page->set_name(name);
+    m_page->set_hexpand(true);
+    m_page->set_selected(start);
+    m_page->property_selected().signal_changed().connect([this] {
+        if (m_painting) return;
+        repage();
+        paint();
+    });
+    row->append(*m_page);
+    m_body.append(*row);
+    m_page_field = std::move(field_of);
+    return m_page;
+}
+
+void AdjustEditor::repage() {
+    if (!m_page || !m_page_field) return;
+    const guint p = m_page->get_selected();
+    for (std::size_t i = 0; i < m_paged.size(); ++i)
+        if (m_paged[i] < m_sliders.size())
+            if (int* f = m_page_field(p, i)) m_sliders[m_paged[i]].field = f;
 }
 
 Gtk::Scale* AdjustEditor::dslider(const char* name, const char* label, double lo, double hi, double step, int digits, double* field) {
@@ -167,6 +235,20 @@ void AdjustEditor::rebuild() {
     m_filter_colour = nullptr;
     m_luma = nullptr;
     m_channel = nullptr;
+    m_page = nullptr;            // s063
+    m_paged.clear();
+    m_page_field = nullptr;
+    m_mono = nullptr;
+    m_total = nullptr;
+    m_relative = m_absolute = nullptr;
+    m_grad_preset = nullptr;
+    m_stop_colour = nullptr;
+    m_stop_at = nullptr;
+    m_stop_del = nullptr;
+    m_reverse = m_dither = nullptr;
+    m_stop = 0;
+    m_grad_drag = 0;
+    m_stop_off = false;
     m_graph = nullptr;
     for (auto& p : m_lv) p = nullptr;
     m_cin = m_cout = nullptr;
@@ -298,6 +380,203 @@ void AdjustEditor::rebuild() {
             m_body.append(*m_luma);
             break;
         }
+        // s063.
+        case AdjustKind::ColourBalance: {
+            pager("adjust.balance-tone", "Tone", {"Shadows", "Midtones", "Highlights"}, 1,
+                  [this](guint p, std::size_t i) { return &m_a.balance[std::min<guint>(p, 2)][std::min<std::size_t>(i, 2)]; });
+            const char* ends[3][2] = {{"Cyan", "Red"}, {"Magenta", "Green"}, {"Yellow", "Blue"}};
+            const char* ids[3] = {"adjust.balance-cyan-red", "adjust.balance-magenta-green", "adjust.balance-yellow-blue"};
+            for (std::size_t i = 0; i < 3; ++i) {
+                m_paged.push_back(m_sliders.size());
+                pair_slider(ids[i], ends[i][0], ends[i][1], -100, 100, &m_a.balance[1][i])
+                    ->set_tooltip_text("Shift this tone's colour toward one end or the other");
+            }
+            repage();
+            m_luma = Gtk::make_managed<Gtk::CheckButton>("Preserve Luminosity");
+            m_luma->set_name("adjust.balance-luma");
+            m_luma->set_tooltip_text("Keep each pixel as light as it was -- only the colour changes");
+            m_luma->signal_toggled().connect([this] {
+                if (m_painting) return;
+                m_a.keep_luma = m_luma->get_active();
+                emit();
+            });
+            m_body.append(*m_luma);
+            break;
+        }
+        case AdjustKind::ChannelMixer: {
+            pager("adjust.mixer-output", "Output", {"Red", "Green", "Blue"}, 0, [this](guint p, std::size_t i) {
+                return m_a.monochrome ? &m_a.mono[std::min<std::size_t>(i, 3)] : &m_a.mixer[std::min<guint>(p, 2)][std::min<std::size_t>(i, 3)];
+            });
+            m_page->set_tooltip_text("Which channel the sliders make (Monochrome: the one grey)");
+            const char* names[3] = {"Red", "Green", "Blue"};
+            const char* ids[3] = {"adjust.mixer-red", "adjust.mixer-green", "adjust.mixer-blue"};
+            for (std::size_t i = 0; i < 3; ++i) {
+                m_paged.push_back(m_sliders.size());
+                slider(ids[i], names[i], -200, 200, &m_a.mixer[0][i])->set_tooltip_text("How much of this channel goes into the output, percent");
+            }
+            m_total = Gtk::make_managed<Gtk::Label>();
+            m_total->set_name("adjust.mixer-total");
+            m_total->set_xalign(1.0f);
+            m_total->add_css_class("dim-label");
+            m_total->set_tooltip_text("What the three add up to: over 100 % the output can burn out to white");
+            m_body.append(*m_total);
+            m_paged.push_back(m_sliders.size());
+            slider("adjust.mixer-constant", "Constant", -200, 200, &m_a.mixer[0][3])->set_tooltip_text("Added to the output: 100 is white, -100 black");
+            repage();
+            m_mono = Gtk::make_managed<Gtk::CheckButton>("Monochrome");
+            m_mono->set_name("adjust.mixer-mono");
+            m_mono->set_tooltip_text("One grey made from the three channels");
+            m_mono->signal_toggled().connect([this] {
+                if (m_painting) return;
+                m_a.monochrome = m_mono->get_active();
+                repage();
+                emit();
+                paint();
+            });
+            m_body.append(*m_mono);
+            break;
+        }
+        case AdjustKind::SelectiveColour: {
+            pager("adjust.selective-colours", "Colours", {"Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas", "Whites", "Neutrals", "Blacks"}, 0,
+                  [this](guint p, std::size_t i) { return &m_a.selective[std::min<guint>(p, 8)][std::min<std::size_t>(i, 3)]; });
+            m_page->set_tooltip_text("Which colours the inks below change");
+            const char* names[4] = {"Cyan", "Magenta", "Yellow", "Black"};
+            const char* ids[4] = {"adjust.selective-cyan", "adjust.selective-magenta", "adjust.selective-yellow", "adjust.selective-black"};
+            for (std::size_t i = 0; i < 4; ++i) {
+                m_paged.push_back(m_sliders.size());
+                slider(ids[i], names[i], -100, 100, &m_a.selective[0][i])->set_tooltip_text("Ink added to (or taken from) these colours, percent");
+            }
+            repage();
+            auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 12);
+            m_relative = Gtk::make_managed<Gtk::CheckButton>("Relative");
+            m_relative->set_name("adjust.selective-relative");
+            m_relative->set_tooltip_text("Change the ink by a share of what is there (white stays white)");
+            m_absolute = Gtk::make_managed<Gtk::CheckButton>("Absolute");
+            m_absolute->set_name("adjust.selective-absolute");
+            m_absolute->set_tooltip_text("Change the ink by the amount itself");
+            m_absolute->set_group(*m_relative);
+            m_absolute->signal_toggled().connect([this] {
+                if (m_painting) return;
+                m_a.selective_absolute = m_absolute->get_active();
+                emit();
+            });
+            row->append(*m_relative);
+            row->append(*m_absolute);
+            m_body.append(*row);
+            break;
+        }
+        case AdjustKind::GradientMap: {
+            auto names = Gtk::StringList::create({});
+            for (const auto& p : grad_presets()) names->append(p.name);
+            names->append("Custom");
+            auto prow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            auto pl = Gtk::make_managed<Gtk::Label>("Gradient");
+            pl->set_xalign(0.0f);
+            pl->set_size_request(76, -1);
+            pl->add_css_class("dim-label");
+            prow->append(*pl);
+            m_grad_preset = Gtk::make_managed<Gtk::DropDown>(names);
+            m_grad_preset->set_name("adjust.gradient-preset");
+            m_grad_preset->set_hexpand(true);
+            m_grad_preset->set_tooltip_text("A ready-made gradient -- or Custom, the stops below");
+            m_grad_preset->property_selected().signal_changed().connect([this] {
+                if (m_painting) return;
+                const guint i = m_grad_preset->get_selected();
+                if (i >= grad_presets().size()) return;
+                m_a.grad = grad_presets()[i].stops;
+                m_stop = 0;
+                emit();
+                paint();
+            });
+            prow->append(*m_grad_preset);
+            m_body.append(*prow);
+
+            m_graph = Gtk::make_managed<Gtk::DrawingArea>();
+            m_graph->set_name("adjust.gradient");
+            m_graph->set_content_height(static_cast<int>(kStripH));
+            m_graph->set_hexpand(true);
+            m_graph->set_tooltip_text("Click under the bar to add a stop; drag a stop to move it, off the strip to remove it; "
+                                      "drag a diamond to move where two colours meet");
+            m_graph->set_draw_func(sigc::mem_fun(*this, &AdjustEditor::draw_gradient));
+            auto drag = Gtk::GestureDrag::create();
+            drag->signal_drag_begin().connect([this](double x, double y) { m_begin.emit(); m_press_x = x; m_press_y = y; gradient_press(x, y); });
+            drag->signal_drag_update().connect([this](double dx, double dy) { gradient_drag(m_press_x + dx, m_press_y + dy); });
+            drag->signal_drag_end().connect([this](double, double) { gradient_release(); m_end.emit(); });
+            m_graph->add_controller(drag);
+            m_body.append(*m_graph);
+
+            auto srow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            auto sl = Gtk::make_managed<Gtk::Label>("Stop");
+            sl->set_xalign(0.0f);
+            sl->set_size_request(76, -1);
+            sl->add_css_class("dim-label");
+            srow->append(*sl);
+            m_stop_colour = Gtk::make_managed<Gtk::ColorDialogButton>(Gtk::ColorDialog::create());
+            m_stop_colour->set_name("adjust.gradient-stop-colour");
+            m_stop_colour->set_tooltip_text("The picked stop's colour");
+            m_stop_colour->property_rgba().signal_changed().connect([this] {
+                if (m_painting || m_stop < 0 || m_stop >= static_cast<int>(m_a.grad.size())) return;
+                const auto c = m_stop_colour->get_rgba();
+                m_a.grad[static_cast<std::size_t>(m_stop)].rgb = {c.get_red(), c.get_green(), c.get_blue()};
+                emit();
+                paint();
+            });
+            srow->append(*m_stop_colour);
+            auto ll = Gtk::make_managed<Gtk::Label>("Location");
+            ll->add_css_class("dim-label");
+            srow->append(*ll);
+            m_stop_at = spin(0, 100, 1, 0);
+            m_stop_at->set_name("adjust.gradient-stop-at");
+            m_stop_at->set_tooltip_text("Where the picked stop sits, percent along");
+            m_stop_at->signal_value_changed().connect([this] {
+                if (m_painting || m_stop < 0 || m_stop >= static_cast<int>(m_a.grad.size())) return;
+                const auto i = static_cast<std::size_t>(m_stop);
+                const double lo = i > 0 ? m_a.grad[i - 1].at : 0, hi = i + 1 < m_a.grad.size() ? m_a.grad[i + 1].at : 1;
+                m_a.grad[i].at = std::clamp(m_stop_at->get_value() / 100, lo, hi);
+                emit();
+                paint();
+            });
+            srow->append(*m_stop_at);
+            auto pct = Gtk::make_managed<Gtk::Label>("%");
+            pct->add_css_class("dim-label");
+            srow->append(*pct);
+            m_stop_del = Gtk::make_managed<Gtk::Button>();
+            m_stop_del->set_icon_name("user-trash-symbolic");
+            m_stop_del->add_css_class("flat");
+            m_stop_del->set_name("adjust.gradient-stop-delete");
+            m_stop_del->set_tooltip_text("Remove the picked stop (two at least stay)");
+            m_stop_del->signal_clicked().connect([this] {
+                if (m_a.grad.size() <= 2 || m_stop < 0 || m_stop >= static_cast<int>(m_a.grad.size())) return;
+                m_a.grad.erase(m_a.grad.begin() + m_stop);
+                m_stop = std::max(0, m_stop - 1);
+                emit();
+                paint();
+            });
+            srow->append(*m_stop_del);
+            m_body.append(*srow);
+
+            auto crow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 12);
+            m_reverse = Gtk::make_managed<Gtk::CheckButton>("Reverse");
+            m_reverse->set_name("adjust.gradient-reverse");
+            m_reverse->set_tooltip_text("Darks take the right end's colours, lights the left's");
+            m_reverse->signal_toggled().connect([this] {
+                if (m_painting) return;
+                m_a.grad_reverse = m_reverse->get_active();
+                emit();
+            });
+            m_dither = Gtk::make_managed<Gtk::CheckButton>("Dither");
+            m_dither->set_name("adjust.gradient-dither");
+            m_dither->set_tooltip_text("Kept with the layer (and in PSD) -- not drawn yet");
+            m_dither->signal_toggled().connect([this] {
+                if (m_painting) return;
+                m_a.grad_dither = m_dither->get_active();
+                emit();
+            });
+            crow->append(*m_reverse);
+            crow->append(*m_dither);
+            m_body.append(*crow);
+            break;
+        }
         case AdjustKind::Invert: {
             auto l = Gtk::make_managed<Gtk::Label>("No settings -- every colour turns to its opposite.");
             l->set_xalign(0.0f);
@@ -424,6 +703,23 @@ void AdjustEditor::rebuild() {
 
 void AdjustEditor::paint() {
     m_painting = true;
+    if (m_mono && m_page) {   // s063: Monochrome -- the one output is the grey
+        const bool showing_grey = m_page->get_model()->get_n_items() == 1;
+        if (m_a.monochrome != showing_grey) {
+            if (m_a.monochrome) {
+                m_mixer_page = m_page->get_selected();
+                m_page->set_model(Gtk::StringList::create({"Grey"}));
+                m_page->set_selected(0);
+            } else {
+                m_page->set_model(Gtk::StringList::create({"Red", "Green", "Blue"}));
+                m_page->set_selected(std::min<guint>(m_mixer_page, 2));
+            }
+        }
+        m_page->set_sensitive(!m_a.monochrome);
+    }
+    m_painting = false;
+    repage();   // s063: an undo can switch Monochrome under the sliders
+    m_painting = true;
     for (const auto& b : m_sliders) {
         if (b.field == &m_a.hue) b.s->set_range(m_a.colorize ? 0 : -180, m_a.colorize ? 360 : 180);
         if (b.field == &m_a.saturation) b.s->set_range(m_a.colorize ? 0 : -100, 100);
@@ -440,6 +736,23 @@ void AdjustEditor::paint() {
         m_filter_colour->set_rgba(c);
     }
     if (m_luma) m_luma->set_active(m_a.keep_luma);
+    if (m_mono) m_mono->set_active(m_a.monochrome);   // s063
+    totals();
+    if (m_absolute) (m_a.selective_absolute ? m_absolute : m_relative)->set_active(true);   // s063
+    if (m_grad_preset) {
+        m_stop = std::clamp(m_stop, 0, static_cast<int>(m_a.grad.size()) - 1);
+        m_grad_preset->set_selected(grad_preset_of(m_a.grad));
+        m_reverse->set_active(m_a.grad_reverse);
+        m_dither->set_active(m_a.grad_dither);
+        if (!m_a.grad.empty()) {
+            const auto& s = m_a.grad[static_cast<std::size_t>(m_stop)];
+            Gdk::RGBA c;
+            c.set_rgba(s.rgb[0], s.rgb[1], s.rgb[2], 1.0);
+            m_stop_colour->set_rgba(c);
+            m_stop_at->set_value(std::round(s.at * 100));
+        }
+        m_stop_del->set_sensitive(m_a.grad.size() > 2);
+    }
     if (m_lv[0]) {
         const auto& c = m_a.levels[static_cast<std::size_t>(channel())];
         m_lv[0]->set_value(std::round(c.in_black * 255));
@@ -464,12 +777,148 @@ void AdjustEditor::paint() {
 
 void AdjustEditor::emit() {
     core::Adjust out = m_a;
+    if (m_stop_off && m_a.grad.size() > 2 && m_stop >= 0 && m_stop < static_cast<int>(out.grad.size()))   // s063: likewise a gradient stop
+        out.grad.erase(out.grad.begin() + m_stop);
     if (m_point_off && m_point >= 0) {   // a point dragged off the graph: gone (for now)
         auto& pts = out.curves[static_cast<std::size_t>(channel())];
         if (m_point < static_cast<int>(pts.size())) pts.erase(pts.begin() + m_point);
     }
     if (m_graph) m_graph->queue_draw();
+    totals();
     m_changed.emit(A::normalised(out));
+}
+
+// ── s063: Gradient Map ─────────────────────────────────────────────────────
+
+double AdjustEditor::grad_x(double at) const {
+    const double w = m_graph ? m_graph->get_width() : 200;
+    return kGradMargin + at * std::max(1.0, w - 2 * kGradMargin);
+}
+double AdjustEditor::grad_t(double x) const {
+    const double w = m_graph ? m_graph->get_width() : 200;
+    return std::clamp((x - kGradMargin) / std::max(1.0, w - 2 * kGradMargin), 0.0, 1.0);
+}
+
+void AdjustEditor::draw_gradient(const Cairo::RefPtr<Cairo::Context>& cr, int w, int) {
+    const auto fg = fg_of(*m_graph);
+    const double x0 = kGradMargin, x1 = w - kGradMargin;
+    // The bar, a column at a time.
+    for (int x = static_cast<int>(x0); x < static_cast<int>(std::ceil(x1)); ++x) {
+        const auto c = A::gradient_at(m_a.grad, (x + 0.5 - x0) / std::max(1.0, x1 - x0));
+        cr->set_source_rgb(c[0], c[1], c[2]);
+        cr->rectangle(x, kBarTop, 1.05, kBarBottom - kBarTop);
+        cr->fill();
+    }
+    cr->set_line_width(1);
+    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.35);
+    cr->rectangle(std::round(x0) - 0.5, kBarTop - 0.5, std::round(x1) - std::round(x0) + 1, kBarBottom - kBarTop + 1);
+    cr->stroke();
+    const auto n = m_a.grad.size();
+    // The midpoints: a small diamond between each two stops, off the picked one's sides.
+    for (std::size_t i = 1; i < n; ++i) {
+        const auto& p = m_a.grad[i - 1];
+        const auto& q = m_a.grad[i];
+        const double mx = grad_x(p.at + (q.at - p.at) * q.mid);
+        const bool near_pick = static_cast<int>(i) == m_stop || static_cast<int>(i) - 1 == m_stop;
+        cr->move_to(mx, kMidY - 3.5);
+        cr->line_to(mx + 3.5, kMidY);
+        cr->line_to(mx, kMidY + 3.5);
+        cr->line_to(mx - 3.5, kMidY);
+        cr->close_path();
+        cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), near_pick ? 0.8 : 0.3);
+        if (m_grad_drag == 2 && m_mid == static_cast<int>(i)) cr->fill();
+        else cr->stroke();
+    }
+    // The stops: a little house in each colour, under the bar; the picked one bold.
+    for (std::size_t i = 0; i < n; ++i) {
+        if (m_stop_off && static_cast<int>(i) == m_stop) continue;   // about to go
+        const auto& s = m_a.grad[i];
+        const double sx = grad_x(s.at);
+        cr->move_to(sx, kStopTop);
+        cr->line_to(sx + 6, kStopTop + 5);
+        cr->line_to(sx + 6, kStripH - 2);
+        cr->line_to(sx - 6, kStripH - 2);
+        cr->line_to(sx - 6, kStopTop + 5);
+        cr->close_path();
+        cr->set_source_rgb(s.rgb[0], s.rgb[1], s.rgb[2]);
+        cr->fill_preserve();
+        const bool picked = static_cast<int>(i) == m_stop;
+        cr->set_line_width(picked ? 2.0 : 1.0);
+        cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), picked ? 1.0 : 0.6);
+        cr->stroke();
+    }
+}
+
+void AdjustEditor::gradient_press(double x, double y) {
+    m_grad_drag = 0;
+    m_mid = -1;
+    m_stop_off = false;
+    if (y < kBarBottom) return;   // the bar itself: nothing to pick
+    // A stop first (the picked one wins a tie), then a midpoint, else a new stop.
+    int best = -1;
+    double bd = 8;
+    for (std::size_t i = 0; i < m_a.grad.size(); ++i) {
+        const double d = std::abs(grad_x(m_a.grad[i].at) - x) - (static_cast<int>(i) == m_stop ? 0.5 : 0);
+        if (y >= kStopTop - 2 && d < bd) { bd = d; best = static_cast<int>(i); }
+    }
+    if (best < 0 && y < kStopTop + 2)
+        for (std::size_t i = 1; i < m_a.grad.size(); ++i) {
+            const auto& p = m_a.grad[i - 1];
+            const auto& q = m_a.grad[i];
+            if (std::abs(grad_x(p.at + (q.at - p.at) * q.mid) - x) <= 5) { m_mid = static_cast<int>(i); m_grad_drag = 2; paint(); return; }
+        }
+    if (best < 0) {
+        if (m_a.grad.size() >= core::kGradStops) return;
+        const double t = grad_t(x);
+        core::GradStop s{t, 0.5, A::gradient_at(m_a.grad, t)};
+        std::size_t at = 0;
+        while (at < m_a.grad.size() && m_a.grad[at].at <= t) ++at;
+        m_a.grad.insert(m_a.grad.begin() + static_cast<std::ptrdiff_t>(at), s);
+        best = static_cast<int>(at);
+        m_stop = best;
+        emit();
+    }
+    m_stop = best;
+    m_grad_drag = 1;
+    paint();
+}
+
+void AdjustEditor::gradient_drag(double x, double y) {
+    if (m_grad_drag == 1 && m_stop >= 0 && m_stop < static_cast<int>(m_a.grad.size())) {
+        const auto i = static_cast<std::size_t>(m_stop);
+        const double lo = i > 0 ? m_a.grad[i - 1].at : 0, hi = i + 1 < m_a.grad.size() ? m_a.grad[i + 1].at : 1;
+        m_a.grad[i].at = std::clamp(grad_t(x), lo, hi);
+        const double h = m_graph ? m_graph->get_height() : kStripH;
+        m_stop_off = m_a.grad.size() > 2 && (y > h + 24 || y < -24);
+        emit();
+        paint();
+    } else if (m_grad_drag == 2 && m_mid > 0 && m_mid < static_cast<int>(m_a.grad.size())) {
+        const auto& p = m_a.grad[static_cast<std::size_t>(m_mid) - 1];
+        auto& q = m_a.grad[static_cast<std::size_t>(m_mid)];
+        if (q.at - p.at > 1e-6) q.mid = std::clamp((grad_t(x) - p.at) / (q.at - p.at), 0.05, 0.95);
+        emit();
+        paint();
+    }
+}
+
+void AdjustEditor::gradient_release() {
+    if (m_stop_off && m_a.grad.size() > 2 && m_stop >= 0 && m_stop < static_cast<int>(m_a.grad.size())) {
+        m_a.grad.erase(m_a.grad.begin() + m_stop);
+        m_stop = std::max(0, m_stop - 1);
+        m_stop_off = false;
+        emit();
+    }
+    m_stop_off = false;
+    m_grad_drag = 0;
+    m_mid = -1;
+    paint();
+}
+
+void AdjustEditor::totals() {
+    if (!m_total || !m_page) return;
+    const auto& m = m_a.monochrome ? m_a.mono : m_a.mixer[std::min<guint>(m_page->get_selected(), 2)];   // a stale page: the grey has one
+    const int t = m[0] + m[1] + m[2];
+    m_total->set_text((t > 100 ? "\u26A0 Total " : "Total ") + std::to_string(t) + " %");
 }
 
 void AdjustEditor::reset() {

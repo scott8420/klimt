@@ -113,7 +113,7 @@ void selftest_adjust(const Check& check) {
         const auto n = A::normalised(c);
         check("adjust: curve points sorted", n.curves[0].size() == 3 && n.curves[0][1].x == 0.5 && n.curves[0][0].x == 0, "");
         check("adjust: keys round trip", A::from_key(A::key(AdjustKind::HueSat)) == AdjustKind::HueSat &&
-                                         !A::from_key("selective-colour"), "");
+                                         !A::from_key("colour-lookup"), "");
     }
 
     std::cout << "\n-- adjustments: adjustment layers (s013) --\n";
@@ -489,7 +489,7 @@ void selftest_adjust(const Check& check) {
         using K = core::AdjustKind;
         const auto rgb = [](const core::Adjust& a, float r, float g, float b) { A::apply_rgb(a, r, g, b); return std::array<float, 3>{r, g, b}; };
         const auto chroma = [](std::array<float, 3> c) { return std::max({c[0], c[1], c[2]}) - std::min({c[0], c[1], c[2]}); };
-        check("s062: eleven kinds; keys round trip", A::kinds().size() == 11 && A::from_key("vibrance") == K::Vibrance &&
+        check("s062: eleven kinds (s063: more); keys round trip", A::kinds().size() >= 11 && A::from_key("vibrance") == K::Vibrance &&
               A::from_key("black-white") == K::BlackWhite && A::from_key("photo-filter") == K::PhotoFilter &&
               A::label(K::BlackWhite) == "Black & White", "");
         check("s062: Levels, Curves, Threshold want the histogram; Hue/Saturation doesn't",
@@ -561,5 +561,127 @@ void selftest_adjust(const Check& check) {
         check("file: Vibrance, Black & White (mix, tint), Photo Filter (colour, density, luminosity) come back", same, err);
         fs::remove_all(dir);
         (void)id;
+    }
+
+    std::cout << "\n-- adjustments: Colour Balance, Channel Mixer, Selective Colour, Gradient Map (s063) --\n";
+    {
+        using K = core::AdjustKind;
+        const auto rgb = [](const core::Adjust& a, float r, float g, float b) { A::apply_rgb(a, r, g, b); return std::array<float, 3>{r, g, b}; };
+        const auto hsl_l = [](std::array<float, 3> c) { return (std::max({c[0], c[1], c[2]}) + std::min({c[0], c[1], c[2]})) / 2; };
+        // ── Colour Balance ──
+        auto cb = A::fresh(K::ColourBalance);
+        check("colour balance: key, label; a fresh one changes nothing, Preserve Luminosity on",
+              A::from_key("colour-balance") == K::ColourBalance && A::label(K::ColourBalance) == "Colour Balance" && A::identity(cb) && cb.keep_luma, "");
+        cb.balance[1][0] = 100; cb.keep_luma = false;
+        const auto m1 = rgb(cb, 0.5f, 0.5f, 0.5f);
+        check("colour balance: Midtones toward Red reddens mid grey", m1[0] > 0.6f && near(m1[1], 0.5) && near(m1[2], 0.5), num(m1[0]));
+        cb.keep_luma = true;
+        const auto m2 = rgb(cb, 0.5f, 0.5f, 0.5f);
+        check("colour balance: with Preserve Luminosity -- redder, as light (HSL) as before", m2[0] > m2[1] + 0.05f && near(hsl_l(m2), 0.5, 0.005), num(hsl_l(m2)));
+        auto sh = A::fresh(K::ColourBalance); sh.balance[0][2] = 100; sh.keep_luma = false;   // Shadows toward Blue
+        const float dark = rgb(sh, 0.1f, 0.1f, 0.1f)[2] - 0.1f, light = rgb(sh, 0.9f, 0.9f, 0.9f)[2] - 0.9f;
+        check("colour balance: Shadows move the darks, not the lights", dark > 0.3f && std::abs(light) < 0.01f, num(dark) + " / " + num(light));
+        auto hi = A::fresh(K::ColourBalance); hi.balance[2][1] = -100; hi.keep_luma = false;   // Highlights toward Magenta
+        const float hl = 0.8f - rgb(hi, 0.8f, 0.8f, 0.8f)[1], hd = 0.15f - rgb(hi, 0.15f, 0.15f, 0.15f)[1];
+        check("colour balance: Highlights move the lights, not the darks", hl > 0.3f && std::abs(hd) < 0.01f, num(hl) + " / " + num(hd));
+        auto bad = A::fresh(K::ColourBalance); bad.balance[2][0] = 150;
+        check("colour balance: out of range refused, normalised to 100", !A::refusal(bad).empty() && A::normalised(bad).balance[2][0] == 100, "");
+        Fix t;
+        const auto id = t.adj(K::ColourBalance);
+        auto warm = A::fresh(K::ColourBalance); warm.balance[2][2] = -100; warm.keep_luma = false;   // Highlights toward Yellow
+        t.set(id, warm);
+        check("colour balance layer: the white background loses blue, one step more", t.seen(20, 20).b < 0.8 && t.j.size() == 2, num(t.seen(20, 20).b));
+
+        // ── Channel Mixer ──
+        auto mx = A::fresh(K::ChannelMixer);
+        check("channel mixer: a fresh one changes nothing (each output its own channel)", A::identity(mx) && A::from_key("channel-mixer") == K::ChannelMixer, "");
+        mx.mixer[0] = {0, 0, 100, 0}; mx.mixer[2] = {100, 0, 0, 0};   // swap red and blue
+        const auto sw = rgb(mx, 0.9f, 0.5f, 0.1f);
+        check("channel mixer: red and blue swapped", near(sw[0], 0.1) && near(sw[1], 0.5) && near(sw[2], 0.9), "");
+        mx = A::fresh(K::ChannelMixer); mx.mixer[1] = {0, 100, 0, 20};
+        check("channel mixer: Constant 20 lifts green by 0.2", near(rgb(mx, 0.5f, 0.5f, 0.5f)[1], 0.7) && near(rgb(mx, 0.5f, 0.5f, 0.5f)[0], 0.5), "");
+        mx = A::fresh(K::ChannelMixer); mx.monochrome = true;
+        const auto gr = rgb(mx, 1, 0, 0);
+        check("channel mixer: Monochrome (40 40 20) -- pure red is grey 0.4", !A::identity(mx) && near(gr[0], 0.4) && near(gr[1], 0.4) && near(gr[2], 0.4), num(gr[0]));
+        mx = A::fresh(K::ChannelMixer); mx.mixer[0] = {200, 0, 0, 0};
+        check("channel mixer: 200 % red burns out (clamped)", near(rgb(mx, 0.8f, 0, 0)[0], 1), "");
+        auto bm = A::fresh(K::ChannelMixer); bm.mono[3] = -300;
+        check("channel mixer: out of range refused, normalised to -200", !A::refusal(bm).empty() && A::normalised(bm).mono[3] == -200, "");
+
+        // ── Selective Colour ──
+        auto sc = A::fresh(K::SelectiveColour);
+        check("selective colour: a fresh one changes nothing, Relative", A::identity(sc) && !sc.selective_absolute &&
+              A::from_key("selective-colour") == K::SelectiveColour, "");
+        sc.selective[0][0] = 100; sc.selective_absolute = true;   // Reds: +100 cyan, Absolute
+        const auto sr = rgb(sc, 1, 0, 0), sb = rgb(sc, 0, 0, 1);
+        check("selective colour: Reds +100 cyan (Absolute) -- pure red loses its red; blue untouched",
+              near(sr[0], 0) && near(sb[2], 1) && near(sb[0], 0), num(sr[0]));
+        sc.selective_absolute = false;
+        const auto so = rgb(sc, 0.8f, 0.2f, 0.2f);
+        check("selective colour: Relative -- pure red (no cyan ink) stays, a duller red loses some",
+              near(rgb(sc, 1, 0, 0)[0], 1) && so[0] < 0.75f && so[0] > 0.6f, num(so[0]));
+        auto nk = A::fresh(K::SelectiveColour); nk.selective[7][3] = 50;   // Neutrals: +50 black
+        const auto ng = rgb(nk, 0.5f, 0.5f, 0.5f), nw = rgb(nk, 1, 1, 1), nr = rgb(nk, 1, 0, 0);
+        check("selective colour: Neutrals +50 black darkens mid grey; white and pure red stay",
+              ng[0] < 0.4f && near(ng[0], ng[2]) && near(nw[0], 1) && near(nr[0], 1), num(ng[0]));
+        auto wk = A::fresh(K::SelectiveColour); wk.selective[6][2] = 100; wk.selective_absolute = true;   // Whites: +100 yellow
+        const auto wy = rgb(wk, 1, 1, 1), wd = rgb(wk, 0.2f, 0.2f, 0.2f);
+        check("selective colour: Whites +100 yellow (Absolute) -- white turns yellow, a dark grey doesn't",
+              near(wy[2], 0) && near(wy[0], 1) && near(wd[2], 0.2), num(wy[2]));
+        auto bs = A::fresh(K::SelectiveColour); bs.selective[3][1] = -101;
+        check("selective colour: out of range refused, normalised to -100", !A::refusal(bs).empty() && A::normalised(bs).selective[3][1] == -100, "");
+
+        // ── Gradient Map ──
+        auto gm = A::fresh(K::GradientMap);
+        check("gradient map: black to white to start, its own effect", gm.grad.size() == 2 && gm.grad[0].rgb[0] == 0 && gm.grad[1].rgb[2] == 1 &&
+              !A::identity(gm) && A::from_key("gradient-map") == K::GradientMap, "");
+        const auto gred = rgb(gm, 1, 0, 0);
+        check("gradient map: pure red turns its luminosity's grey (0.299)", near(gred[0], 0.299) && near(gred[1], 0.299) && near(gred[2], 0.299), num(gred[0]));
+        gm.grad_reverse = true;
+        check("gradient map: Reverse -- white turns black", near(rgb(gm, 1, 1, 1)[0], 0), "");
+        gm = A::fresh(K::GradientMap);
+        gm.grad = {{0, 0.5, {0, 0, 1}}, {0.5, 0.5, {1, 0, 0}}, {1, 0.5, {1, 1, 0}}};
+        const auto mid = rgb(gm, 0.5f, 0.5f, 0.5f), q = rgb(gm, 0.25f, 0.25f, 0.25f);
+        check("gradient map: three stops -- mid grey is the middle stop's red, a quarter halfway blue to red",
+              near(mid[0], 1) && near(mid[2], 0) && near(q[0], 0.5) && near(q[2], 0.5), num(q[0]));
+        gm.grad[1].mid = 0.2;   // blue..red mix half and half at a fifth of the way
+        const auto c5 = A::gradient_at(gm.grad, 0.1);
+        check("gradient map: a midpoint moved to 20 % -- half and half there", near(c5[0], 0.5) && near(c5[2], 0.5), num(c5[0]));
+        auto un = A::fresh(K::GradientMap);
+        un.grad = {{0.9, 0.5, {1, 1, 1}}, {0.1, 0.5, {0, 0, 0}}};
+        auto one = A::fresh(K::GradientMap); one.grad = {{0.5, 0.5, {1, 0, 0}}};
+        check("gradient map: stops out of order or fewer than two refused; normalised sorted / back to black and white",
+              !A::refusal(un).empty() && A::normalised(un).grad[0].at == 0.1 && !A::refusal(one).empty() && A::normalised(one).grad == A::fresh(K::GradientMap).grad, "");
+        auto many = A::fresh(K::GradientMap);
+        many.grad.clear();
+        for (int i = 0; i < 40; ++i) many.grad.push_back({i / 39.0, 0.5, {0, 0, 0}});
+        check("gradient map: at most 32 stops", A::normalised(many).grad.size() == core::kGradStops && !A::refusal(many).empty(), "");
+        Fix g;
+        const auto gid = g.adj(K::GradientMap);
+        check("gradient map layer: the red square turns grey 0.299, white stays white", near(g.seen(150, 150).r, 0.299) && near(g.seen(150, 150).b, 0.299) &&
+              near(g.seen(20, 20).g, 1) && !gid.empty(), num(g.seen(150, 150).r));
+
+        // ── the .klimt keeps them ──
+        Fix f;
+        auto c1 = A::fresh(K::ColourBalance); c1.balance = {{{10, -20, 30}, {-40, 50, -60}, {70, -80, 90}}}; c1.keep_luma = false;
+        auto c2 = A::fresh(K::ChannelMixer); c2.mixer = {{{10, 20, 30, -5}, {-200, 0, 200, 7}, {1, 2, 3, 4}}}; c2.mono = {33, 33, 34, -10}; c2.monochrome = true;
+        auto c3 = A::fresh(K::SelectiveColour); c3.selective[0] = {1, -2, 3, -4}; c3.selective[8] = {100, -100, 50, 7}; c3.selective_absolute = true;
+        auto c4 = A::fresh(K::GradientMap); c4.grad = {{0, 0.5, {0.1, 0.2, 0.3}}, {0.4, 0.3, {1, 0, 0.5}}, {1, 0.7, {0, 1, 0}}};
+        c4.grad_reverse = true; c4.grad_dither = true;
+        const auto i1 = f.adj(K::ColourBalance), i2 = f.adj(K::ChannelMixer), i3 = f.adj(K::SelectiveColour), i4 = f.adj(K::GradientMap);
+        f.set(i1, c1); f.set(i2, c2); f.set(i3, c3); f.set(i4, c4);
+        core::file::Contents c;
+        c.image = f.d.image(); c.layers = f.d.snapshot(); c.next_id = f.d.next_id();
+        const auto dir = fs::temp_directory_path() / "klimt_selftest_adjust63";
+        fs::create_directories(dir);
+        const auto path = (dir / "s063.klimt").string();
+        std::string err;
+        const bool saved = core::file::save_klimt(path, c, err);
+        const auto back = saved ? core::file::open(path, err) : std::nullopt;
+        bool same = back.has_value();
+        if (back)
+            for (const auto& i : {i1, i2, i3, i4}) same = same && back->layers.at(i).adjust == c.layers.at(i).adjust;
+        check("file: Colour Balance (three tones, luminosity), Channel Mixer (outputs, grey, Monochrome), Selective Colour (inks, Absolute), Gradient Map (stops, midpoints, Reverse, Dither) come back", same, err);
+        fs::remove_all(dir);
     }
 }

@@ -12,6 +12,7 @@
 #include "core/Adjust.hpp"
 
 #include <gtkmm/box.h>
+#include <gtkmm/button.h>
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/colordialogbutton.h>
 #include <gtkmm/drawingarea.h>
@@ -20,6 +21,7 @@
 #include <gtkmm/scale.h>
 #include <gtkmm/spinbutton.h>
 
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -46,6 +48,13 @@ private:
     Gtk::Scale* slider(const char* name, const char* label, double lo, double hi, int* field);
     // s061: a double setting (Exposure's), `digits` after the point.
     Gtk::Scale* dslider(const char* name, const char* label, double lo, double hi, double step, int digits, double* field);
+    // s063: a slider with a word at each end (Colour Balance's Cyan .. Red).
+    Gtk::Scale* pair_slider(const char* name, const char* left, const char* right, double lo, double hi, int* field);
+    // s063: a "page" dropdown (Colour Balance's tone, Channel Mixer's output,
+    // Selective Colour's colours) picks which settings the paged sliders set.
+    Gtk::DropDown* pager(const char* name, const char* label, const std::vector<Glib::ustring>& pages, guint start,
+                         std::function<int*(guint page, std::size_t i)> field_of);
+    void repage();                        // the paged sliders bound to the page shown
     void begin_end_on(Gtk::Widget& w);    // a drag on w is a begin .. end
     int  channel() const;                 // Levels / Curves: 0 = RGB, 1..3
 
@@ -61,6 +70,14 @@ private:
     void curves_drag(double x, double y);
     void curves_release();
     double graph_side(int w, int h) const;
+    // s063: Gradient Map -- the bar, its stops below it (click under the bar
+    // to add one, drag to move, drag off to remove) and the midpoints.
+    void draw_gradient(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
+    void gradient_press(double x, double y);
+    void gradient_drag(double x, double y);
+    void gradient_release();
+    double grad_x(double at) const;       // a place on the gradient -> x in the strip
+    double grad_t(double x) const;        // and back, 0..1
 
     core::Adjust m_a;
     core::AdjustKind m_built = core::AdjustKind::None;
@@ -79,6 +96,29 @@ private:
     Gtk::ColorDialogButton* m_filter_colour = nullptr;
     Gtk::CheckButton* m_luma = nullptr;
     Gtk::DropDown*    m_channel = nullptr;
+    // s063: the page dropdown and the sliders it rebinds (indices in m_sliders).
+    Gtk::DropDown*    m_page = nullptr;
+    std::vector<std::size_t> m_paged;
+    std::function<int*(guint, std::size_t)> m_page_field;
+    // s063: Channel Mixer's Monochrome and its Total (what the sliders add to).
+    Gtk::CheckButton* m_mono = nullptr;
+    Gtk::Label*       m_total = nullptr;
+    guint             m_mixer_page = 0;   // the output shown before Monochrome
+    // s063: Selective Colour's method (Relative; Absolute grouped with it).
+    Gtk::CheckButton* m_relative = nullptr;
+    Gtk::CheckButton* m_absolute = nullptr;
+    // s063: Gradient Map's controls; the stop picked; what a drag moves.
+    Gtk::DropDown*    m_grad_preset = nullptr;
+    Gtk::ColorDialogButton* m_stop_colour = nullptr;
+    Gtk::SpinButton*  m_stop_at = nullptr;
+    Gtk::Button*      m_stop_del = nullptr;
+    Gtk::CheckButton* m_reverse = nullptr;
+    Gtk::CheckButton* m_dither = nullptr;
+    int  m_stop = 0;
+    int  m_grad_drag = 0;                 // 0 nothing, 1 a stop, 2 a midpoint (of the segment ending at m_mid)
+    int  m_mid = -1;
+    bool m_stop_off = false;              // a stop dragged off the strip: removed on release
+    void totals();
     Gtk::DrawingArea* m_graph = nullptr;
     // Levels' number fields: in black, gamma, in white, out black, out white.
     Gtk::SpinButton*  m_lv[5] = {};

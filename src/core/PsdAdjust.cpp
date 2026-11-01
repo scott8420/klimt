@@ -300,6 +300,90 @@ Bytes phfl_block(const Adjust& a) {
     return b;
 }
 
+// ── s063: Colour Balance ──────────────────────────────────────────────────
+// blnc: shadows, midtones, highlights -- each cyan-red, magenta-green,
+// yellow-blue (signed 2 bytes, -100..100) -- then Preserve Luminosity (1).
+Bytes blnc_block(const Adjust& a) {
+    Bytes b;
+    for (const auto& t : a.balance) for (const int v : t) bes16(b, v);
+    b.push_back(a.keep_luma ? 1 : 0);
+    return b;
+}
+
+// ── s063: Channel Mixer ───────────────────────────────────────────────────
+// mixr: version 1, Monochrome (2), then four outputs (R, G, B, and CMYK's
+// black, unused in RGB) of five signed shorts: red, green, blue, black,
+// constant. Monochrome: the grey in all four (where Photoshop keeps its
+// grey isn't in the spec; read from the first).
+Bytes mixr_block(const Adjust& a) {
+    Bytes b;
+    be16(b, 1);
+    be16(b, a.monochrome ? 1 : 0);
+    for (int o = 0; o < 4; ++o) {
+        const std::array<int, 4> m = a.monochrome ? a.mono : o < 3 ? a.mixer[static_cast<std::size_t>(o)] : std::array<int, 4>{0, 0, 0, 0};
+        bes16(b, m[0]); bes16(b, m[1]); bes16(b, m[2]);
+        bes16(b, !a.monochrome && o == 3 ? 100 : 0);   // black in: only the black output's own
+        bes16(b, m[3]);
+    }
+    return b;
+}
+
+// ── s063: Selective Colour ─────────────────────────────────────────────────
+// selc: version 1, method (0 Relative, 1 Absolute), then ten records of
+// cyan, magenta, yellow, black (signed shorts) -- the first unused, then
+// reds .. magentas, whites, neutrals, blacks.
+Bytes selc_block(const Adjust& a) {
+    Bytes b;
+    be16(b, 1);
+    be16(b, a.selective_absolute ? 1 : 0);
+    for (int i = 0; i < 4; ++i) bes16(b, 0);
+    for (const auto& c : a.selective) for (const int v : c) bes16(b, v);
+    return b;
+}
+
+// ── s063: Gradient Map ────────────────────────────────────────────────────
+// grdm: version 1, reversed (1), dithered (1), the gradient's name (a
+// Unicode string), the colour stops -- location 0..4096, midpoint 0..100,
+// a colour record (space, four 16-bit components) and 2 bytes more (what
+// psd-tools reads; the spec says 18 bytes a stop, so the reader tries
+// both) -- the transparency stops (location, midpoint, opacity), then the
+// noise-gradient settings Photoshop keeps for every gradient.
+constexpr int kGrdmLoc = 4096;
+Bytes grdm_block(const Adjust& a) {
+    Bytes b;
+    be16(b, 1);
+    b.push_back(a.grad_reverse ? 1 : 0);
+    b.push_back(a.grad_dither ? 1 : 0);
+    const std::u16string name = u"Custom";
+    be32(b, static_cast<std::uint32_t>(name.size() + 1));
+    for (const char16_t ch : name) be16(b, ch);
+    be16(b, 0);
+    be16(b, static_cast<unsigned>(a.grad.size()));
+    for (const auto& s : a.grad) {
+        be32(b, static_cast<std::uint32_t>(std::lround(s.at * kGrdmLoc)));
+        be32(b, static_cast<std::uint32_t>(std::lround(s.mid * 100)));
+        be16(b, 0);   // RGB
+        for (const double v : s.rgb) be16(b, static_cast<unsigned>(std::lround(std::clamp(v, 0.0, 1.0) * 65535)));
+        be16(b, 0);
+        be16(b, 0);
+    }
+    be16(b, 2);       // opaque at both ends (a Gradient Map ignores it)
+    for (const int at : {0, kGrdmLoc}) { be32(b, static_cast<std::uint32_t>(at)); be32(b, 50); be16(b, 255); }
+    be16(b, 2);       // expansion count
+    be16(b, kGrdmLoc);// interpolation (smoothness 100 %)
+    be16(b, 32);      // length
+    be16(b, 0);       // mode
+    be32(b, 0);       // random seed
+    be16(b, 0);       // show transparency
+    be16(b, 0);       // vector colour
+    be32(b, 2048);    // roughness
+    be16(b, 0);       // colour model: RGB
+    for (int i = 0; i < 4; ++i) be16(b, 0);     // minimum
+    for (int i = 0; i < 4; ++i) be16(b, 100);   // maximum
+    be16(b, 0);
+    return b;
+}
+
 float f32(Cur& c) {
     const std::uint32_t u = c.u32();
     float f;
@@ -322,6 +406,10 @@ std::vector<Block> blocks(const Adjust& a) {
         case AdjustKind::Vibrance:  return {{"vibA", viba_block(a)}};
         case AdjustKind::BlackWhite:return {{"blwh", blwh_block(a)}};
         case AdjustKind::PhotoFilter:return {{"phfl", phfl_block(a)}};
+        case AdjustKind::ColourBalance:return {{"blnc", blnc_block(a)}};   // s063
+        case AdjustKind::ChannelMixer:return {{"mixr", mixr_block(a)}};
+        case AdjustKind::SelectiveColour:return {{"selc", selc_block(a)}};
+        case AdjustKind::GradientMap:return {{"grdm", grdm_block(a)}};
         case AdjustKind::None:      break;
     }
     return {};
@@ -479,6 +567,87 @@ bool Reading::feed(std::string_view key, const std::uint8_t* d, std::size_t n) {
         m_a = adjust::normalised(a);
         return true;
     }
+    // s063
+    if (key == "blnc") {
+        Adjust a = adjust::fresh(AdjustKind::ColourBalance);
+        for (auto& t : a.balance) for (int& v : t) v = c.s16();
+        a.keep_luma = c.u8() != 0;
+        if (c.bad) return true;
+        m_a = adjust::normalised(a);
+        return true;
+    }
+    if (key == "mixr") {
+        if (c.u16() != 1) return true;
+        Adjust a = adjust::fresh(AdjustKind::ChannelMixer);
+        a.monochrome = c.u16() != 0;
+        for (std::size_t o = 0; o < 4 && !c.bad; ++o) {
+            const int r = c.s16(), g = c.s16(), b = c.s16();
+            c.s16();   // black in
+            const int k = c.s16();
+            if (o < 3) a.mixer[o] = {r, g, b, k};
+            if (o == 0 && a.monochrome) a.mono = {r, g, b, k};
+        }
+        if (c.bad) return true;
+        if (a.monochrome) a.mixer = adjust::fresh(AdjustKind::ChannelMixer).mixer;
+        m_a = adjust::normalised(a);
+        return true;
+    }
+    if (key == "selc") {
+        if (c.u16() != 1) return true;
+        Adjust a = adjust::fresh(AdjustKind::SelectiveColour);
+        a.selective_absolute = c.u16() != 0;
+        c.skip(8);
+        for (auto& col : a.selective) for (int& v : col) v = c.s16();
+        if (c.bad) return true;
+        m_a = adjust::normalised(a);
+        return true;
+    }
+    if (key == "grdm") {
+        if (c.u16() != 1) return true;
+        Adjust a = adjust::fresh(AdjustKind::GradientMap);
+        a.grad_reverse = c.u8() != 0;
+        a.grad_dither = c.u8() != 0;
+        desc_ustr(c);   // the name
+        const unsigned n = c.u16();
+        if (c.bad || n < 2 || n > 256) return true;
+        const std::size_t start = c.at;
+        // A stop is 20 bytes (psd-tools) or 18 (the spec): the one whose tail
+        // reads as Photoshop writes it (expansion 2, length 32) wins.
+        for (const std::size_t stride : {std::size_t{20}, std::size_t{18}}) {
+            Cur t = c;
+            t.at = start;
+            std::vector<GradStop> stops;
+            bool colour_lost = false;
+            for (unsigned i = 0; i < n && !t.bad; ++i) {
+                const std::size_t s0 = t.at;
+                GradStop s;
+                s.at = t.u32() / static_cast<double>(kGrdmLoc);
+                s.mid = t.u32() / 100.0;
+                const unsigned space = t.u16();
+                double comp[4];
+                for (double& v : comp) v = t.u16() / 65535.0;
+                if (space == 0) s.rgb = {comp[0], comp[1], comp[2]};
+                else if (space == 8) { const double g = 1 - std::min(1.0, comp[0] * 65535 / 10000); s.rgb = {g, g, g}; }   // greyscale: 0..10000 of black
+                else { s.rgb = {s.at, s.at, s.at}; colour_lost = true; }
+                t.at = s0 + stride;
+                if (!t.need(0)) break;
+                stops.push_back(s);
+            }
+            const unsigned tn = t.u16();
+            if (t.bad || tn > 256) continue;
+            t.skip(static_cast<std::size_t>(tn) * 10);
+            const unsigned expansion = t.u16();
+            t.u16();
+            const unsigned length = t.u16();
+            if (t.bad || expansion != 2 || length != 32) continue;
+            a.grad = std::move(stops);
+            m_gradient_colour = colour_lost;
+            if (a.grad.size() > kGradStops) { a.grad.resize(kGradStops); m_gradient_colour = true; }
+            m_a = adjust::normalised(a);
+            return true;
+        }
+        return true;   // neither reads: not taken
+    }
     if (key == "brit") {
         const int b = c.s16(), k = c.s16();
         if (c.bad) return true;
@@ -524,6 +693,7 @@ std::vector<std::string> Reading::losses() const {
     if (!m_a && ((m_cged && m_legacy) || (m_brit && !m_cged))) out.emplace_back("legacy");
     if (m_a && m_channels) out.emplace_back("channels");
     if (m_a && m_filter_colour) out.emplace_back("filter colour");   // s062
+    if (m_a && m_gradient_colour) out.emplace_back("gradient colours");   // s063
     return out;
 }
 

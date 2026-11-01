@@ -76,9 +76,13 @@ const std::vector<Command>& commands() {
             {"New Adjustment Layer: Vibrance", "Layer", "win.adjust-new-vibrance", "", "adjustment layer colour saturation dull", ""},   // s062
             {"New Adjustment Layer: Black & White", "Layer", "win.adjust-new-black-white", "", "adjustment layer grey greyscale monochrome tint", ""},
             {"New Adjustment Layer: Photo Filter", "Layer", "win.adjust-new-photo-filter", "", "adjustment layer warming cooling colour", ""},
+            {"New Adjustment Layer: Colour Balance", "Layer", "win.adjust-new-colour-balance", "", "adjustment layer color colour shadows midtones highlights cyan red magenta green yellow blue", ""},   // s063
+            {"New Adjustment Layer: Channel Mixer", "Layer", "win.adjust-new-channel-mixer", "", "adjustment layer channels mix swap monochrome grey red green blue", ""},
             {"New Adjustment Layer: Invert", "Layer", "win.adjust-new-invert", "", "adjustment layer negative", ""},
             {"New Adjustment Layer: Posterize", "Layer", "win.adjust-new-posterize", "", "adjustment layer levels tones flat", ""},
             {"New Adjustment Layer: Threshold", "Layer", "win.adjust-new-threshold", "", "adjustment layer black white", ""},
+            {"New Adjustment Layer: Gradient Map", "Layer", "win.adjust-new-gradient-map", "", "adjustment layer gradient map tone colour color duotone sepia false colour", ""},   // s063
+            {"New Adjustment Layer: Selective Colour", "Layer", "win.adjust-new-selective-colour", "", "adjustment layer selective color colour cmyk cyan magenta yellow black reds neutrals", ""},   // s063
             {"Brightness/Contrast", "Image", "win.adjust-apply-brightness-contrast", "", "adjustments light dark pixels", ""},
             {"Levels", "Image", "win.adjust-apply-levels", "", "adjustments histogram black white point gamma pixels", ""},
             {"Curves", "Image", "win.adjust-apply-curves", "", "adjustments tone contrast pixels", ""},
@@ -87,9 +91,13 @@ const std::vector<Command>& commands() {
             {"Vibrance", "Image", "win.adjust-apply-vibrance", "", "adjustments colour saturation dull pixels", ""},   // s062
             {"Black & White", "Image", "win.adjust-apply-black-white", "", "adjustments grey greyscale monochrome tint pixels", ""},
             {"Photo Filter", "Image", "win.adjust-apply-photo-filter", "", "adjustments warming cooling colour pixels", ""},
+            {"Colour Balance", "Image", "win.adjust-apply-colour-balance", "", "adjustments color colour shadows midtones highlights cyan red magenta green yellow blue pixels", ""},   // s063
+            {"Channel Mixer", "Image", "win.adjust-apply-channel-mixer", "", "adjustments channels mix swap monochrome grey red green blue pixels", ""},
             {"Invert", "Image", "win.adjust-apply-invert", "", "adjustments negative pixels", ""},
             {"Posterize", "Image", "win.adjust-apply-posterize", "", "adjustments levels tones flat pixels", ""},
             {"Threshold", "Image", "win.adjust-apply-threshold", "", "adjustments black white pixels", ""},
+            {"Gradient Map", "Image", "win.adjust-apply-gradient-map", "", "adjustments gradient map tone colour color duotone sepia false colour pixels", ""},   // s063
+            {"Selective Colour", "Image", "win.adjust-apply-selective-colour", "", "adjustments selective color colour cmyk cyan magenta yellow black reds neutrals pixels", ""},   // s063
             // s014: the Filter menu.
             {"Gaussian Blur", "Filter", "win.filter-gaussian-blur", "", "filter blur soften smooth", ""},
             {"Unsharp Mask", "Filter", "win.filter-unsharp-mask", "", "filter sharpen crisp detail", ""},

@@ -22,6 +22,16 @@
 //                              tintColor (RGBC), bwPresetKind
 //   Photo Filter         phfl  v2: RGB colour record, density, Preserve
 //                              Luminosity (v3's XYZ colour: not read)
+//   Colour Balance       blnc  shadows, midtones, highlights (3 x 3 signed  (s063)
+//                              2 bytes), Preserve Luminosity (1)
+//   Channel Mixer        mixr  v1, Monochrome, four outputs x (red, green,
+//                              blue, black, constant); Monochrome: the grey
+//                              in each
+//   Selective Colour     selc  v1, Relative / Absolute, ten records of C M Y K
+//                              (the first unused; reds .. blacks)
+//   Gradient Map         grdm  v1, reverse, dither, name, colour stops
+//                              (location /4096, midpoint %, RGB record),
+//                              transparency stops, noise settings
 //
 // Pure: no files, no GTK. The reader feeds a layer's blocks one by one and
 // asks what they made; the writer asks for the blocks of one Adjust.
@@ -60,13 +70,15 @@ public:
     // "colour ranges" (Hue/Saturation's per-range settings), "legacy"
     // (Brightness/Contrast's old maths, read the modern way), "channels"
     // (Levels / Curves on a channel Klimt doesn't have), s062 "filter colour"
-    // (a Photo Filter's colour in a space Klimt doesn't read).
+    // (a Photo Filter's colour in a space Klimt doesn't read), s063
+    // "gradient colours" (a Gradient Map's, likewise -- or past 32 stops).
     std::vector<std::string> losses() const;
 
 private:
     std::optional<Adjust> m_a;
     bool m_brit = false, m_cged = false, m_legacy = false, m_ranges = false, m_channels = false;
     bool m_filter_colour = false;   // s062: a Photo Filter colour not in RGB (v3's XYZ)
+    bool m_gradient_colour = false; // s063: Gradient Map stops in a space not read (HSB, CMYK, Lab), or past 32
     int  m_brit_b = 0, m_brit_c = 0;
 };
 

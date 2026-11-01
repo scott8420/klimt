@@ -23,6 +23,10 @@ constexpr Info kInfo[] = {
     {AdjustKind::Vibrance,  "vibrance",            "Vibrance"},
     {AdjustKind::BlackWhite,"black-white",         "Black & White"},
     {AdjustKind::PhotoFilter,"photo-filter",       "Photo Filter"},
+    {AdjustKind::ColourBalance,"colour-balance",   "Colour Balance"},   // s063
+    {AdjustKind::ChannelMixer,"channel-mixer",     "Channel Mixer"},
+    {AdjustKind::SelectiveColour,"selective-colour","Selective Colour"},
+    {AdjustKind::GradientMap,"gradient-map",       "Gradient Map"},
 };
 
 double clamp01(double v) { return std::clamp(v, 0.0, 1.0); }
@@ -150,6 +154,74 @@ void photo_filter(const Adjust& a, double& r, double& g, double& b) {
     r = clamp01(R); g = clamp01(G); b = clamp01(B);
 }
 
+// s063: Colour Balance, GIMP's reading of Photoshop's: each tone's shift
+// weighted by how far the pixel's lightness lies in that tone (shadows fade
+// out by a third, highlights in from two thirds, midtones between), scaled
+// by 0.7; Preserve Luminosity puts the HSL lightness back.
+double balance_map(double v, double l, double sh, double mid, double hi) {
+    constexpr double a = 0.25, b = 0.333, scale = 0.7;
+    sh  *= std::clamp((l - b) / -a + 0.5, 0.0, 1.0) * scale;
+    mid *= std::clamp((l - b) / a + 0.5, 0.0, 1.0) * std::clamp((l + b - 1) / -a + 0.5, 0.0, 1.0) * scale;
+    hi  *= std::clamp((l + b - 1) / a + 0.5, 0.0, 1.0) * scale;
+    return clamp01(v + sh + mid + hi);
+}
+void colour_balance(const Adjust& a, double& r, double& g, double& b) {
+    double h, s, l;
+    hsl_of(r, g, b, h, s, l);
+    double* ch[3] = {&r, &g, &b};
+    for (std::size_t c = 0; c < 3; ++c)
+        *ch[c] = balance_map(*ch[c], l, a.balance[0][c] / 100.0, a.balance[1][c] / 100.0, a.balance[2][c] / 100.0);
+    if (a.keep_luma) {
+        double h2, s2, l2;
+        hsl_of(r, g, b, h2, s2, l2);
+        rgb_of(h2, s2, l, r, g, b);
+    }
+}
+
+// s063: Channel Mixer -- each output a sum of the inputs plus the constant.
+void channel_mixer(const Adjust& a, double& r, double& g, double& b) {
+    const auto mix = [&](const std::array<int, 4>& m) { return clamp01((m[0] * r + m[1] * g + m[2] * b + m[3]) / 100.0); };
+    if (a.monochrome) { r = g = b = mix(a.mono); return; }
+    const double R = mix(a.mixer[0]), G = mix(a.mixer[1]), B = mix(a.mixer[2]);
+    r = R; g = G; b = B;
+}
+
+// s063: Selective Colour. How much of each of the nine colours a pixel is:
+// a primary (red, green, blue) by how far its largest channel leads the
+// middle one, a secondary (yellow, cyan, magenta) by how far the middle one
+// leads the smallest; whites by the smallest past half, blacks by the
+// largest under half, neutrals the rest of the way to grey. Each colour's
+// inks then move the pixel by that much (the shader-world reading of
+// Photoshop's: ink c on a channel v moves it by ((-1 - c) k - c), times
+// the ink already there (1 - v) when Relative).
+void selective_colour(const Adjust& a, double& r, double& g, double& b) {
+    const double mx = std::max({r, g, b}), mn = std::min({r, g, b});
+    const double md = r + g + b - mx - mn;
+    double w[9] = {};
+    enum { Re, Ye, Gr, Cy, Bl, Ma, Wh, Ne, Bk };
+    if (mx > mn) {
+        w[r == mx ? Re : g == mx ? Gr : Bl] = mx - md;
+        w[b == mn ? Ye : r == mn ? Cy : Ma] = md - mn;
+    }
+    w[Wh] = mn > 0.5 ? (mn - 0.5) * 2 : 0;
+    w[Bk] = mx < 0.5 ? (0.5 - mx) * 2 : 0;
+    w[Ne] = std::max(0.0, 1 - (std::abs(mx - 0.5) + std::abs(mn - 0.5)));
+    const double in[3] = {r, g, b};
+    double out[3] = {r, g, b};
+    for (int k = 0; k < 9; ++k) {
+        if (w[k] <= 0) continue;
+        const auto& s = a.selective[static_cast<std::size_t>(k)];
+        const double blk = s[3] / 100.0;
+        for (int c = 0; c < 3; ++c) {
+            const double ink = s[static_cast<std::size_t>(c)] / 100.0, v = in[c];
+            double d = (-1 - ink) * blk - ink;
+            if (!a.selective_absolute) d *= 1 - v;
+            out[c] += std::clamp(d, -v, 1 - v) * w[k];
+        }
+    }
+    r = clamp01(out[0]); g = clamp01(out[1]); b = clamp01(out[2]);
+}
+
 // Channel c (0..2 = R, G, B) of the LUT kinds, on v.
 double lut_kind(const Adjust& a, const std::vector<double>* tables, int c, double v) {
     switch (a.kind) {
@@ -166,12 +238,30 @@ double lut_kind(const Adjust& a, const std::vector<double>* tables, int c, doubl
         case AdjustKind::Invert:    return 1 - v;
         case AdjustKind::Posterize: return posterize(a.posterize, v);
         case AdjustKind::Exposure:  return exposure(a, v);
+        case AdjustKind::GradientMap: return gradient_at(a.grad, a.grad_reverse ? 1 - v : v)[static_cast<std::size_t>(c)];   // s063: v is the luminosity
         default: return v;
     }
 }
 }  // namespace
 
 void to_hsl(double r, double g, double b, double& h, double& s, double& l) { hsl_of(r, g, b, h, s, l); }
+
+std::array<double, 3> gradient_at(const std::vector<GradStop>& stops, double t) {
+    if (stops.empty()) return {t, t, t};
+    t = clamp01(t);
+    if (t <= stops.front().at) return stops.front().rgb;
+    if (t >= stops.back().at) return stops.back().rgb;
+    std::size_t hi = 1;
+    while (hi + 1 < stops.size() && stops[hi].at < t) ++hi;
+    const auto& p = stops[hi - 1];
+    const auto& q = stops[hi];
+    const double span = q.at - p.at;
+    if (span <= 1e-9) return q.rgb;
+    double u = (t - p.at) / span;
+    const double m = std::clamp(q.mid, 0.05, 0.95);
+    u = u < m ? 0.5 * u / m : 0.5 + 0.5 * (u - m) / (1 - m);
+    return {p.rgb[0] + (q.rgb[0] - p.rgb[0]) * u, p.rgb[1] + (q.rgb[1] - p.rgb[1]) * u, p.rgb[2] + (q.rgb[2] - p.rgb[2]) * u};
+}
 void from_hsl(double h, double s, double l, double& r, double& g, double& b) { rgb_of(h, s, l, r, g, b); }
 
 std::string_view label(AdjustKind k) {
@@ -188,8 +278,10 @@ std::optional<AdjustKind> from_key(std::string_view k) {
 }
 const std::vector<AdjustKind>& kinds() {
     static const std::vector<AdjustKind> v{AdjustKind::BrightCon, AdjustKind::Levels, AdjustKind::Curves, AdjustKind::Exposure,
-                                           AdjustKind::Vibrance, AdjustKind::HueSat, AdjustKind::BlackWhite, AdjustKind::PhotoFilter,
-                                           AdjustKind::Invert, AdjustKind::Posterize, AdjustKind::Threshold};
+                                           AdjustKind::Vibrance, AdjustKind::HueSat, AdjustKind::ColourBalance, AdjustKind::BlackWhite,
+                                           AdjustKind::PhotoFilter, AdjustKind::ChannelMixer,
+                                           AdjustKind::Invert, AdjustKind::Posterize, AdjustKind::Threshold,
+                                           AdjustKind::GradientMap, AdjustKind::SelectiveColour};
     return v;
 }
 
@@ -237,6 +329,18 @@ Adjust normalised(Adjust a) {
     a.tint_sat = std::clamp(a.tint_sat, 0, 100);
     for (auto& c : a.filter) c = clamp01(c);
     a.density = std::clamp(a.density, 1, 100);
+    for (auto& t : a.balance) for (auto& v : t) v = std::clamp(v, -100, 100);   // s063
+    for (auto& o : a.mixer) for (auto& v : o) v = std::clamp(v, -200, 200);
+    for (auto& v : a.mono) v = std::clamp(v, -200, 200);
+    for (auto& c : a.selective) for (auto& v : c) v = std::clamp(v, -100, 100);
+    for (auto& s : a.grad) {
+        s.at = clamp01(s.at);
+        s.mid = std::clamp(s.mid, 0.05, 0.95);
+        for (auto& v : s.rgb) v = clamp01(v);
+    }
+    std::stable_sort(a.grad.begin(), a.grad.end(), [](const GradStop& p, const GradStop& q) { return p.at < q.at; });
+    if (a.grad.size() > kGradStops) a.grad.resize(kGradStops);
+    if (a.grad.size() < 2) a.grad = Adjust{}.grad;
     return a;
 }
 
@@ -259,6 +363,14 @@ bool identity(const Adjust& a) {
         case AdjustKind::BlackWhite:
         case AdjustKind::PhotoFilter: return false;   // their own effect
         case AdjustKind::Vibrance:  return a.vibrance == 0 && a.saturation == 0;
+        case AdjustKind::ColourBalance:   // s063 (Preserve Luminosity alone changes nothing)
+            for (const auto& t : a.balance) for (const int v : t) if (v != 0) return false;
+            return true;
+        case AdjustKind::ChannelMixer: return !a.monochrome && a.mixer == fresh(AdjustKind::ChannelMixer).mixer;
+        case AdjustKind::SelectiveColour:
+            for (const auto& c : a.selective) for (const int v : c) if (v != 0) return false;
+            return true;
+        case AdjustKind::GradientMap: return false;   // its own effect
     }
     return true;
 }
@@ -337,7 +449,8 @@ std::shared_ptr<const Compiled> compile(const Adjust& a) {
     // Per channel, so tables; the rest (Hue/Saturation, Threshold, s062's)
     // mix the channels and run per pixel.
     if (a.kind == AdjustKind::Levels || a.kind == AdjustKind::Curves || a.kind == AdjustKind::BrightCon ||
-        a.kind == AdjustKind::Invert || a.kind == AdjustKind::Posterize || a.kind == AdjustKind::Exposure) {
+        a.kind == AdjustKind::Invert || a.kind == AdjustKind::Posterize || a.kind == AdjustKind::Exposure ||
+        a.kind == AdjustKind::GradientMap) {
         std::vector<double> tables[kAdjustChannels];
         if (a.kind == AdjustKind::Curves)
             for (int i = 0; i < kAdjustChannels; ++i) tables[i] = curve_table(a.curves[static_cast<std::size_t>(i)], kLut);
@@ -364,16 +477,27 @@ void run_rgb(const Compiled& c, float& r, float& g, float& b) {
         }
         case AdjustKind::Vibrance:
         case AdjustKind::BlackWhite:
-        case AdjustKind::PhotoFilter: {   // s062
+        case AdjustKind::PhotoFilter:     // s062
+        case AdjustKind::ColourBalance:   // s063
+        case AdjustKind::ChannelMixer:
+        case AdjustKind::SelectiveColour: {
             double R = std::clamp(r, 0.f, 1.f), G = std::clamp(g, 0.f, 1.f), B = std::clamp(b, 0.f, 1.f);
             if (c.kind == AdjustKind::Vibrance) vibrance(c.a, R, G, B);
             else if (c.kind == AdjustKind::PhotoFilter) photo_filter(c.a, R, G, B);
+            else if (c.kind == AdjustKind::ColourBalance) colour_balance(c.a, R, G, B);
+            else if (c.kind == AdjustKind::ChannelMixer) channel_mixer(c.a, R, G, B);
+            else if (c.kind == AdjustKind::SelectiveColour) selective_colour(c.a, R, G, B);
             else {
                 const double v = black_white(c.a, R, G, B);
                 if (c.a.bw_tint) rgb_of(c.a.tint_hue / 360.0, c.a.tint_sat / 100.0, v, R, G, B);
                 else R = G = B = v;
             }
             r = static_cast<float>(clamp01(R)); g = static_cast<float>(clamp01(G)); b = static_cast<float>(clamp01(B));
+            return;
+        }
+        case AdjustKind::GradientMap: {   // s063: the luminosity down the gradient's table
+            const float l = static_cast<float>(luma(std::clamp(r, 0.f, 1.f), std::clamp(g, 0.f, 1.f), std::clamp(b, 0.f, 1.f)));
+            r = lut_at(c.lut[0], l); g = lut_at(c.lut[1], l); b = lut_at(c.lut[2], l);
             return;
         }
         case AdjustKind::Threshold: {   // s061: Photoshop's luminance weights, in levels

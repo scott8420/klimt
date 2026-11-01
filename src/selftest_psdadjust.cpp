@@ -67,6 +67,60 @@ double v255(int v) { return v / 255.0; }
 }  // namespace
 
 void selftest_psd_adjust(const Check& check) {
+    // ── s063: Colour Balance, Channel Mixer, Selective Colour, Gradient Map ─
+    {
+        using K = core::AdjustKind;
+        auto cb = core::adjust::fresh(K::ColourBalance); cb.balance = {{{10, -20, 30}, {-40, 50, -60}, {70, -80, 100}}}; cb.keep_luma = false;
+        const auto bb = adj::blocks(cb);
+        check("psd adjust: Colour Balance is blnc -- nine signed shorts, luminosity (19 bytes)",
+              bb.size() == 1 && bb[0].key == "blnc" && bb[0].data.size() == 19 && bb[0].data[2] == 0xFF && bb[0].data[3] == 0xEC && bb[0].data[18] == 0, "");
+        check("psd adjust: Colour Balance comes back", round(cb) == cb, "");
+        auto mx = core::adjust::fresh(K::ChannelMixer); mx.mixer = {{{10, 20, 30, -5}, {-200, 0, 200, 7}, {1, 2, 3, 4}}};
+        const auto mb = adj::blocks(mx);
+        check("psd adjust: Channel Mixer is mixr v1 -- monochrome, four outputs of five shorts (44 bytes)",
+              mb.size() == 1 && mb[0].key == "mixr" && mb[0].data.size() == 44 && mb[0].data[1] == 1 && mb[0].data[3] == 0, "");
+        check("psd adjust: Channel Mixer comes back", round(mx) == mx, "");
+        auto mm = core::adjust::fresh(K::ChannelMixer); mm.monochrome = true; mm.mono = {30, 60, 10, -4};
+        const auto mr = round(mm);
+        check("psd adjust: a Monochrome Channel Mixer comes back -- the grey, the outputs fresh", mr == mm, "");
+        auto sc = core::adjust::fresh(K::SelectiveColour); sc.selective[0] = {1, -2, 3, -4}; sc.selective[8] = {100, -100, 50, 7}; sc.selective_absolute = true;
+        const auto sb = adj::blocks(sc);
+        check("psd adjust: Selective Colour is selc v1 -- method, ten CMYK records, the first empty (84 bytes)",
+              sb.size() == 1 && sb[0].key == "selc" && sb[0].data.size() == 84 && sb[0].data[1] == 1 && sb[0].data[3] == 1 &&
+              sb[0].data[4] == 0 && sb[0].data[11] == 0 && sb[0].data[13] == 1, "");
+        check("psd adjust: Selective Colour comes back", round(sc) == sc, "");
+        auto gm = core::adjust::fresh(K::GradientMap);
+        gm.grad = {{0, 0.5, {0, 0, 0}}, {0.25, 0.3, {1, 0, 0.5}}, {1, 0.7, {1, 1, 1}}};
+        gm.grad_reverse = true;
+        const auto gb = adj::blocks(gm);
+        // 4 + name (4 + 7 x 2) + 2 + 3 x 20 + 2 + 2 x 10 + the tail (2+2+2+2+4+2+2+4+2+8+8+2 = 40)
+        check("psd adjust: Gradient Map is grdm v1 -- reverse, dither, name, 20-byte colour stops, transparency, the tail (146 bytes)",
+              gb.size() == 1 && gb[0].key == "grdm" && gb[0].data.size() == 146 && gb[0].data[1] == 1 && gb[0].data[2] == 1 && gb[0].data[3] == 0,
+              std::to_string(gb.empty() ? 0 : gb[0].data.size()));
+        const auto gr = round(gm);
+        bool gsame = gr && gr->grad.size() == 3 && gr->grad_reverse && !gr->grad_dither;
+        for (std::size_t i = 0; gsame && i < 3; ++i)
+            gsame = std::abs(gr->grad[i].at - gm.grad[i].at) < 1e-3 && std::abs(gr->grad[i].mid - gm.grad[i].mid) < 1e-9 &&
+                    std::abs(gr->grad[i].rgb[0] - gm.grad[i].rgb[0]) < 1e-4 && std::abs(gr->grad[i].rgb[2] - gm.grad[i].rgb[2]) < 1e-4;
+        check("psd adjust: Gradient Map comes back -- stops, midpoints, colours, Reverse", gsame, "");
+        // The spec's 18-byte stops, a greyscale stop and an HSB one.
+        Bytes g18;
+        be16(g18, 1); g18.push_back(0); g18.push_back(1);
+        be32(g18, 1); be16(g18, 0);   // the name: ""
+        be16(g18, 2);
+        be32(g18, 0); be32(g18, 50); be16(g18, 8); be16(g18, 10000); be16(g18, 0); be16(g18, 0); be16(g18, 0);   // grey: all black
+        be32(g18, 4096); be32(g18, 50); be16(g18, 1); be16(g18, 0); be16(g18, 0); be16(g18, 0); be16(g18, 0);    // HSB
+        be16(g18, 0);
+        be16(g18, 2); be16(g18, 4096); be16(g18, 32);
+        for (int i = 0; i < 20; ++i) g18.push_back(0);
+        adj::Reading r18;
+        r18.feed("grdm", g18.data(), g18.size());
+        const auto x18 = r18.result();
+        const auto l18 = r18.losses();
+        check("psd adjust: 18-byte stops read; a greyscale stop as black; HSB said lost (\"gradient colours\")",
+              x18 && x18->kind == K::GradientMap && x18->grad_dither && x18->grad.size() == 2 && x18->grad[0].rgb[0] == 0 &&
+              x18->grad[1].at == 1 && l18.size() == 1 && l18[0] == "gradient colours", "");
+    }
     // ── s062: Vibrance, Black & White, Photo Filter ────────────────────────
     {
         using K = core::AdjustKind;
