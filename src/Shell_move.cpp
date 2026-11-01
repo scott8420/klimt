@@ -76,6 +76,11 @@ void Shell::on_nudge(int dx, int dy) {
             const auto l = m_doc.get(id);
             if (!l || l->pixels != px) { same = false; break; }
         }
+    if (same)   // s058: a mask painted since (a group's, an adjustment's) -- a new run
+        for (const auto& [id, m] : m_nudge.landed_masks) {
+            const auto l = m_doc.get(id);
+            if (!l || l->mask != m) { same = false; break; }
+        }
     if (!same) {
         if (const auto why = Mv::refusal(m_doc, sel); !why.empty()) { toast("Move: " + why); return; }
         auto p = Mv::plan(m_doc, sel, background_px());
@@ -85,6 +90,7 @@ void Shell::on_nudge(int dx, int dy) {
         m_nudge.sel = sel;
         m_nudge.mask = m_doc.selection_ptr();
         for (const auto& id : m_nudge.plan->ids) m_nudge.landed[id] = m_doc.get(id)->pixels;
+        for (const auto& [id, m] : m_nudge.plan->masks) m_nudge.landed_masks[id] = m;
     }
     m_nudge.x += dx;
     m_nudge.y += dy;
@@ -126,6 +132,7 @@ void Shell::move_pump() {
                     m_journal.run("Move", Mv::step_ids(*plan), [&] { Mv::put(m_doc, *plan, *res); }, nudge_key(*plan));
                 if (m_nudge.plan == plan) {
                     for (const auto& [id, px] : res->pixels) m_nudge.landed[id] = px;
+                    for (const auto& [id, m] : res->masks) m_nudge.landed_masks[id] = m;
                     m_nudge.mask = m_doc.selection_ptr();
                 }
             }

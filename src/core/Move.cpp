@@ -36,10 +36,33 @@ std::vector<Id> targets(const Document& d, const std::vector<Id>& selected) {
     return out;
 }
 
+// s058: the adjustment / filter layers in the selected trees that have a
+// mask -- what a move carries besides pixels.
+std::vector<Id> mask_layers(const Document& d, const std::vector<Id>& selected) {
+    std::set<Id> want;
+    for (const auto& s : selected)
+        for (const auto& id : d.subtree(s))
+            if (const auto l = d.get(id); l && (l->kind == Kind::Adjustment || l->kind == Kind::Filter) && l->mask) want.insert(id);
+    std::vector<Id> out;
+    for (const auto& id : d.walk())
+        if (want.count(id)) out.push_back(id);
+    return out;
+}
+
 std::string refusal(const Document& d, const std::vector<Id>& selected) {
     const auto ids = targets(d, selected);
-    if (ids.empty()) return selected.empty() ? "pick a layer to move" : "nothing to move -- the group is empty";
+    const auto masks = mask_layers(d, selected);
+    if (ids.empty() && masks.empty()) {
+        if (selected.empty()) return "pick a layer to move";
+        if (const auto l = d.get(selected.front()); l && (l->kind == Kind::Adjustment || l->kind == Kind::Filter))
+            return "“" + l->name + "” has no mask to move -- an adjustment acts everywhere until it has one";
+        return "nothing to move -- the group is empty";
+    }
+    // A selection lifts PIXELS; a mask moves whole. Only masks picked: say so.
+    if (ids.empty() && d.selection_ptr()) return "a mask moves whole -- deselect (Ctrl+D) to move it";
     for (const auto& id : ids)
+        if (const auto who = lock_on(d, id); !who.empty()) return "“" + who + "” is locked in place";
+    for (const auto& id : masks)
         if (const auto who = lock_on(d, id); !who.empty()) return "“" + who + "” is locked in place";
     return {};
 }
@@ -63,6 +86,11 @@ std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, con
                     p.groups.push_back(id);
                     p.masks[id] = l->mask;
                 }
+    if (!p.mask)   // s058: adjustment / filter layers' masks ride along
+        for (const auto& id : mask_layers(d, selected)) {
+            p.mask_only.push_back(id);
+            p.masks[id] = d.get(id)->mask;
+        }
     for (const auto& id : p.ids) {
         const auto l = *d.get(id);
         p.original[id] = l.pixels;
@@ -165,6 +193,7 @@ std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function
 std::vector<Id> step_ids(const Plan& p) {
     auto ids = p.ids;
     ids.insert(ids.end(), p.groups.begin(), p.groups.end());   // s024
+    ids.insert(ids.end(), p.mask_only.begin(), p.mask_only.end());   // s058
     if (p.mask) ids.push_back(kSelectionId);
     return ids;
 }
@@ -179,7 +208,9 @@ void put(Document& d, const Plan& p, const Result& r) {
         if (const auto m = r.masks.find(id); m != r.masks.end()) l->mask = m->second;   // s012
         d.put(id, *l);
     }
-    for (const auto& id : p.groups) {   // s024: the groups' masks
+    std::vector<Id> carried = p.groups;   // s024: the groups' masks; s058: adjustment / filter layers'
+    carried.insert(carried.end(), p.mask_only.begin(), p.mask_only.end());
+    for (const auto& id : carried) {
         auto l = d.get(id);
         const auto m = r.masks.find(id);
         if (!l || m == r.masks.end()) continue;

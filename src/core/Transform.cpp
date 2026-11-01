@@ -303,9 +303,39 @@ std::string refusal(const Document& d, const std::vector<Document::Id>& selected
     return {};
 }
 
+// s058: where a layer mask HIDES anything (> 0), exactly; empty: it hides nothing.
+pixel::Rect hidden_bounds(const pixel::TileMap& m) {
+    int x0 = std::numeric_limits<int>::max(), y0 = x0, x1 = std::numeric_limits<int>::min(), y1 = x1;
+    const auto take = [&](int x, int y) { x0 = std::min(x0, x); y0 = std::min(y0, y); x1 = std::max(x1, x); y1 = std::max(y1, y); };
+    const auto cell = [&](const pixel::TileMap::TileRef& t, int col, int row) {
+        if (t->is_uniform()) {
+            if (t->get(0, 0).c[0] <= 0.f) return;
+            take(col * kTile, row * kTile);
+            take(col * kTile + kTile - 1, row * kTile + kTile - 1);
+            return;
+        }
+        for (int y = 0; y < kTile; ++y)
+            for (int x = 0; x < kTile; ++x)
+                if (t->get(x, y).c[0] > 0.f) take(col * kTile + x, row * kTile + y);
+    };
+    for (int row = 0; row < m.rows(); ++row)
+        for (int col = 0; col < m.cols(); ++col)
+            if (const auto t = m.tile(col, row)) cell(t, col, row);
+    for (const auto& [c, t] : m.outside_tiles()) cell(t, c.first, c.second);
+    if (x1 < x0) return {};
+    // Clipped to the image's cells' reach is not needed: a mask beyond the
+    // image moves with it too.
+    return {x0, y0, x1 - x0 + 1, y1 - y0 + 1};
+}
+
 pixel::Rect box_of(const move::Plan& p) {
     if (p.mask) return canvas::bounds(*p.mask);
     int x0 = std::numeric_limits<int>::max(), y0 = x0, x1 = std::numeric_limits<int>::min(), y1 = x1;
+    for (const auto& id : p.mask_only) {   // s058: an adjustment's mask -- what it hides
+        const auto r = hidden_bounds(*p.masks.at(id));
+        if (r.empty()) continue;
+        x0 = std::min(x0, r.x); y0 = std::min(y0, r.y); x1 = std::max(x1, r.x + r.w); y1 = std::max(y1, r.y + r.h);
+    }
     for (const auto& [id, px] : p.original) {
         if (!px) continue;
         const auto r = canvas::content_bounds(*px);

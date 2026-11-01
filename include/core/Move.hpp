@@ -49,6 +49,9 @@ struct Plan {
     pixel::Px           fill;        // what a layer with no alpha shows where pixels left
     std::map<Id, MapPtr> masks;      // s012: the targets' layer masks (moved with a whole layer)
     std::vector<Id>     groups;      // s024: groups in the move whose masks move with them
+    // s058 (WEAKNESSES 31): adjustment / filter layers in the move -- no
+    // pixels; their masks move (or transform) with a whole move, as a group's.
+    std::vector<Id>     mask_only;
     int                 width = 0, height = 0;
     pixel::Format       format;
     // s046: TEXT LAYERS among the targets -- their type at the press. Type

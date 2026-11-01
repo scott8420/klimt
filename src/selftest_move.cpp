@@ -3,6 +3,7 @@
 #include "core/Document.hpp"
 #include "core/Move.hpp"
 #include "core/Selection.hpp"
+#include "core/Transform.hpp"   // s058
 
 #include <array>
 #include <chrono>
@@ -161,5 +162,45 @@ void selftest_move(const Check& check) {
         check("move: ...that moved by their sum", red(t.at("L4", 102, 110)) && clear(t.at("L4", 101, 109)), "");
         t.j.undo();
         check("move: one undo takes them all back", red(t.at("L4", 100, 100)), "");
+    }
+    std::cout << "\n-- move: an adjustment layer's mask (s058, WEAKNESSES 31) --\n";
+    {
+        Fix f;
+        const auto id = core::layers::add_adjustment(f.j, f.d, core::AdjustKind::Levels, "L5");
+        // Its mask hides a 40 x 30 block at (100, 50).
+        const auto hide = std::make_shared<const P::TileMap>(f.d.blank_mask().fill({100, 50, 40, 30}, P::rgba(1, 1, 1)));
+        const auto hidden = [&](int x, int y) { const auto l = f.d.get(id); return l && l->mask && l->mask->get(x, y).c[0] > 0.5f; };
+        f.j.run("unmask", {id}, [&] { auto l = *f.d.get(id); l.mask = nullptr; f.d.put(id, l); });   // a new one comes with an empty mask
+        check("adjust mask: no mask at all -- Move refuses, in words",
+              M::refusal(f.d, {id}).find("no mask to move") != std::string::npos, M::refusal(f.d, {id}));
+        f.j.run("mask", {id}, [&] { auto l = *f.d.get(id); l.mask = hide; f.d.put(id, l); });
+        check("adjust mask: with one, Move takes it", M::refusal(f.d, {id}).empty(), M::refusal(f.d, {id}));
+        const bool moved = M::by(f.j, f.d, {id}, 30, 20, P::rgba(1, 1, 1));
+        check("adjust mask: the mask slides -- what it hid is now 30 right, 20 down",
+              moved && hidden(135, 75) && !hidden(105, 55) && f.d.get(id)->adjust.kind == core::AdjustKind::Levels, "");
+        f.j.undo();
+        check("adjust mask: one step -- undo puts it back", hidden(105, 55) && !hidden(165, 95), "");
+        // A whole group move carries an adjustment inside it.
+        // Free Transform: the box is what the mask hides; a flip mirrors it.
+        auto mp = M::plan(f.d, {id}, P::rgba(1, 1, 1));
+        const auto box = mp ? klimt::core::xform::box_of(*mp) : P::Rect{};
+        check("adjust mask: Free Transform's box is what the mask hides", box.x == 100 && box.y == 50 && box.w == 40 && box.h == 30,
+              std::to_string(box.x) + "," + std::to_string(box.y) + " " + std::to_string(box.w) + "x" + std::to_string(box.h));
+        const auto flip = klimt::core::xform::Affine::about({300, 200}, klimt::core::xform::Affine::scale(-1, 1));
+        const bool flipped = klimt::core::xform::apply(f.j, f.d, {id}, flip, "Flip", P::rgba(1, 1, 1));
+        check("adjust mask: Flip Horizontal mirrors the mask (600 wide: 100..140 -> 460..500)",
+              flipped && hidden(470, 60) && !hidden(110, 60), "");
+        f.j.undo();
+        // A pixel selection: a mask moves whole -- refused, said.
+        f.j.run("sel", {core::kSelectionId}, [&] {
+            core::Layer sl; sl.name = "Selection"; sl.pixels = std::make_shared<const P::TileMap>(f.d.blank_mask().fill({0, 0, 10, 10}, P::rgba(1, 1, 1)));
+            f.d.put(core::kSelectionId, sl);
+        });
+        check("adjust mask: with a selection, refused -- \"a mask moves whole\"",
+              M::refusal(f.d, {id}).find("moves whole") != std::string::npos, M::refusal(f.d, {id}));
+        f.j.undo();
+        // Locked in place: refused.
+        f.j.run("lock", {id}, [&] { auto l = *f.d.get(id); l.locks = core::lock::Position; f.d.put(id, l); });
+        check("adjust mask: locked in place -- refused", M::refusal(f.d, {id}).find("locked") != std::string::npos, "");
     }
 }

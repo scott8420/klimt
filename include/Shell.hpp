@@ -494,6 +494,7 @@ private:
         std::shared_ptr<const core::move::Plan> plan;
         std::vector<core::Document::Id> sel;
         std::map<core::Document::Id, std::shared_ptr<const pixel::TileMap>> landed;
+        std::map<core::Document::Id, std::shared_ptr<const pixel::TileMap>> landed_masks;   // s058: the masks it moves
         std::shared_ptr<const pixel::TileMap> mask;
         int x = 0, y = 0;
     };
