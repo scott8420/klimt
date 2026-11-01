@@ -13,6 +13,7 @@
 
 #include <gtkmm/box.h>
 #include <gtkmm/checkbutton.h>
+#include <gtkmm/colordialogbutton.h>
 #include <gtkmm/drawingarea.h>
 #include <gtkmm/dropdown.h>
 #include <gtkmm/label.h>
@@ -54,6 +55,8 @@ private:
     void levels_drag(double x, double y);
     // Curves.
     void draw_curves(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
+    void draw_threshold(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);   // s062
+    void threshold_at(double x);
     void curves_press(double x, double y);
     void curves_drag(double x, double y);
     void curves_release();
@@ -68,6 +71,13 @@ private:
     struct Bound { Gtk::Scale* s; int* field; double* dfield = nullptr; };
     std::vector<Bound> m_sliders;
     Gtk::CheckButton* m_colorize = nullptr;
+    // s062: Black & White's Tint; Photo Filter's preset, colour and Preserve Luminosity.
+    Gtk::CheckButton* m_tint = nullptr;
+    Gtk::Scale*       m_tint_h = nullptr;
+    Gtk::Scale*       m_tint_s = nullptr;
+    Gtk::DropDown*    m_preset = nullptr;
+    Gtk::ColorDialogButton* m_filter_colour = nullptr;
+    Gtk::CheckButton* m_luma = nullptr;
     Gtk::DropDown*    m_channel = nullptr;
     Gtk::DrawingArea* m_graph = nullptr;
     // Levels' number fields: in black, gamma, in white, out black, out white.

@@ -17,6 +17,11 @@
 //   Posterize            post  levels (2 bytes), 2 bytes padding
 //   Threshold            thrs  level (2 bytes), 2 bytes padding
 //   Exposure             expA  version 1; exposure, offset, gamma (floats)
+//   Vibrance             vibA  a descriptor: vibrance, Strt     (s062)
+//   Black & White        blwh  a descriptor: Rd Yllw Grn Cyn Bl Mgnt, useTint,
+//                              tintColor (RGBC), bwPresetKind
+//   Photo Filter         phfl  v2: RGB colour record, density, Preserve
+//                              Luminosity (v3's XYZ colour: not read)
 //
 // Pure: no files, no GTK. The reader feeds a layer's blocks one by one and
 // asks what they made; the writer asks for the blocks of one Adjust.
@@ -54,12 +59,14 @@ public:
     // What didn't cross exactly, as short phrases the toast counts:
     // "colour ranges" (Hue/Saturation's per-range settings), "legacy"
     // (Brightness/Contrast's old maths, read the modern way), "channels"
-    // (Levels / Curves on a channel Klimt doesn't have).
+    // (Levels / Curves on a channel Klimt doesn't have), s062 "filter colour"
+    // (a Photo Filter's colour in a space Klimt doesn't read).
     std::vector<std::string> losses() const;
 
 private:
     std::optional<Adjust> m_a;
     bool m_brit = false, m_cged = false, m_legacy = false, m_ranges = false, m_channels = false;
+    bool m_filter_colour = false;   // s062: a Photo Filter colour not in RGB (v3's XYZ)
     int  m_brit_b = 0, m_brit_c = 0;
 };
 

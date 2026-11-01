@@ -67,6 +67,37 @@ double v255(int v) { return v / 255.0; }
 }  // namespace
 
 void selftest_psd_adjust(const Check& check) {
+    // ── s062: Vibrance, Black & White, Photo Filter ────────────────────────
+    {
+        using K = core::AdjustKind;
+        auto v = core::adjust::fresh(K::Vibrance); v.vibrance = 45; v.saturation = -20;
+        const auto vb = adj::blocks(v);
+        check("psd adjust: Vibrance is one vibA descriptor", vb.size() == 1 && vb[0].key == "vibA" && vb[0].data.size() > 20 && vb[0].data[3] == 16, "");
+        check("psd adjust: Vibrance comes back", round(v) == v, "");
+        auto b = core::adjust::fresh(K::BlackWhite); b.bw = {10, -50, 120, 300, -200, 77}; b.bw_tint = true; b.tint_hue = 210; b.tint_sat = 40;
+        const auto bb = adj::blocks(b);
+        check("psd adjust: Black & White is one blwh descriptor", bb.size() == 1 && bb[0].key == "blwh" && bb[0].data[3] == 16, "");
+        const auto br = round(b);
+        check("psd adjust: Black & White comes back -- the mix, Tint, its hue and saturation (through RGB, within 1)",
+              br && br->bw == b.bw && br->bw_tint && std::abs(br->tint_hue - 210) <= 1 && std::abs(br->tint_sat - 40) <= 1,
+              br ? std::to_string(br->tint_hue) + " / " + std::to_string(br->tint_sat) : "none");
+        auto p = core::adjust::fresh(K::PhotoFilter); p.filter = {0, 93 / 255.0, 1}; p.density = 60; p.keep_luma = false;
+        const auto pb = adj::blocks(p);
+        check("psd adjust: Photo Filter is phfl v2 -- RGB record, density, luminosity (17 bytes)",
+              pb.size() == 1 && pb[0].key == "phfl" && pb[0].data.size() == 17 && pb[0].data[1] == 2 && pb[0].data[3] == 0 &&
+              pb[0].data[15] == 60 && pb[0].data[16] == 0, std::to_string(pb.empty() ? 0 : pb[0].data.size()));
+        std::vector<std::string> losses;
+        const auto pr = round(p, &losses);
+        check("psd adjust: Photo Filter comes back, nothing lost", pr && std::abs(pr->filter[1] - p.filter[1]) < 1e-4 && pr->density == 60 &&
+              !pr->keep_luma && losses.empty(), "");
+        Bytes v3; be16(v3, 3); be32(v3, 0); be32(v3, 0); be32(v3, 0); be32(v3, 40); v3.push_back(1);
+        adj::Reading r3;
+        r3.feed("phfl", v3.data(), v3.size());
+        const auto x3 = r3.result();
+        const auto l3 = r3.losses();
+        check("psd adjust: a v3 Photo Filter -- density and luminosity read, \"filter colour\" said lost",
+              x3 && x3->kind == K::PhotoFilter && x3->density == 40 && x3->keep_luma && l3.size() == 1 && l3[0] == "filter colour", "");
+    }
     // ── s061: Invert, Posterize, Threshold, Exposure ───────────────────────
     {
         using K = core::AdjustKind;

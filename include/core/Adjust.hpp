@@ -32,7 +32,9 @@ namespace klimt::core {
 
 // s061 (WEAKNESSES 34): Invert, Posterize, Threshold, Exposure -- appended,
 // so the numbers already in use keep their meaning.
-enum class AdjustKind : std::uint8_t { None, Levels, Curves, HueSat, BrightCon, Invert, Posterize, Threshold, Exposure };
+// s062: Vibrance, Black & White, Photo Filter -- appended the same way.
+enum class AdjustKind : std::uint8_t { None, Levels, Curves, HueSat, BrightCon, Invert, Posterize, Threshold, Exposure,
+                                       Vibrance, BlackWhite, PhotoFilter };
 
 // Levels on one channel: input black / white points and gamma (the middle
 // slider, 0.1 .. 9.99, 1 = none), output black / white. All 0..1.
@@ -70,6 +72,20 @@ struct Adjust {
     // s061: Exposure, Photoshop's, worked in linear light (sRGB decoded):
     // exposure -20..20 stops, offset -0.5..0.5, then gamma 0.01..9.99.
     double exposure = 0, offset = 0, exp_gamma = 1;
+    // s062: Vibrance -100..100 (Saturation is `saturation` above, -100..100):
+    // vibrance lifts the dull colours most and leaves the strong ones be.
+    int  vibrance = 0;
+    // s062: Black & White -- how light each hue turns, percent -200..300:
+    // reds, yellows, greens, cyans, blues, magentas (Photoshop's defaults);
+    // Tint: the grey coloured, hue 0..359, saturation 0..100.
+    std::array<int, 6> bw{40, 60, 40, 60, 20, 80};
+    bool bw_tint = false;
+    int  tint_hue = 42, tint_sat = 20;
+    // s062: Photo Filter -- the filter's colour (sRGB 0..1; Photoshop's
+    // Warming Filter (85) to start), density 1..100 %, Preserve Luminosity.
+    std::array<double, 3> filter{236 / 255.0, 138 / 255.0, 0.0};
+    int  density = 25;
+    bool keep_luma = true;
     bool operator==(const Adjust&) const = default;
 };
 
@@ -89,6 +105,9 @@ Adjust normalised(Adjust a);
 bool identity(const Adjust& a);
 // s061: no settings at all (Invert): Image > Adjustments runs it at once.
 bool settingless(AdjustKind k);
+// s062: shows the histogram of what it changes behind its controls
+// (Levels, Curves, Threshold).
+bool wants_histogram(AdjustKind k);
 // "" when `a` is well formed (a file is trusted only after this).
 std::string refusal(const Adjust& a);
 
@@ -97,6 +116,10 @@ double levels_map(const LevelsCh& c, double v);
 // The curve through `pts` (a natural cubic spline, flat past the end points,
 // clamped to 0..1) sampled n times at x = i / (n - 1).
 std::vector<double> curve_table(const std::vector<CurvePt>& pts, int n);
+// s062: RGB <-> HSL, all 0..1 (hue in turns) -- Hue/Saturation's, and the
+// PSD's Black & White tint.
+void to_hsl(double r, double g, double b, double& h, double& s, double& l);
+void from_hsl(double h, double s, double l, double& r, double& g, double& b);
 // The adjustment on one straight (not premultiplied) colour, in place.
 void apply_rgb(const Adjust& a, float& r, float& g, float& b);
 

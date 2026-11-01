@@ -99,8 +99,8 @@ void Shell::on_adjust_apply(core::AdjustKind k) {
     m_adjust_preview = core::adjust::fresh(k);
     m_adjust_dialog->ask(k, l->name);
     adjust_preview_soon();   // s061: Posterize / Threshold start as their own effect
-    // Levels / Curves: the layer's own histogram, behind the controls.
-    if (k == core::AdjustKind::Levels || k == core::AdjustKind::Curves) {
+    // Levels / Curves / s062 Threshold: the layer's own histogram, behind the controls.
+    if (core::adjust::wants_histogram(k)) {
         core::Layer alone = *l;
         alone.parent.clear();
         alone.visible = true;

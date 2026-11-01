@@ -20,6 +20,9 @@ constexpr Info kInfo[] = {
     {AdjustKind::Invert,    "invert",              "Invert"},
     {AdjustKind::Posterize, "posterize",           "Posterize"},
     {AdjustKind::Threshold, "threshold",           "Threshold"},
+    {AdjustKind::Vibrance,  "vibrance",            "Vibrance"},
+    {AdjustKind::BlackWhite,"black-white",         "Black & White"},
+    {AdjustKind::PhotoFilter,"photo-filter",       "Photo Filter"},
 };
 
 double clamp01(double v) { return std::clamp(v, 0.0, 1.0); }
@@ -55,8 +58,10 @@ double posterize(int n, double v) {
     return static_cast<double>(i) / (n - 1);
 }
 
+double luma(double r, double g, double b) { return 0.299 * r + 0.587 * g + 0.114 * b; }
+
 // RGB <-> HSL, all 0..1 (hue in turns).
-void to_hsl(double r, double g, double b, double& h, double& s, double& l) {
+void hsl_of(double r, double g, double b, double& h, double& s, double& l) {
     const double mx = std::max({r, g, b}), mn = std::min({r, g, b});
     l = (mx + mn) / 2;
     if (mx - mn < 1e-12) { h = 0; s = 0; return; }
@@ -75,7 +80,7 @@ double hue_part(double p, double q, double t) {
     if (t < 2.0 / 3) return p + (q - p) * (2.0 / 3 - t) * 6;
     return p;
 }
-void from_hsl(double h, double s, double l, double& r, double& g, double& b) {
+void rgb_of(double h, double s, double l, double& r, double& g, double& b) {
     if (s <= 0) { r = g = b = l; return; }
     const double q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
     r = hue_part(p, q, h + 1.0 / 3);
@@ -88,20 +93,61 @@ void hue_sat(const Adjust& a, double& r, double& g, double& b) {
         // The colour's lightness kept, hue and saturation set.
         const double lum = 0.299 * r + 0.587 * g + 0.114 * b;
         double h = std::fmod(a.hue + 360.0, 360.0) / 360.0;
-        from_hsl(h, std::clamp(a.saturation, 0, 100) / 100.0, lum, r, g, b);
+        rgb_of(h, std::clamp(a.saturation, 0, 100) / 100.0, lum, r, g, b);
     } else if (a.hue != 0 || a.saturation != 0) {
         double h, s, l;
-        to_hsl(r, g, b, h, s, l);
+        hsl_of(r, g, b, h, s, l);
         h = std::fmod(h + a.hue / 360.0 + 1.0, 1.0);
         const double k = a.saturation / 100.0;
         s = k <= 0 ? s * (1 + k) : clamp01(s + (1 - s) * s * k * 2);   // more: the grey stays grey
-        from_hsl(h, s, l, r, g, b);
+        rgb_of(h, s, l, r, g, b);
     }
     if (a.lightness != 0) {
         const double k = a.lightness / 100.0;
         const auto f = [k](double v) { return k < 0 ? v * (1 + k) : v + (1 - v) * k; };
         r = f(r); g = f(g); b = f(b);
     }
+}
+
+// s062: Vibrance -- each colour pushed from (or toward) its own grey: by
+// vibrance x how dull it is (max - min small), then by saturation evenly.
+void vibrance(const Adjust& a, double& r, double& g, double& b) {
+    const auto push = [&](double k) {
+        const double l = luma(r, g, b);
+        r = clamp01(l + (r - l) * (1 + k)); g = clamp01(l + (g - l) * (1 + k)); b = clamp01(l + (b - l) * (1 + k));
+    };
+    if (a.vibrance != 0) push(a.vibrance / 100.0 * (1 - (std::max({r, g, b}) - std::min({r, g, b}))));
+    if (a.saturation != 0) push(a.saturation / 100.0);
+}
+
+// s062: Black & White -- the grey from the hue's two weights, as Photoshop's
+// (the darktable / GIMP reading): the largest channel picks a primary (red,
+// green, blue), the two largest a secondary (yellow, cyan, magenta);
+// grey = min + (mid - min) x secondary + (max - mid) x primary.
+double black_white(const Adjust& a, double r, double g, double b) {
+    const double w[6] = {a.bw[0] / 100.0, a.bw[1] / 100.0, a.bw[2] / 100.0, a.bw[3] / 100.0, a.bw[4] / 100.0, a.bw[5] / 100.0};
+    enum { Re, Ye, Gr, Cy, Bl, Ma };
+    double mx, md, mn, wp, ws;
+    if (r >= g && r >= b) { mx = r; wp = w[Re]; if (g >= b) { md = g; mn = b; ws = w[Ye]; } else { md = b; mn = g; ws = w[Ma]; } }
+    else if (g >= b)      { mx = g; wp = w[Gr]; if (r >= b) { md = r; mn = b; ws = w[Ye]; } else { md = b; mn = r; ws = w[Cy]; } }
+    else                  { mx = b; wp = w[Bl]; if (r >= g) { md = r; mn = g; ws = w[Ma]; } else { md = g; mn = r; ws = w[Cy]; } }
+    return clamp01(mn + (md - mn) * ws + (mx - md) * wp);
+}
+
+// s062: Photo Filter -- the colour seen through the filter (multiplied),
+// mixed in by density; Preserve Luminosity scales it back to its own luma.
+void photo_filter(const Adjust& a, double& r, double& g, double& b) {
+    const double d = std::clamp(a.density, 1, 100) / 100.0, l0 = luma(r, g, b);
+    double R = r + (r * a.filter[0] - r) * d, G = g + (g * a.filter[1] - g) * d, B = b + (b * a.filter[2] - b) * d;
+    if (a.keep_luma) {
+        const double l1 = luma(R, G, B);
+        if (l1 > 1e-6) { const double k = l0 / l1; R *= k; G *= k; B *= k; }
+        else R = G = B = l0;
+        // Over white: what can't be scaled up is added evenly.
+        const double over = l0 - luma(clamp01(R), clamp01(G), clamp01(B));
+        if (over > 1e-6) { R += over; G += over; B += over; }
+    }
+    r = clamp01(R); g = clamp01(G); b = clamp01(B);
 }
 
 // Channel c (0..2 = R, G, B) of the LUT kinds, on v.
@@ -125,6 +171,9 @@ double lut_kind(const Adjust& a, const std::vector<double>* tables, int c, doubl
 }
 }  // namespace
 
+void to_hsl(double r, double g, double b, double& h, double& s, double& l) { hsl_of(r, g, b, h, s, l); }
+void from_hsl(double h, double s, double l, double& r, double& g, double& b) { rgb_of(h, s, l, r, g, b); }
+
 std::string_view label(AdjustKind k) {
     for (const auto& i : kInfo) if (i.k == k) return i.label;
     return "Adjustment";
@@ -139,7 +188,8 @@ std::optional<AdjustKind> from_key(std::string_view k) {
 }
 const std::vector<AdjustKind>& kinds() {
     static const std::vector<AdjustKind> v{AdjustKind::BrightCon, AdjustKind::Levels, AdjustKind::Curves, AdjustKind::Exposure,
-                                           AdjustKind::HueSat, AdjustKind::Invert, AdjustKind::Posterize, AdjustKind::Threshold};
+                                           AdjustKind::Vibrance, AdjustKind::HueSat, AdjustKind::BlackWhite, AdjustKind::PhotoFilter,
+                                           AdjustKind::Invert, AdjustKind::Posterize, AdjustKind::Threshold};
     return v;
 }
 
@@ -181,6 +231,12 @@ Adjust normalised(Adjust a) {
     a.exposure = std::clamp(a.exposure, -20.0, 20.0);
     a.offset = std::clamp(a.offset, -0.5, 0.5);
     a.exp_gamma = std::clamp(a.exp_gamma, 0.01, 9.99);
+    a.vibrance = std::clamp(a.vibrance, -100, 100);
+    for (auto& w : a.bw) w = std::clamp(w, -200, 300);
+    a.tint_hue = ((a.tint_hue % 360) + 360) % 360;
+    a.tint_sat = std::clamp(a.tint_sat, 0, 100);
+    for (auto& c : a.filter) c = clamp01(c);
+    a.density = std::clamp(a.density, 1, 100);
     return a;
 }
 
@@ -199,12 +255,16 @@ bool identity(const Adjust& a) {
         case AdjustKind::Exposure:  return a.exposure == 0 && a.offset == 0 && a.exp_gamma == 1;
         case AdjustKind::Invert:
         case AdjustKind::Posterize:
-        case AdjustKind::Threshold: return false;   // their own effect
+        case AdjustKind::Threshold:
+        case AdjustKind::BlackWhite:
+        case AdjustKind::PhotoFilter: return false;   // their own effect
+        case AdjustKind::Vibrance:  return a.vibrance == 0 && a.saturation == 0;
     }
     return true;
 }
 
 bool settingless(AdjustKind k) { return k == AdjustKind::Invert; }
+bool wants_histogram(AdjustKind k) { return k == AdjustKind::Levels || k == AdjustKind::Curves || k == AdjustKind::Threshold; }
 
 std::string refusal(const Adjust& a) {
     if (a.kind == AdjustKind::None) return "no adjustment";
@@ -274,7 +334,10 @@ std::shared_ptr<const Compiled> compile(const Adjust& a) {
     auto c = std::make_shared<Compiled>();
     c->kind = a.kind;
     c->a = a;
-    if (a.kind != AdjustKind::None && a.kind != AdjustKind::HueSat && a.kind != AdjustKind::Threshold) {
+    // Per channel, so tables; the rest (Hue/Saturation, Threshold, s062's)
+    // mix the channels and run per pixel.
+    if (a.kind == AdjustKind::Levels || a.kind == AdjustKind::Curves || a.kind == AdjustKind::BrightCon ||
+        a.kind == AdjustKind::Invert || a.kind == AdjustKind::Posterize || a.kind == AdjustKind::Exposure) {
         std::vector<double> tables[kAdjustChannels];
         if (a.kind == AdjustKind::Curves)
             for (int i = 0; i < kAdjustChannels; ++i) tables[i] = curve_table(a.curves[static_cast<std::size_t>(i)], kLut);
@@ -296,6 +359,20 @@ void run_rgb(const Compiled& c, float& r, float& g, float& b) {
         case AdjustKind::HueSat: {
             double R = std::clamp(r, 0.f, 1.f), G = std::clamp(g, 0.f, 1.f), B = std::clamp(b, 0.f, 1.f);
             hue_sat(c.a, R, G, B);
+            r = static_cast<float>(clamp01(R)); g = static_cast<float>(clamp01(G)); b = static_cast<float>(clamp01(B));
+            return;
+        }
+        case AdjustKind::Vibrance:
+        case AdjustKind::BlackWhite:
+        case AdjustKind::PhotoFilter: {   // s062
+            double R = std::clamp(r, 0.f, 1.f), G = std::clamp(g, 0.f, 1.f), B = std::clamp(b, 0.f, 1.f);
+            if (c.kind == AdjustKind::Vibrance) vibrance(c.a, R, G, B);
+            else if (c.kind == AdjustKind::PhotoFilter) photo_filter(c.a, R, G, B);
+            else {
+                const double v = black_white(c.a, R, G, B);
+                if (c.a.bw_tint) rgb_of(c.a.tint_hue / 360.0, c.a.tint_sat / 100.0, v, R, G, B);
+                else R = G = B = v;
+            }
             r = static_cast<float>(clamp01(R)); g = static_cast<float>(clamp01(G)); b = static_cast<float>(clamp01(B));
             return;
         }

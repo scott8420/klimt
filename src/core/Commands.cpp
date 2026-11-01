@@ -73,6 +73,9 @@ const std::vector<Command>& commands() {
             {"New Adjustment Layer: Curves", "Layer", "win.adjust-new-curves", "", "adjustment layer tone contrast", ""},
             {"New Adjustment Layer: Hue/Saturation", "Layer", "win.adjust-new-hue-saturation", "", "adjustment layer colour colorize tint", ""},
             {"New Adjustment Layer: Exposure", "Layer", "win.adjust-new-exposure", "", "adjustment layer stops light offset gamma", ""},   // s061
+            {"New Adjustment Layer: Vibrance", "Layer", "win.adjust-new-vibrance", "", "adjustment layer colour saturation dull", ""},   // s062
+            {"New Adjustment Layer: Black & White", "Layer", "win.adjust-new-black-white", "", "adjustment layer grey greyscale monochrome tint", ""},
+            {"New Adjustment Layer: Photo Filter", "Layer", "win.adjust-new-photo-filter", "", "adjustment layer warming cooling colour", ""},
             {"New Adjustment Layer: Invert", "Layer", "win.adjust-new-invert", "", "adjustment layer negative", ""},
             {"New Adjustment Layer: Posterize", "Layer", "win.adjust-new-posterize", "", "adjustment layer levels tones flat", ""},
             {"New Adjustment Layer: Threshold", "Layer", "win.adjust-new-threshold", "", "adjustment layer black white", ""},
@@ -81,6 +84,9 @@ const std::vector<Command>& commands() {
             {"Curves", "Image", "win.adjust-apply-curves", "", "adjustments tone contrast pixels", ""},
             {"Hue/Saturation", "Image", "win.adjust-apply-hue-saturation", "", "adjustments colour colorize tint pixels", ""},
             {"Exposure", "Image", "win.adjust-apply-exposure", "", "adjustments stops light offset gamma pixels", ""},   // s061
+            {"Vibrance", "Image", "win.adjust-apply-vibrance", "", "adjustments colour saturation dull pixels", ""},   // s062
+            {"Black & White", "Image", "win.adjust-apply-black-white", "", "adjustments grey greyscale monochrome tint pixels", ""},
+            {"Photo Filter", "Image", "win.adjust-apply-photo-filter", "", "adjustments warming cooling colour pixels", ""},
             {"Invert", "Image", "win.adjust-apply-invert", "", "adjustments negative pixels", ""},
             {"Posterize", "Image", "win.adjust-apply-posterize", "", "adjustments levels tones flat pixels", ""},
             {"Threshold", "Image", "win.adjust-apply-threshold", "", "adjustments black white pixels", ""},

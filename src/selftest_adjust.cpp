@@ -404,7 +404,7 @@ void selftest_adjust(const Check& check) {
     {
         using K = core::AdjustKind;
         const auto rgb = [](const core::Adjust& a, float r, float g, float b) { A::apply_rgb(a, r, g, b); return std::array<float, 3>{r, g, b}; };
-        check("s061: eight kinds, keys round trip", A::kinds().size() == 8 && A::from_key("invert") == K::Invert &&
+        check("s061: the kinds, keys round trip", A::kinds().size() >= 8 && A::from_key("invert") == K::Invert &&
               A::from_key("posterize") == K::Posterize && A::from_key("threshold") == K::Threshold && A::from_key("exposure") == K::Exposure, "");
         const auto iv = rgb(A::fresh(K::Invert), 0.2f, 0.5f, 1.f);
         check("invert: each channel turned over", near(iv[0], 0.8) && near(iv[1], 0.5) && near(iv[2], 0), num(iv[0]));
@@ -482,5 +482,84 @@ void selftest_adjust(const Check& check) {
             for (const auto& i : {i1, i2, i3, i4}) same = same && back->layers.at(i).adjust == c.layers.at(i).adjust;
         check("file: Invert, Posterize 7, Threshold 90, Exposure -1.25 / 0.0123 / 1.4 come back", same, err);
         fs::remove_all(dir);
+    }
+
+    std::cout << "\n-- adjustments: Vibrance, Black & White, Photo Filter, Threshold's histogram (s062) --\n";
+    {
+        using K = core::AdjustKind;
+        const auto rgb = [](const core::Adjust& a, float r, float g, float b) { A::apply_rgb(a, r, g, b); return std::array<float, 3>{r, g, b}; };
+        const auto chroma = [](std::array<float, 3> c) { return std::max({c[0], c[1], c[2]}) - std::min({c[0], c[1], c[2]}); };
+        check("s062: eleven kinds; keys round trip", A::kinds().size() == 11 && A::from_key("vibrance") == K::Vibrance &&
+              A::from_key("black-white") == K::BlackWhite && A::from_key("photo-filter") == K::PhotoFilter &&
+              A::label(K::BlackWhite) == "Black & White", "");
+        check("s062: Levels, Curves, Threshold want the histogram; Hue/Saturation doesn't",
+              A::wants_histogram(K::Threshold) && A::wants_histogram(K::Levels) && A::wants_histogram(K::Curves) && !A::wants_histogram(K::HueSat), "");
+        // Vibrance: a dull colour gains more than a strong one; grey stays grey.
+        auto vb = A::fresh(K::Vibrance);
+        check("vibrance: a fresh one changes nothing", A::identity(vb), "");
+        vb.vibrance = 80;
+        const std::array<float, 3> dull{0.55f, 0.5f, 0.45f}, strong{0.9f, 0.1f, 0.1f};
+        const auto d2 = rgb(vb, dull[0], dull[1], dull[2]), s2 = rgb(vb, strong[0], strong[1], strong[2]);
+        check("vibrance +80: the dull colour's chroma grows by more than the strong one's (relatively)",
+              chroma(d2) / chroma(dull) > chroma(s2) / chroma(strong) && chroma(d2) > chroma(dull) + 0.05f, num(chroma(d2)) + " / " + num(chroma(s2)));
+        const auto g2 = rgb(vb, 0.4f, 0.4f, 0.4f);
+        check("vibrance: grey stays grey", near(g2[0], 0.4) && near(g2[1], 0.4) && near(g2[2], 0.4), "");
+        auto sat = A::fresh(K::Vibrance); sat.saturation = -100;
+        const auto s3 = rgb(sat, 0.9f, 0.1f, 0.1f);
+        check("vibrance: Saturation -100 is grey (its luma)", near(s3[0], s3[1]) && near(s3[1], s3[2]) && near(s3[0], 0.299 * 0.9 + 0.587 * 0.1 + 0.114 * 0.1), num(s3[0]));
+        // Black & White: Photoshop's defaults -- red 40 %, yellow 60 %, blue 20 %.
+        auto bw = A::fresh(K::BlackWhite);
+        const auto r1 = rgb(bw, 1, 0, 0), y1 = rgb(bw, 1, 1, 0), b1 = rgb(bw, 0, 0, 1), w1 = rgb(bw, 1, 1, 1), m1 = rgb(bw, 0.5f, 0.5f, 0.5f);
+        check("black & white (defaults): red 0.4, yellow 0.6, blue 0.2", near(r1[0], 0.4) && near(r1[2], 0.4) && near(y1[1], 0.6) && near(b1[0], 0.2), "");
+        check("black & white: white and grey stay", near(w1[0], 1) && near(m1[1], 0.5), "");
+        bw.bw[0] = 100;
+        check("black & white: Reds 100 -- red turns white", near(rgb(bw, 1, 0, 0)[1], 1), "");
+        bw = A::fresh(K::BlackWhite); bw.bw_tint = true; bw.tint_hue = 30; bw.tint_sat = 60;
+        const auto t1 = rgb(bw, 0.5f, 0.5f, 0.5f);
+        check("black & white: Tint colours the grey (orange: red > green > blue)", t1[0] > t1[1] && t1[1] > t1[2], num(t1[0]) + "," + num(t1[2]));
+        // Photo Filter.
+        auto pf = A::fresh(K::PhotoFilter);
+        check("photo filter: Warming (85), 25 %, luminosity kept, to start", near(pf.filter[0] * 255, 236, 1e-6) && pf.density == 25 && pf.keep_luma && !A::identity(pf), "");
+        const auto p1 = rgb(pf, 0.5f, 0.5f, 0.5f);
+        const double l0 = 0.5, l1 = 0.299 * p1[0] + 0.587 * p1[1] + 0.114 * p1[2];
+        check("photo filter: grey warms (red > blue), as light as before", p1[0] > p1[2] + 0.05f && near(l1, l0, 0.005), num(l1));
+        pf.keep_luma = false;
+        const auto p2 = rgb(pf, 0.5f, 0.5f, 0.5f);
+        check("photo filter: without Preserve Luminosity it darkens", 0.299 * p2[0] + 0.587 * p2[1] + 0.114 * p2[2] < 0.48, "");
+        pf.density = 100; pf.filter = {0, 0, 1};
+        const auto p3 = rgb(pf, 1, 1, 1);
+        check("photo filter: Deep blue at 100 %, no luminosity -- white turns blue", near(p3[0], 0) && near(p3[2], 1), "");
+        auto bad = A::fresh(K::BlackWhite); bad.bw[2] = 400; bad.tint_sat = 120;
+        auto badp = A::fresh(K::PhotoFilter); badp.density = 0; badp.filter[1] = 2;
+        auto badv = A::fresh(K::Vibrance); badv.vibrance = 150;
+        check("s062: out of range refused, normalised into range", !A::refusal(bad).empty() && !A::refusal(badp).empty() && !A::refusal(badv).empty() &&
+              A::normalised(bad).bw[2] == 300 && A::normalised(bad).tint_sat == 100 && A::normalised(badp).density == 1 &&
+              A::normalised(badp).filter[1] == 1 && A::normalised(badv).vibrance == 100, "");
+        // As a layer: Black & White over the red square, at the defaults.
+        Fix t;
+        const auto id = t.adj(K::BlackWhite);
+        check("black & white layer: the red square turns grey 0.4, white stays", near(t.seen(150, 150).r, 0.4) && near(t.seen(150, 150).b, 0.4) &&
+              near(t.seen(20, 20).g, 1), num(t.seen(150, 150).r));
+        // The .klimt keeps them.
+        Fix f;
+        auto v = A::fresh(K::Vibrance); v.vibrance = 35; v.saturation = -12;
+        auto b = A::fresh(K::BlackWhite); b.bw = {10, -50, 120, 300, -200, 77}; b.bw_tint = true; b.tint_hue = 210; b.tint_sat = 33;
+        auto p = A::fresh(K::PhotoFilter); p.filter = {0.1, 0.2, 0.3}; p.density = 64; p.keep_luma = false;
+        const auto i1 = f.adj(K::Vibrance), i2 = f.adj(K::BlackWhite), i3 = f.adj(K::PhotoFilter);
+        f.set(i1, v); f.set(i2, b); f.set(i3, p);
+        core::file::Contents c;
+        c.image = f.d.image(); c.layers = f.d.snapshot(); c.next_id = f.d.next_id();
+        const auto dir = fs::temp_directory_path() / "klimt_selftest_adjust62";
+        fs::create_directories(dir);
+        const auto path = (dir / "s062.klimt").string();
+        std::string err;
+        const bool saved = core::file::save_klimt(path, c, err);
+        const auto back = saved ? core::file::open(path, err) : std::nullopt;
+        bool same = back.has_value();
+        if (back)
+            for (const auto& i : {i1, i2, i3}) same = same && back->layers.at(i).adjust == c.layers.at(i).adjust;
+        check("file: Vibrance, Black & White (mix, tint), Photo Filter (colour, density, luminosity) come back", same, err);
+        fs::remove_all(dir);
+        (void)id;
     }
 }

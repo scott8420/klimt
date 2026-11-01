@@ -185,25 +185,44 @@ void desc_ustr(Cur& c) {
     if (k > 1u << 20) { c.bad = true; return; }
     c.skip(static_cast<std::size_t>(k) * 2);
 }
-Desc read_desc(Cur& c) {
-    Desc out;
-    if (c.u32() != 16) { c.bad = true; return out; }
-    desc_ustr(c);
-    desc_id(c);
+// s062: an object inside (Black & White's tint colour) -- its items by
+// "outer.inner" key.
+bool read_items(Cur& c, Desc& out, const std::string& prefix, int depth) {
     const std::uint32_t n = c.u32();
     for (std::uint32_t i = 0; i < n && !c.bad && i < 256; ++i) {
-        const std::string key = desc_id(c);
+        const std::string key = prefix + desc_id(c);
         const std::string type = c.str(4);
-        if (c.bad) break;
+        if (c.bad) return false;
         if (type == "long") out.nums.emplace_back(key, static_cast<std::int32_t>(c.u32()));
         else if (type == "bool") out.nums.emplace_back(key, c.u8() ? 1.0 : 0.0);
         else if (type == "doub") out.nums.emplace_back(key, c.f64());
         else if (type == "UntF") { c.skip(4); out.nums.emplace_back(key, c.f64()); }
         else if (type == "enum") { desc_id(c); desc_id(c); }
         else if (type == "TEXT") desc_ustr(c);
-        else break;   // a kind not needed here: what came before stands
+        else if (type == "Objc" && depth < 4) {
+            desc_ustr(c);
+            desc_id(c);
+            if (!read_items(c, out, key + ".", depth + 1)) return false;
+        }
+        else return false;   // a kind not needed here: what came before stands
     }
+    return !c.bad;
+}
+Desc read_desc(Cur& c) {
+    Desc out;
+    if (c.u32() != 16) { c.bad = true; return out; }
+    desc_ustr(c);
+    desc_id(c);
+    read_items(c, out, "", 0);
     return out;
+}
+double desc_num(const Desc& d, std::string_view key, double dflt) {
+    for (const auto& [k, v] : d.nums) if (k == key) return v;
+    return dflt;
+}
+bool desc_has(const Desc& d, std::string_view key) {
+    for (const auto& [k, v] : d.nums) if (k == key) return true;
+    return false;
 }
 
 // ── s061: Invert, Posterize, Threshold, Exposure ──────────────────────────
@@ -224,6 +243,63 @@ Bytes expa_block(const Adjust& a) {
     bef32(b, a.exp_gamma);
     return b;
 }
+// ── s062: Vibrance, Black & White, Photo Filter ───────────────────────────
+// vibA / blwh: a descriptor (version 16). phfl: version 2 -- an RGB colour
+// record (space 0, four 16-bit components), density (4), Preserve
+// Luminosity (1). Version 3 holds the colour as XYZ, whose scale the spec
+// doesn't give: read for its density and luminosity, the colour left at
+// Klimt's (a loss the toast names).
+struct DescW {
+    Bytes b;
+    explicit DescW(std::uint32_t count, std::string_view cls = "null") {
+        be32(b, 16);
+        be32(b, 1); be16(b, 0);
+        desc_key(b, cls);
+        be32(b, count);
+    }
+    void lng(std::string_view k, int v) { desc_key(b, k); put(b, "long"); be32(b, static_cast<std::uint32_t>(v)); }
+    void bln(std::string_view k, bool v) { desc_key(b, k); put(b, "bool"); b.push_back(v ? 1 : 0); }
+    void dbl(std::string_view k, double v) {
+        desc_key(b, k); put(b, "doub");
+        std::uint64_t u;
+        std::memcpy(&u, &v, 8);
+        be32(b, static_cast<std::uint32_t>(u >> 32)); be32(b, static_cast<std::uint32_t>(u));
+    }
+};
+Bytes viba_block(const Adjust& a) {
+    DescW d(2);
+    d.lng("vibrance", a.vibrance);
+    d.lng("Strt", a.saturation);
+    return d.b;
+}
+const char* const kBwKeys[6] = {"Rd  ", "Yllw", "Grn ", "Cyn ", "Bl  ", "Mgnt"};
+Bytes blwh_block(const Adjust& a) {
+    DescW d(9);
+    for (std::size_t i = 0; i < 6; ++i) d.lng(kBwKeys[i], a.bw[i]);
+    d.bln("useTint", a.bw_tint);
+    // The tint as Photoshop keeps it: an RGB colour (Klimt's hue and
+    // saturation at half lightness).
+    double r, g, bl;
+    adjust::from_hsl(a.tint_hue / 360.0, a.tint_sat / 100.0, 0.5, r, g, bl);
+    desc_key(d.b, "tintColor"); put(d.b, "Objc");
+    be32(d.b, 1); be16(d.b, 0);
+    desc_key(d.b, "RGBC");
+    be32(d.b, 3);
+    d.dbl("Rd  ", r * 255); d.dbl("Grn ", g * 255); d.dbl("Bl  ", bl * 255);
+    d.lng("bwPresetKind", 1);
+    return d.b;
+}
+Bytes phfl_block(const Adjust& a) {
+    Bytes b;
+    be16(b, 2);
+    be16(b, 0);   // RGB
+    for (int i = 0; i < 3; ++i) be16(b, static_cast<unsigned>(std::lround(std::clamp(a.filter[static_cast<std::size_t>(i)], 0.0, 1.0) * 65535)));
+    be16(b, 0);
+    be32(b, static_cast<std::uint32_t>(a.density));
+    b.push_back(a.keep_luma ? 1 : 0);
+    return b;
+}
+
 float f32(Cur& c) {
     const std::uint32_t u = c.u32();
     float f;
@@ -243,6 +319,9 @@ std::vector<Block> blocks(const Adjust& a) {
         case AdjustKind::Posterize: return {{"post", level_block(a.posterize)}};
         case AdjustKind::Threshold: return {{"thrs", level_block(a.threshold)}};
         case AdjustKind::Exposure:  return {{"expA", expa_block(a)}};
+        case AdjustKind::Vibrance:  return {{"vibA", viba_block(a)}};
+        case AdjustKind::BlackWhite:return {{"blwh", blwh_block(a)}};
+        case AdjustKind::PhotoFilter:return {{"phfl", phfl_block(a)}};
         case AdjustKind::None:      break;
     }
     return {};
@@ -356,6 +435,50 @@ bool Reading::feed(std::string_view key, const std::uint8_t* d, std::size_t n) {
         m_a = adjust::normalised(a);
         return true;
     }
+    // s062
+    if (key == "vibA") {
+        const Desc d = read_desc(c);
+        if (!desc_has(d, "vibrance") && !desc_has(d, "Strt")) return true;
+        Adjust a = adjust::fresh(AdjustKind::Vibrance);
+        a.vibrance = static_cast<int>(std::lround(desc_num(d, "vibrance", 0)));
+        a.saturation = static_cast<int>(std::lround(desc_num(d, "Strt", 0)));
+        m_a = adjust::normalised(a);
+        return true;
+    }
+    if (key == "blwh") {
+        const Desc d = read_desc(c);
+        if (!desc_has(d, "Rd  ")) return true;
+        Adjust a = adjust::fresh(AdjustKind::BlackWhite);
+        for (std::size_t i = 0; i < 6; ++i) a.bw[i] = static_cast<int>(std::lround(desc_num(d, kBwKeys[i], a.bw[i])));
+        a.bw_tint = desc_num(d, "useTint", 0) != 0;
+        if (desc_has(d, "tintColor.Rd  ")) {
+            double h, s, l;
+            adjust::to_hsl(desc_num(d, "tintColor.Rd  ", 0) / 255, desc_num(d, "tintColor.Grn ", 0) / 255, desc_num(d, "tintColor.Bl  ", 0) / 255, h, s, l);
+            a.tint_hue = static_cast<int>(std::lround(h * 360)) % 360;
+            a.tint_sat = static_cast<int>(std::lround(s * 100));
+        }
+        m_a = adjust::normalised(a);
+        return true;
+    }
+    if (key == "phfl") {
+        const unsigned version = c.u16();
+        Adjust a = adjust::fresh(AdjustKind::PhotoFilter);
+        if (version == 2) {
+            const unsigned space = c.u16();
+            double comp[4];
+            for (double& v : comp) v = c.u16() / 65535.0;
+            if (space == 0) a.filter = {comp[0], comp[1], comp[2]};
+            else m_filter_colour = true;
+        } else if (version == 3) {
+            c.skip(12);
+            m_filter_colour = true;
+        } else return true;
+        a.density = static_cast<int>(c.u32());
+        a.keep_luma = c.u8() != 0;
+        if (c.bad) { m_filter_colour = false; return true; }
+        m_a = adjust::normalised(a);
+        return true;
+    }
     if (key == "brit") {
         const int b = c.s16(), k = c.s16();
         if (c.bad) return true;
@@ -400,6 +523,7 @@ std::vector<std::string> Reading::losses() const {
     if (m_a && m_a->kind == AdjustKind::HueSat && m_ranges) out.emplace_back("colour ranges");
     if (!m_a && ((m_cged && m_legacy) || (m_brit && !m_cged))) out.emplace_back("legacy");
     if (m_a && m_channels) out.emplace_back("channels");
+    if (m_a && m_filter_colour) out.emplace_back("filter colour");   // s062
     return out;
 }
 

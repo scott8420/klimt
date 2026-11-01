@@ -125,6 +125,15 @@ json adjust_json(const Adjust& a) {
         case AdjustKind::Exposure:
             j["exposure"] = a.exposure; j["offset"] = a.offset; j["gamma"] = a.exp_gamma;
             break;
+        case AdjustKind::Vibrance:   // s062
+            j["vibrance"] = a.vibrance; j["saturation"] = a.saturation;
+            break;
+        case AdjustKind::BlackWhite:
+            j["mix"] = a.bw; j["tint"] = a.bw_tint; j["tint_hue"] = a.tint_hue; j["tint_saturation"] = a.tint_sat;
+            break;
+        case AdjustKind::PhotoFilter:
+            j["colour"] = a.filter; j["density"] = a.density; j["luminosity"] = a.keep_luma;
+            break;
         case AdjustKind::Invert:
         case AdjustKind::None: break;
     }
@@ -587,6 +596,23 @@ std::optional<Adjust> adjust_from(const json& j) {
     a.exposure = j.value("exposure", 0.0);
     a.offset = j.value("offset", 0.0);
     a.exp_gamma = j.value("gamma", 1.0);
+    // s062
+    a.vibrance = j.value("vibrance", 0);
+    if (j.contains("mix")) {
+        const auto& m = j.at("mix");
+        if (!m.is_array() || m.size() != a.bw.size()) return std::nullopt;
+        for (std::size_t i = 0; i < a.bw.size(); ++i) a.bw[i] = m[i].get<int>();
+    }
+    a.bw_tint = j.value("tint", false);
+    a.tint_hue = j.value("tint_hue", 42);
+    a.tint_sat = j.value("tint_saturation", 20);
+    if (j.contains("colour")) {
+        const auto& c = j.at("colour");
+        if (!c.is_array() || c.size() != 3) return std::nullopt;
+        for (std::size_t i = 0; i < 3; ++i) a.filter[i] = c[i].get<double>();
+    }
+    a.density = j.value("density", 25);
+    a.keep_luma = j.value("luminosity", true);
     return a;
 }
 

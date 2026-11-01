@@ -477,7 +477,7 @@ void PropertiesPanel::paint() {
     if (adj) {
         m_adjust.set_sensitive(!m_doc.locked_all(primary()));
         if (!m_journal.in_gesture()) m_adjust.set(l->adjust);   // mid-drag the editor is ahead of the document
-        const bool wants = l->adjust.kind == core::AdjustKind::Levels || l->adjust.kind == core::AdjustKind::Curves;
+        const bool wants = core::adjust::wants_histogram(l->adjust.kind);
         if (wants && m_hist_id != primary()) {
             m_hist_id = primary();
             m_adjust.set_histogram(std::nullopt);

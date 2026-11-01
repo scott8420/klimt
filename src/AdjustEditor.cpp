@@ -24,6 +24,26 @@ Gdk::RGBA fg_of(Gtk::Widget& w) {
     return Gdk::RGBA(&c, true);
 }
 
+// s062: Photoshop's Photo Filter presets (their published colours).
+namespace s062 {
+struct Preset { const char* name; int r, g, b; };
+constexpr Preset kFilters[] = {
+    {"Warming Filter (85)", 236, 138, 0},   {"Warming Filter (LBA)", 250, 150, 0}, {"Warming Filter (81)", 235, 177, 19},
+    {"Cooling Filter (80)", 0, 109, 255},   {"Cooling Filter (LBB)", 0, 93, 255},  {"Cooling Filter (82)", 0, 181, 255},
+    {"Red", 234, 26, 26},       {"Orange", 243, 132, 23},   {"Yellow", 249, 227, 28},    {"Green", 25, 201, 25},
+    {"Cyan", 29, 203, 234},     {"Blue", 29, 53, 234},      {"Violet", 155, 29, 234},    {"Magenta", 227, 24, 227},
+    {"Sepia", 172, 122, 51},    {"Deep Red", 255, 0, 0},    {"Deep Blue", 0, 34, 205},   {"Deep Emerald", 0, 140, 0},
+    {"Deep Yellow", 255, 213, 0}, {"Underwater", 0, 194, 177},
+};
+constexpr guint kCustom = std::size(kFilters);
+guint preset_of(const std::array<double, 3>& c) {
+    for (guint i = 0; i < kCustom; ++i)
+        if (std::lround(c[0] * 255) == kFilters[i].r && std::lround(c[1] * 255) == kFilters[i].g && std::lround(c[2] * 255) == kFilters[i].b) return i;
+    return kCustom;
+}
+}  // namespace s062
+using namespace s062;
+
 void tri_up(const Cairo::RefPtr<Cairo::Context>& cr, double x, double y, double s) {
     cr->move_to(x, y);
     cr->line_to(x - s, y + s * 1.6);
@@ -141,6 +161,11 @@ void AdjustEditor::rebuild() {
     while (auto* c = m_body.get_first_child()) m_body.remove(*c);
     m_sliders.clear();
     m_colorize = nullptr;
+    m_tint = nullptr;
+    m_tint_h = m_tint_s = nullptr;
+    m_preset = nullptr;
+    m_filter_colour = nullptr;
+    m_luma = nullptr;
     m_channel = nullptr;
     m_graph = nullptr;
     for (auto& p : m_lv) p = nullptr;
@@ -189,9 +214,90 @@ void AdjustEditor::rebuild() {
         case AdjustKind::Posterize:
             slider("adjust.posterize", "Levels", 2, 255, &m_a.posterize)->set_tooltip_text("Tones per colour channel");
             break;
-        case AdjustKind::Threshold:
+        case AdjustKind::Threshold: {
+            // s062: the histogram (luminosity) behind the level, as Photoshop's:
+            // left of the line turns black, right of it white. Click or drag.
+            m_graph = Gtk::make_managed<Gtk::DrawingArea>();
+            m_graph->set_name("adjust.threshold-graph");
+            m_graph->set_content_height(120);
+            m_graph->set_hexpand(true);
+            m_graph->set_tooltip_text("Click or drag: lighter than the line turns white, darker black");
+            m_graph->set_draw_func(sigc::mem_fun(*this, &AdjustEditor::draw_threshold));
+            auto drag = Gtk::GestureDrag::create();
+            drag->signal_drag_begin().connect([this](double x, double y) { m_begin.emit(); m_press_x = x; m_press_y = y; threshold_at(x); });
+            drag->signal_drag_update().connect([this](double dx, double) { threshold_at(m_press_x + dx); });
+            drag->signal_drag_end().connect([this](double, double) { m_end.emit(); });
+            m_graph->add_controller(drag);
+            m_body.append(*m_graph);
             slider("adjust.threshold", "Level", 1, 255, &m_a.threshold)->set_tooltip_text("Lighter than this turns white, darker black");
             break;
+        }
+        // s062.
+        case AdjustKind::Vibrance:
+            slider("adjust.vibrance", "Vibrance", -100, 100, &m_a.vibrance)->set_tooltip_text("More colour where there is little; strong colours left be");
+            slider("adjust.vib-saturation", "Saturation", -100, 100, &m_a.saturation)->set_tooltip_text("More (or less) colour everywhere, evenly");
+            break;
+        case AdjustKind::BlackWhite: {
+            const char* names[6] = {"Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"};
+            const char* ids[6] = {"adjust.bw-reds", "adjust.bw-yellows", "adjust.bw-greens", "adjust.bw-cyans", "adjust.bw-blues", "adjust.bw-magentas"};
+            for (int i = 0; i < 6; ++i)
+                slider(ids[i], names[i], -200, 300, &m_a.bw[static_cast<std::size_t>(i)])->set_tooltip_text("How light this hue turns, percent");
+            m_tint = Gtk::make_managed<Gtk::CheckButton>("Tint");
+            m_tint->set_name("adjust.bw-tint");
+            m_tint->set_tooltip_text("Colour the grey -- the hue and saturation below");
+            m_tint->signal_toggled().connect([this] {
+                if (m_painting) return;
+                m_a.bw_tint = m_tint->get_active();
+                emit();
+                paint();
+            });
+            m_body.append(*m_tint);
+            m_tint_h = slider("adjust.bw-tint-hue", "Hue", 0, 359, &m_a.tint_hue);
+            m_tint_s = slider("adjust.bw-tint-sat", "Saturation", 0, 100, &m_a.tint_sat);
+            break;
+        }
+        case AdjustKind::PhotoFilter: {
+            auto names = Gtk::StringList::create({});
+            for (const auto& p : kFilters) names->append(p.name);
+            names->append("Custom");
+            auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            m_preset = Gtk::make_managed<Gtk::DropDown>(names);
+            m_preset->set_name("adjust.filter-preset");
+            m_preset->set_hexpand(true);
+            m_preset->set_tooltip_text("Photoshop's filters -- or Custom, the colour beside it");
+            m_preset->property_selected().signal_changed().connect([this] {
+                if (m_painting) return;
+                const guint i = m_preset->get_selected();
+                if (i >= kCustom) return;
+                m_a.filter = {kFilters[i].r / 255.0, kFilters[i].g / 255.0, kFilters[i].b / 255.0};
+                emit();
+                paint();
+            });
+            row->append(*m_preset);
+            m_filter_colour = Gtk::make_managed<Gtk::ColorDialogButton>(Gtk::ColorDialog::create());
+            m_filter_colour->set_name("adjust.filter-colour");
+            m_filter_colour->set_tooltip_text("The filter's colour");
+            m_filter_colour->property_rgba().signal_changed().connect([this] {
+                if (m_painting) return;
+                const auto c = m_filter_colour->get_rgba();
+                m_a.filter = {c.get_red(), c.get_green(), c.get_blue()};
+                emit();
+                paint();
+            });
+            row->append(*m_filter_colour);
+            m_body.append(*row);
+            slider("adjust.density", "Density", 1, 100, &m_a.density)->set_tooltip_text("How strongly the filter colours, percent");
+            m_luma = Gtk::make_managed<Gtk::CheckButton>("Preserve Luminosity");
+            m_luma->set_name("adjust.filter-luma");
+            m_luma->set_tooltip_text("Keep each pixel as light as it was -- only the colour changes");
+            m_luma->signal_toggled().connect([this] {
+                if (m_painting) return;
+                m_a.keep_luma = m_luma->get_active();
+                emit();
+            });
+            m_body.append(*m_luma);
+            break;
+        }
         case AdjustKind::Invert: {
             auto l = Gtk::make_managed<Gtk::Label>("No settings -- every colour turns to its opposite.");
             l->set_xalign(0.0f);
@@ -324,6 +430,16 @@ void AdjustEditor::paint() {
         b.s->set_value(b.dfield ? *b.dfield : *b.field);
     }
     if (m_colorize) m_colorize->set_active(m_a.colorize);
+    if (m_tint) m_tint->set_active(m_a.bw_tint);   // s062
+    if (m_tint_h) m_tint_h->get_parent()->set_sensitive(m_a.bw_tint);
+    if (m_tint_s) m_tint_s->get_parent()->set_sensitive(m_a.bw_tint);
+    if (m_preset) m_preset->set_selected(preset_of(m_a.filter));
+    if (m_filter_colour) {
+        Gdk::RGBA c;
+        c.set_rgba(m_a.filter[0], m_a.filter[1], m_a.filter[2], 1.0);
+        m_filter_colour->set_rgba(c);
+    }
+    if (m_luma) m_luma->set_active(m_a.keep_luma);
     if (m_lv[0]) {
         const auto& c = m_a.levels[static_cast<std::size_t>(channel())];
         m_lv[0]->set_value(std::round(c.in_black * 255));
@@ -359,6 +475,53 @@ void AdjustEditor::emit() {
 void AdjustEditor::reset() {
     m_a = A::fresh(m_a.kind);
     m_point = -1;
+    emit();
+    paint();
+}
+
+// ── Threshold (s062) ────────────────────────────────────────────────────────
+// The luminosity histogram over a black | white split at the level, and a
+// handle under it.
+void AdjustEditor::draw_threshold(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+    const auto fg = fg_of(*m_graph);
+    const double x0 = kPad, x1 = w - kPad, top = kPad, bottom = h - 14.0;
+    const double lx = x0 + (m_a.threshold / 255.0) * (x1 - x0);
+    cr->set_source_rgba(0, 0, 0, 0.18);
+    cr->rectangle(x0, top, lx - x0, bottom - top);
+    cr->fill();
+    cr->set_source_rgba(1, 1, 1, 0.18);
+    cr->rectangle(lx, top, x1 - lx, bottom - top);
+    cr->fill();
+    if (m_hist) {
+        const auto& bins = (*m_hist)[0];
+        std::vector<std::uint32_t> sorted(bins.begin(), bins.end());
+        std::sort(sorted.begin(), sorted.end());
+        const double peak = std::max<double>(1, static_cast<double>(sorted[250]));   // a few spikes may clip
+        cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.55);
+        const double bw = (x1 - x0) / 256;
+        for (int i = 0; i < 256; ++i) {
+            const double v = std::min(1.0, bins[static_cast<std::size_t>(i)] / peak) * (bottom - top);
+            cr->rectangle(x0 + i * bw, bottom - v, bw + 0.3, v);
+        }
+        cr->fill();
+    }
+    cr->set_line_width(1);
+    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.9);
+    cr->move_to(std::round(lx) + 0.5, top);
+    cr->line_to(std::round(lx) + 0.5, bottom);
+    cr->stroke();
+    tri_up(cr, lx, bottom + 2, 5);
+    cr->set_source_rgb(0.5, 0.5, 0.5);
+    cr->fill_preserve();
+    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.9);
+    cr->stroke();
+}
+
+void AdjustEditor::threshold_at(double x) {
+    const double x0 = kPad, x1 = m_graph->get_width() - kPad;
+    const int v = std::clamp(static_cast<int>(std::lround((x - x0) / std::max(1.0, x1 - x0) * 255)), 1, 255);
+    if (v == m_a.threshold) return;
+    m_a.threshold = v;
     emit();
     paint();
 }
