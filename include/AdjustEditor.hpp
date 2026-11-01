@@ -10,6 +10,7 @@
 // live) and when a drag starts and ends (`begin` / `end`), so its owner can
 // make a drag ONE step.
 #include "core/Adjust.hpp"
+#include "core/AdjustPresets.hpp"
 
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
@@ -46,6 +47,9 @@ public:
     core::adjust::Dropper dropper() const { return m_dropper; }
     void dropped(const std::array<double, 3>& rgb);
     void drop_off();                      // let go, no signal
+    // s065: saved presets, shared by every editor (Properties, the dialog):
+    // the Shell names the file once at startup.
+    static void set_presets_file(const std::string& path);
     sigc::signal<void()>& signal_end() { return m_end; }
 
 private:
@@ -65,6 +69,18 @@ private:
     void repage();                        // the paged sliders bound to the page shown
     void begin_end_on(Gtk::Widget& w);    // a drag on w is a begin .. end
     void dropper_row();                   // s064: the three eyedroppers
+    // s065: Duotone -- an ink row each (swatch, Levels / Curve, its plate
+    // over the histogram), rebuilt when the number of inks changes.
+    void rebuild_inks();
+    void preset_row();                    // s065: Preset -- Default, the saved ones, Custom; save, delete
+    void fill_presets();                  // the dropdown from the shared list
+    static std::vector<core::AdjustPreset>& presets();
+    static std::string& presets_path();
+    static sigc::signal<void()>& presets_changed();
+    void draw_plate(std::size_t ink, const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
+    void plate_press(std::size_t ink, double x, double y);
+    void plate_drag(std::size_t ink, double x, double y);
+    void plate_release(std::size_t ink);
     int  channel() const;                 // Levels / Curves: 0 = RGB, 1..3
 
     // Levels.
@@ -136,6 +152,21 @@ private:
     bool m_huesat_ranges = false;
     Gtk::Button* m_auto = nullptr;        // s064: Levels / Curves' Auto (needs the histogram)
     std::array<Gtk::ToggleButton*, 3> m_drop_btn{};
+    // s065: the Preset row -- its rows are Default, m_preset_rows (indices
+    // into presets()), then Custom.
+    Gtk::DropDown* m_preset_dd = nullptr;
+    Gtk::Button*   m_preset_del = nullptr;
+    std::vector<std::size_t> m_preset_rows;
+    // s065: Duotone's controls.
+    struct InkUi { Gtk::DrawingArea* plate; Gtk::ColorDialogButton* swatch; Gtk::DropDown* control; };
+    Gtk::Box*         m_inks_box = nullptr;
+    std::vector<InkUi> m_ink_ui;
+    Gtk::DropDown*    m_ink_preset = nullptr;
+    Gtk::DropDown*    m_grey_from = nullptr;
+    Gtk::Button*      m_add_ink = nullptr;
+    std::vector<Gtk::Scale*> m_bw_rows;   // the mix sliders, shown when the grey comes from them
+    int  m_plate_handle = -1;             // Levels: 0 black, 1 grey, 2 white; Curve: a point
+    bool m_plate_off = false;             // a curve point dragged off: removed on release
     core::adjust::Dropper m_dropper = core::adjust::Dropper::None;
     sigc::signal<void(core::adjust::Dropper)> m_dropper_sig;
     int  m_band_handle = -1;

@@ -82,6 +82,7 @@ const std::vector<Command>& commands() {
             {"New Adjustment Layer: Posterize", "Layer", "win.adjust-new-posterize", "", "adjustment layer levels tones flat", ""},
             {"New Adjustment Layer: Threshold", "Layer", "win.adjust-new-threshold", "", "adjustment layer black white", ""},
             {"New Adjustment Layer: Gradient Map", "Layer", "win.adjust-new-gradient-map", "", "adjustment layer gradient map tone colour color duotone sepia false colour", ""},   // s063
+            {"New Adjustment Layer: Duotone", "Layer", "win.adjust-new-duotone", "", "adjustment layer duotone tritone quadtone monotone ink pantone sepia toning", ""},   // s065
             {"New Adjustment Layer: Selective Colour", "Layer", "win.adjust-new-selective-colour", "", "adjustment layer selective color colour cmyk cyan magenta yellow black reds neutrals", ""},   // s063
             {"Brightness/Contrast", "Image", "win.adjust-apply-brightness-contrast", "", "adjustments light dark pixels", ""},
             {"Levels", "Image", "win.adjust-apply-levels", "", "adjustments histogram black white point gamma pixels", ""},
@@ -97,6 +98,7 @@ const std::vector<Command>& commands() {
             {"Posterize", "Image", "win.adjust-apply-posterize", "", "adjustments levels tones flat pixels", ""},
             {"Threshold", "Image", "win.adjust-apply-threshold", "", "adjustments black white pixels", ""},
             {"Gradient Map", "Image", "win.adjust-apply-gradient-map", "", "adjustments gradient map tone colour color duotone sepia false colour pixels", ""},   // s063
+            {"Duotone", "Image", "win.adjust-apply-duotone", "", "adjustments duotone tritone quadtone monotone ink pantone sepia toning pixels", ""},   // s065
             {"Selective Colour", "Image", "win.adjust-apply-selective-colour", "", "adjustments selective color colour cmyk cyan magenta yellow black reds neutrals pixels", ""},   // s063
             // s014: the Filter menu.
             {"Gaussian Blur", "Filter", "win.filter-gaussian-blur", "", "filter blur soften smooth", ""},

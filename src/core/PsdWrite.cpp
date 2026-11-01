@@ -249,6 +249,7 @@ struct Rules {
     int n_fx_live = 0;               // s053 m2: layers / groups whose styles cross live
     int n_adjust = 0, n_filterlayer = 0, n_paths = 0, n_group_fx = 0, n_filters = 0, n_styles = 0, n_text = 0, n_edges = 0;
     int n_outside = 0;
+    int n_duotone = 0;               // s065: Duotone layers -- as Gradient Maps
     bool rgb = true, f32 = false;
 };
 // s053 m2: styles cross live (lfx2) unless one of them can't (pattern overlay).
@@ -271,6 +272,7 @@ Rules rules(const Image& im, const std::map<Document::Id, Layer>& layers) {
             if (L.adjust.kind == AdjustKind::None) ++r.n_adjust;
             else {
                 ++r.n_live;
+                if (L.adjust.kind == AdjustKind::Duotone) ++r.n_duotone;
                 if (L.mask && L.edges.any()) ++r.n_edges;
             }
             continue;
@@ -300,6 +302,7 @@ Plan plan(const Image& im, const std::map<Document::Id, Layer>& layers) {
     if (r.n_edges) pl.baked.push_back(plural(r.n_edges, "mask's Density / Feather", "masks' Density / Feather") + " into the mask");
     if (r.n_fx_live) pl.kept.push_back(plural(r.n_fx_live, "layer's styles", "layers' styles") + " live -- shadows, glows, bevel, satin, overlays, stroke");
     if (r.n_live) pl.kept.push_back(plural(r.n_live, "adjustment layer", "adjustment layers") + " live -- Levels, Curves, Hue/Saturation, Brightness/Contrast");
+    if (r.n_duotone) pl.baked.push_back(plural(r.n_duotone, "Duotone layer", "Duotone layers") + " as a live Gradient Map (the look kept, not the inks)");   // s065
     if (r.n_adjust) pl.left_out.push_back(plural(r.n_adjust, "adjustment layer", "adjustment layers") + " left out");
     if (r.n_filterlayer) pl.left_out.push_back(plural(r.n_filterlayer, "filter layer", "filter layers") + " left out");
     if (r.n_paths) pl.left_out.push_back(plural(r.n_paths, "path layer", "path layers") + " left out");

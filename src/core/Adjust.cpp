@@ -27,6 +27,7 @@ constexpr Info kInfo[] = {
     {AdjustKind::ChannelMixer,"channel-mixer",     "Channel Mixer"},
     {AdjustKind::SelectiveColour,"selective-colour","Selective Colour"},
     {AdjustKind::GradientMap,"gradient-map",       "Gradient Map"},
+    {AdjustKind::Duotone,   "duotone",             "Duotone"},   // s065
 };
 
 double clamp01(double v) { return std::clamp(v, 0.0, 1.0); }
@@ -322,7 +323,7 @@ const std::vector<AdjustKind>& kinds() {
                                            AdjustKind::Vibrance, AdjustKind::HueSat, AdjustKind::ColourBalance, AdjustKind::BlackWhite,
                                            AdjustKind::PhotoFilter, AdjustKind::ChannelMixer,
                                            AdjustKind::Invert, AdjustKind::Posterize, AdjustKind::Threshold,
-                                           AdjustKind::GradientMap, AdjustKind::SelectiveColour};
+                                           AdjustKind::GradientMap, AdjustKind::SelectiveColour, AdjustKind::Duotone};
     return v;
 }
 
@@ -392,6 +393,29 @@ Adjust normalised(Adjust a) {
     std::stable_sort(a.grad.begin(), a.grad.end(), [](const GradStop& p, const GradStop& q) { return p.at < q.at; });
     if (a.grad.size() > kGradStops) a.grad.resize(kGradStops);
     if (a.grad.size() < 2) a.grad = Adjust{}.grad;
+    // s065: the inks -- one to four; each plate's Levels and Curve as Levels' and Curves' own.
+    if (a.inks.empty()) a.inks = Adjust{}.inks;
+    if (a.inks.size() > kMaxInks) a.inks.resize(kMaxInks);
+    for (auto& k : a.inks) {
+        for (auto& v : k.rgb) v = clamp01(v);
+        auto& c = k.levels;
+        c.in_black = clamp01(c.in_black);
+        c.in_white = std::clamp(c.in_white, std::min(1.0, c.in_black + 2.0 / 255), 1.0);
+        c.in_black = std::min(c.in_black, c.in_white - 2.0 / 255);
+        c.gamma = std::clamp(c.gamma, 0.1, 9.99);
+        c.out_black = clamp01(c.out_black);
+        c.out_white = clamp01(c.out_white);
+        for (auto& p : k.curve) { p.x = clamp01(p.x); p.y = clamp01(p.y); }
+        std::stable_sort(k.curve.begin(), k.curve.end(), [](const CurvePt& p, const CurvePt& q) { return p.x < q.x; });
+        std::vector<CurvePt> kept;
+        for (const auto& p : k.curve) {
+            if (!kept.empty() && p.x - kept.back().x < 1.0 / 255) kept.back() = p;
+            else kept.push_back(p);
+        }
+        if (kept.size() > 16) kept.resize(16);
+        if (kept.size() < 2) kept = {{0, 0}, {1, 1}};
+        k.curve = std::move(kept);
+    }
     return a;
 }
 
@@ -424,13 +448,16 @@ bool identity(const Adjust& a) {
         case AdjustKind::SelectiveColour:
             for (const auto& c : a.selective) for (const int v : c) if (v != 0) return false;
             return true;
-        case AdjustKind::GradientMap: return false;   // its own effect
+        case AdjustKind::GradientMap:
+        case AdjustKind::Duotone: return false;   // their own effect
     }
     return true;
 }
 
 bool settingless(AdjustKind k) { return k == AdjustKind::Invert; }
-bool wants_histogram(AdjustKind k) { return k == AdjustKind::Levels || k == AdjustKind::Curves || k == AdjustKind::Threshold; }
+bool wants_histogram(AdjustKind k) {
+    return k == AdjustKind::Levels || k == AdjustKind::Curves || k == AdjustKind::Threshold || k == AdjustKind::Duotone;   // s065: behind each ink's plate
+}
 
 std::string refusal(const Adjust& a) {
     if (a.kind == AdjustKind::None) return "no adjustment";
@@ -515,6 +542,14 @@ std::shared_ptr<const Compiled> compile(const Adjust& a) {
                 lut[static_cast<std::size_t>(i)] = static_cast<float>(clamp01(lut_kind(a, tables, ch, static_cast<double>(i) / (kLut - 1))));
         }
     }
+    if (a.kind == AdjustKind::Duotone)   // s065: each ink's amount, by grey
+        for (const auto& k : a.inks) {
+            std::vector<float> p(kLut);
+            const auto t = k.use_curve ? curve_table(k.curve, kLut) : std::vector<double>{};
+            for (int i = 0; i < kLut; ++i)
+                p[static_cast<std::size_t>(i)] = static_cast<float>(1 - (k.use_curve ? t[static_cast<std::size_t>(i)] : levels_map(k.levels, static_cast<double>(i) / (kLut - 1))));
+            c->plates.push_back(std::move(p));
+        }
     if (cache.size() >= 8) cache.erase(cache.begin());
     cache.push_back(c);
     return c;
@@ -552,6 +587,19 @@ void run_rgb(const Compiled& c, float& r, float& g, float& b) {
         case AdjustKind::GradientMap: {   // s063: the luminosity down the gradient's table
             const float l = static_cast<float>(luma(std::clamp(r, 0.f, 1.f), std::clamp(g, 0.f, 1.f), std::clamp(b, 0.f, 1.f)));
             r = lut_at(c.lut[0], l); g = lut_at(c.lut[1], l); b = lut_at(c.lut[2], l);
+            return;
+        }
+        case AdjustKind::Duotone: {   // s065: the inks multiplied over white, each by its plate
+            const double grey = duotone_grey(c.a, std::clamp(r, 0.f, 1.f), std::clamp(g, 0.f, 1.f), std::clamp(b, 0.f, 1.f));
+            float R = 1, G = 1, B = 1;
+            for (std::size_t i = 0; i < c.plates.size() && i < c.a.inks.size(); ++i) {
+                const float k = lut_at(c.plates[i], static_cast<float>(grey));
+                const auto& ink = c.a.inks[i].rgb;
+                R *= 1 - k * (1 - static_cast<float>(ink[0]));
+                G *= 1 - k * (1 - static_cast<float>(ink[1]));
+                B *= 1 - k * (1 - static_cast<float>(ink[2]));
+            }
+            r = R; g = G; b = B;
             return;
         }
         case AdjustKind::Threshold: {   // s061: Photoshop's luminance weights, in levels
@@ -684,6 +732,34 @@ Adjust dropped(const Adjust& in, Dropper d, const std::array<double, 3>& rgb) {
         }
     }
     return normalised(a);
+}
+
+double duotone_grey(const Adjust& a, double r, double g, double b) {
+    return a.grey_bw ? black_white(a, clamp01(r), clamp01(g), clamp01(b)) : clamp01(luma(r, g, b));
+}
+double ink_plate(const Ink& k, double grey) {
+    if (!k.use_curve) return levels_map(k.levels, grey);
+    const auto t = curve_table(k.curve, 1024);
+    const double p = clamp01(grey) * 1023;
+    const auto i = std::min<std::size_t>(static_cast<std::size_t>(p), 1022);
+    return t[i] + (t[i + 1] - t[i]) * (p - static_cast<double>(i));
+}
+std::array<double, 3> duotone_at(const Adjust& a, double grey) {
+    std::array<double, 3> out{1, 1, 1};
+    for (const auto& k : a.inks) {
+        const double amount = 1 - ink_plate(k, grey);
+        for (std::size_t c = 0; c < 3; ++c) out[c] *= 1 - amount * (1 - k.rgb[c]);
+    }
+    return out;
+}
+Adjust duotone_as_gradient(const Adjust& a) {
+    Adjust g = fresh(AdjustKind::GradientMap);
+    g.grad.clear();
+    for (std::size_t i = 0; i < kGradStops; ++i) {
+        const double t = static_cast<double>(i) / (kGradStops - 1);
+        g.grad.push_back({t, 0.5, duotone_at(a, t)});
+    }
+    return g;
 }
 
 Histogram histogram(const std::vector<std::uint32_t>& argb) {

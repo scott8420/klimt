@@ -3,12 +3,14 @@
 #include "core/Adjust.hpp"
 #include "core/Composite.hpp"
 #include "core/Document.hpp"
+#include "core/AdjustPresets.hpp"
 #include "core/File.hpp"
 #include "core/Selection.hpp"
 
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -753,6 +755,99 @@ void selftest_adjust(const Check& check) {
         if (back)
             for (const auto& i : {i1, i2, i3, i4, i5}) same = same && back->layers.at(i).adjust == c.layers.at(i).adjust;
         check("file (s064: + Hue/Saturation's ranges): Colour Balance (three tones, luminosity), Channel Mixer (outputs, grey, Monochrome), Selective Colour (inks, Absolute), Gradient Map (stops, midpoints, Reverse, Dither) come back", same, err);
+        fs::remove_all(dir);
+    }
+
+    std::cout << "\n-- adjustments: Duotone (s065) --\n";
+    {
+        using K = core::AdjustKind;
+        const auto rgb = [](const core::Adjust& a, float r, float g, float b) { A::apply_rgb(a, r, g, b); return std::array<float, 3>{r, g, b}; };
+        auto d = A::fresh(K::Duotone);
+        check("duotone: key, label; black and a warm brown to start; its own effect; wants the histogram",
+              A::from_key("duotone") == K::Duotone && A::label(K::Duotone) == "Duotone" && d.inks.size() == 2 && d.inks[0].rgb[0] == 0 &&
+              !A::identity(d) && A::wants_histogram(K::Duotone), "");
+        const auto w = rgb(d, 1, 1, 1), k = rgb(d, 0, 0, 0);
+        check("duotone: white paper stays white, black is black", near(w[0], 1) && near(w[2], 1) && near(k[0], 0) && near(k[1], 0), "");
+        const auto m = rgb(d, 0.6f, 0.6f, 0.6f);
+        check("duotone: a light grey turns warm (red > green > blue)", m[0] > m[1] && m[1] > m[2], num(m[0]) + "," + num(m[2]));
+        // One ink alone: a monotone in that ink.
+        auto mono = A::fresh(K::Duotone);
+        mono.inks = {core::Ink{{0, 0, 1}}};
+        const auto mm = rgb(mono, 0.5f, 0.5f, 0.5f);
+        check("duotone: one blue ink -- mid grey is half blue over white (0.5, 0.5, 1)", near(mm[0], 0.5) && near(mm[1], 0.5) && near(mm[2], 1), "");
+        // Each ink's Levels shifts it alone.
+        auto lv = mono; lv.inks[0].levels.in_white = 0.5;   // the plate white from mid grey up: no ink in the light half
+        const auto l1 = rgb(lv, 0.7f, 0.7f, 0.7f), l2 = rgb(lv, 0.25f, 0.25f, 0.25f);
+        check("duotone: an ink's own Levels -- white point at 128: no ink above it, lighter below (0.25 grey: half ink, not three quarters)",
+              near(l1[0], 1) && near(l2[0], 0.5) && near(rgb(mono, 0.25f, 0.25f, 0.25f)[0], 0.25), num(l2[0]));
+        // Its Curve instead, and the Levels kept while it does.
+        auto cv = lv; cv.inks[0].use_curve = true; cv.inks[0].curve = {{0, 0}, {0.5, 0.9}, {1, 1}};
+        check("duotone: Curve chosen -- the curve rules, the Levels kept for switching back", near(A::ink_plate(cv.inks[0], 0.5), 0.9, 1e-3) &&
+              cv.inks[0].levels.in_white == 0.5 && near(A::ink_plate(lv.inks[0], 0.5), 1), "");
+        // Grey from Black & White's mix: red light at Reds 100.
+        auto bw = mono; bw.grey_bw = true; bw.bw[0] = 100;
+        check("duotone: grey from the Black & White mix -- Reds 100: pure red takes no ink", near(rgb(bw, 1, 0, 0)[0], 1) && rgb(mono, 1, 0, 0)[0] < 0.6f, "");
+        // Normalised: one to four inks.
+        auto many = A::fresh(K::Duotone);
+        many.inks.assign(6, core::Ink{});
+        auto none = A::fresh(K::Duotone); none.inks.clear();
+        check("duotone: at most four inks, at least one (none: the default pair); out of range refused",
+              A::normalised(many).inks.size() == core::kMaxInks && A::normalised(none).inks == A::fresh(K::Duotone).inks && !A::refusal(many).empty(), "");
+        // As the Gradient Map PSD gets: the same colours along the grey.
+        const auto gm = A::duotone_as_gradient(d);
+        bool same = gm.kind == K::GradientMap && gm.grad.size() == core::kGradStops;
+        for (const double t : {0.0, 0.3, 0.55, 0.9}) {
+            const auto a = A::duotone_at(d, t), b = A::gradient_at(gm.grad, t);
+            same = same && near(a[0], b[0], 0.01) && near(a[1], b[1], 0.01) && near(a[2], b[2], 0.01);
+        }
+        check("duotone: as a Gradient Map (PSD) -- 32 stops, the same colours along the grey", same, "");
+        // The .klimt.
+        Fix f;
+        auto q = A::fresh(K::Duotone);
+        q.inks.push_back({{0.2, 0.5, 0.7}, true, {0.1, 0.9, 1.3, 0, 1}, {{0, 0.1}, {0.4, 0.7}, {1, 1}}});
+        q.grey_bw = true; q.bw = {50, 60, 70, 80, 90, 100};
+        const auto id = f.adj(K::Duotone);
+        f.set(id, q);
+        core::file::Contents c;
+        c.image = f.d.image(); c.layers = f.d.snapshot(); c.next_id = f.d.next_id();
+        const auto dir = fs::temp_directory_path() / "klimt_selftest_adjust65";
+        fs::create_directories(dir);
+        const auto path = (dir / "s065.klimt").string();
+        std::string err;
+        const bool saved = core::file::save_klimt(path, c, err);
+        const auto back = saved ? core::file::open(path, err) : std::nullopt;
+        check("file: Duotone -- three inks (one by Curve, its Levels kept), grey from the mix", back && back->layers.at(id).adjust == q, err);
+        fs::remove_all(dir);
+    }
+
+    std::cout << "\n-- adjustments: saved presets (s065) --\n";
+    {
+        using K = core::AdjustKind;
+        const auto dir = fs::temp_directory_path() / "klimt_selftest_adjpresets";
+        fs::remove_all(dir);
+        const auto file = (dir / "adjustments.json").string();
+        check("presets: no file -- none", core::load_adjust_presets(file).empty(), "");
+        auto lv = A::fresh(K::Levels); lv.levels[0].gamma = 1.4;
+        auto du = A::fresh(K::Duotone); du.inks[1].rgb = {0.2, 0.3, 0.6}; du.inks[1].use_curve = true;
+        std::vector<core::AdjustPreset> v{{"Lift", lv}, {"Moody Blue", du}};
+        v.push_back({core::unique_adjust_preset_name(v, K::Levels, "  Lift "), lv});
+        v.push_back({core::unique_adjust_preset_name(v, K::Duotone, "Lift"), du});
+        v.push_back({core::unique_adjust_preset_name(v, K::Curves, ""), A::fresh(K::Curves)});
+        check("presets: names unique per kind, trimmed; empty -- the kind's label",
+              v[2].name == "Lift 2" && v[3].name == "Lift" && v[4].name == "Curves", v[2].name + " / " + v[3].name);
+        check("presets: saved", core::save_adjust_presets(file, v), "");
+        const auto back = core::load_adjust_presets(file);
+        check("presets: come back -- names, kinds, every setting", back == v, std::to_string(back.size()));
+        {
+            std::ofstream f(file);
+            f << R"({"version":1,"presets":[{"name":"ok","adjust":{"kind":"threshold","level":90}},)"
+                 R"({"name":"bad","adjust":{"kind":"threshold","level":900}},{"name":"odd","adjust":{"kind":"nope"}},{"x":1}]})";
+        }
+        const auto some = core::load_adjust_presets(file);
+        check("presets: a bad one (out of range, unknown kind, no name) dropped, the good kept",
+              some.size() == 1 && some[0].name == "ok" && some[0].a.threshold == 90, std::to_string(some.size()));
+        { std::ofstream f(file); f << "{ not json"; }
+        check("presets: a broken file -- none, no crash", core::load_adjust_presets(file).empty(), "");
         fs::remove_all(dir);
     }
 }

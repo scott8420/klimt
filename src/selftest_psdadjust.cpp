@@ -89,6 +89,11 @@ void selftest_psd_adjust(const Check& check) {
               sb.size() == 1 && sb[0].key == "selc" && sb[0].data.size() == 84 && sb[0].data[1] == 1 && sb[0].data[3] == 1 &&
               sb[0].data[4] == 0 && sb[0].data[11] == 0 && sb[0].data[13] == 1, "");
         check("psd adjust: Selective Colour comes back", round(sc) == sc, "");
+        const auto du = core::adjust::fresh(K::Duotone);
+        const auto db = adj::blocks(du);
+        const auto dr = round(du);
+        check("psd adjust (s065): a Duotone goes as a grdm Gradient Map -- 32 stops, read back as one",
+              db.size() == 1 && db[0].key == "grdm" && dr && dr->kind == K::GradientMap && dr->grad.size() == core::kGradStops, "");
         auto gm = core::adjust::fresh(K::GradientMap);
         gm.grad = {{0, 0.5, {0, 0, 0}}, {0.25, 0.3, {1, 0, 0.5}}, {1, 0.7, {1, 1, 1}}};
         gm.grad_reverse = true;

@@ -1,9 +1,13 @@
 #include "AdjustEditor.hpp"
 
 #include <gtkmm/button.h>
+#include <gtkmm/entry.h>
+#include <gtkmm/menubutton.h>
+#include <gtkmm/popover.h>
 #include <gtkmm/gesturedrag.h>
 #include <gtkmm/grid.h>
 #include <gtkmm/stringlist.h>
+#include <glibmm/main.h>
 #include <glibmm/markup.h>
 
 #include <algorithm>
@@ -43,6 +47,34 @@ guint preset_of(const std::array<double, 3>& c) {
 }
 }  // namespace s062
 using namespace s062;
+
+// s065: Duotone ink sets (our own names and colours -- Pantone's books are licensed).
+namespace s065 {
+struct InkSet { const char* name; std::vector<core::Ink> inks; };
+core::Ink ink(int r, int g, int b, double gamma = 1, double in_black = 0, double in_white = 1) {
+    return {{r / 255.0, g / 255.0, b / 255.0}, false, {in_black, in_white, gamma, 0, 1}, {{0, 0}, {1, 1}}};
+}
+const std::vector<InkSet>& ink_sets() {
+    static const std::vector<InkSet> v{
+        {"Black, Warm Brown", {ink(0, 0, 0, 1.6), ink(166, 124, 82)}},
+        {"Sepia", {ink(0, 0, 0, 2.2), ink(112, 66, 20, 0.9)}},
+        {"Selenium", {ink(0, 0, 0, 1.4), ink(110, 70, 90, 1.2)}},
+        {"Platinum", {ink(40, 32, 26, 1.1), ink(200, 180, 150, 0.8)}},
+        {"Gold Toned", {ink(0, 0, 0, 1.8), ink(150, 120, 60)}},
+        {"Black, Blue", {ink(0, 0, 0, 1.6), ink(40, 90, 160)}},
+        {"Cyanotype", {ink(10, 50, 120)}},
+        {"Warm Tritone", {ink(0, 0, 0, 2.0), ink(140, 90, 50, 1.2), ink(230, 205, 160, 0.7)}},
+    };
+    return v;
+}
+guint ink_set_of(const std::vector<core::Ink>& inks) {
+    const auto& v = ink_sets();
+    for (guint i = 0; i < v.size(); ++i) if (v[i].inks == inks) return i;
+    return static_cast<guint>(v.size());
+}
+constexpr double kPlateH = 78, kRampH = 8, kHandleH = 11;
+}  // namespace s065
+using namespace s065;
 
 // s063: Gradient Map presets.
 namespace s063 {
@@ -95,17 +127,20 @@ std::vector<core::CurvePt>& curve_of(core::Adjust& a, int ch) {
 AdjustEditor::AdjustEditor() : Gtk::Box(Gtk::Orientation::VERTICAL, 8) {
     set_name("adjust.editor");
     append(m_body);
+    presets_changed().connect([this] { if (m_preset_dd) { fill_presets(); paint(); } });   // s065: another editor saved / deleted
 }
 
 void AdjustEditor::set(const core::Adjust& a) {
     const bool kind_changed = a.kind != m_built;
     m_a = a;
     if (kind_changed) { m_point = -1; rebuild(); }
+    else if (m_inks_box && m_a.inks.size() != m_ink_ui.size()) rebuild_inks();   // s065: an undo added / took an ink
     paint();
 }
 
 void AdjustEditor::set_histogram(const std::optional<core::adjust::Histogram>& h) {
     m_hist = h;
+    for (auto& u : m_ink_ui) u.plate->queue_draw();   // s065
     if (m_auto) m_auto->set_sensitive(h.has_value());   // s064
     if (m_graph) m_graph->queue_draw();
 }
@@ -245,6 +280,16 @@ void AdjustEditor::rebuild() {
     m_huesat_ranges = false;   // s064
     m_auto = nullptr;
     m_drop_btn = {};
+    m_preset_dd = nullptr;   // s065
+    m_preset_del = nullptr;
+    m_preset_rows.clear();
+    m_inks_box = nullptr;   // s065
+    m_ink_ui.clear();
+    m_ink_preset = m_grey_from = nullptr;
+    m_add_ink = nullptr;
+    m_bw_rows.clear();
+    m_plate_handle = -1;
+    m_plate_off = false;
     if (m_dropper != A::Dropper::None) { m_dropper = A::Dropper::None; m_dropper_sig.emit(m_dropper); }
     m_band_handle = -1;
     m_grad_preset = nullptr;
@@ -300,6 +345,7 @@ void AdjustEditor::rebuild() {
     reset->signal_clicked().connect(sigc::mem_fun(*this, &AdjustEditor::reset));
     head->append(*reset);
     m_body.append(*head);
+    if (!A::settingless(m_a.kind)) preset_row();   // s065
 
     switch (m_a.kind) {
         case AdjustKind::BrightCon:
@@ -483,6 +529,70 @@ void AdjustEditor::rebuild() {
             row->append(*m_relative);
             row->append(*m_absolute);
             m_body.append(*row);
+            break;
+        }
+        case AdjustKind::Duotone: {   // s065
+            const auto labelled = [this](const char* text, Gtk::Widget& w) {
+                auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+                auto l = Gtk::make_managed<Gtk::Label>(text);
+                l->set_xalign(0.0f);
+                l->set_size_request(76, -1);
+                l->add_css_class("dim-label");
+                row->append(*l);
+                w.set_hexpand(true);
+                row->append(w);
+                m_body.append(*row);
+            };
+            auto sets = Gtk::StringList::create({});
+            for (const auto& p : ink_sets()) sets->append(p.name);
+            sets->append("Custom");
+            m_ink_preset = Gtk::make_managed<Gtk::DropDown>(sets);
+            m_ink_preset->set_name("adjust.duotone-preset");
+            m_ink_preset->set_tooltip_text("A ready-made set of inks -- or Custom, your own");
+            m_ink_preset->property_selected().signal_changed().connect([this] {
+                if (m_painting) return;
+                const guint i = m_ink_preset->get_selected();
+                if (i >= ink_sets().size()) return;
+                m_a.inks = ink_sets()[i].inks;
+                rebuild_inks();
+                emit();
+                paint();
+            });
+            labelled("Inks", *m_ink_preset);
+            m_grey_from = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Luminosity", "Black & White mix"}));
+            m_grey_from->set_name("adjust.duotone-grey");
+            m_grey_from->set_tooltip_text("How a colour picture turns grey before the inks go on: its luminosity, "
+                                          "or Black & White's six sliders (below)");
+            m_grey_from->property_selected().signal_changed().connect([this] {
+                if (m_painting) return;
+                m_a.grey_bw = m_grey_from->get_selected() == 1;
+                emit();
+                paint();
+            });
+            labelled("Grey from", *m_grey_from);
+            const char* names[6] = {"Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"};
+            const char* ids[6] = {"adjust.duotone-reds", "adjust.duotone-yellows", "adjust.duotone-greens", "adjust.duotone-cyans",
+                                  "adjust.duotone-blues", "adjust.duotone-magentas"};
+            for (std::size_t i = 0; i < 6; ++i) {
+                auto* s = slider(ids[i], names[i], -200, 300, &m_a.bw[i]);
+                s->set_tooltip_text("How light this hue turns before the inks, percent");
+                m_bw_rows.push_back(s);
+            }
+            m_inks_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 10);
+            m_body.append(*m_inks_box);
+            m_add_ink = Gtk::make_managed<Gtk::Button>("Add Ink");
+            m_add_ink->set_name("adjust.duotone-add");
+            m_add_ink->set_halign(Gtk::Align::START);
+            m_add_ink->set_tooltip_text("Another ink -- up to four (a quadtone)");
+            m_add_ink->signal_clicked().connect([this] {
+                if (m_a.inks.size() >= core::kMaxInks) return;
+                m_a.inks.push_back(ink(128, 128, 128));
+                rebuild_inks();
+                emit();
+                paint();
+            });
+            m_body.append(*m_add_ink);
+            rebuild_inks();
             break;
         }
         case AdjustKind::GradientMap: {
@@ -765,6 +875,30 @@ void AdjustEditor::paint() {
         m_page->set_sensitive(!m_a.monochrome);
     }
     if (m_auto) m_auto->set_sensitive(m_hist.has_value());   // s064
+    if (m_preset_dd) {   // s065: Default, a saved one, or Custom
+        guint pick = static_cast<guint>(m_preset_rows.size() + 1);
+        const auto n = A::normalised(m_a);
+        if (n == A::normalised(A::fresh(m_a.kind))) pick = 0;
+        else
+            for (std::size_t r = 0; r < m_preset_rows.size(); ++r)
+                if (presets()[m_preset_rows[r]].a == n) { pick = static_cast<guint>(r + 1); break; }
+        m_preset_dd->set_selected(pick);
+        m_preset_del->set_sensitive(pick > 0 && pick <= m_preset_rows.size());
+    }
+    if (m_inks_box) {   // s065
+        m_ink_preset->set_selected(ink_set_of(m_a.inks));
+        m_grey_from->set_selected(m_a.grey_bw ? 1 : 0);
+        for (auto* s : m_bw_rows) s->get_parent()->set_visible(m_a.grey_bw);
+        m_add_ink->set_sensitive(m_a.inks.size() < core::kMaxInks);
+        for (std::size_t i = 0; i < m_ink_ui.size() && i < m_a.inks.size(); ++i) {
+            const auto& k = m_a.inks[i];
+            Gdk::RGBA c;
+            c.set_rgba(k.rgb[0], k.rgb[1], k.rgb[2], 1.0);
+            m_ink_ui[i].swatch->set_rgba(c);
+            m_ink_ui[i].control->set_selected(k.use_curve ? 1 : 0);
+            m_ink_ui[i].plate->queue_draw();
+        }
+    }
     if (m_huesat_ranges && m_page) {   // s064: Colorize has no ranges -- Master only
         if (m_a.colorize) m_page->set_selected(0);
         m_page->set_sensitive(!m_a.colorize);
@@ -838,6 +972,327 @@ void AdjustEditor::emit() {
     if (m_graph) m_graph->queue_draw();
     totals();
     m_changed.emit(A::normalised(out));
+}
+
+// ── s065: saved presets ────────────────────────────────────────────────────
+
+std::vector<core::AdjustPreset>& AdjustEditor::presets() { static std::vector<core::AdjustPreset> v; return v; }
+std::string& AdjustEditor::presets_path() { static std::string p; return p; }
+sigc::signal<void()>& AdjustEditor::presets_changed() { static sigc::signal<void()> s; return s; }
+
+void AdjustEditor::set_presets_file(const std::string& path) {
+    presets_path() = path;
+    presets() = core::load_adjust_presets(path);
+    presets_changed().emit();
+}
+
+void AdjustEditor::fill_presets() {
+    if (!m_preset_dd) return;
+    m_preset_rows.clear();
+    auto names = Gtk::StringList::create({"Default"});
+    for (std::size_t i = 0; i < presets().size(); ++i)
+        if (presets()[i].a.kind == m_a.kind) { m_preset_rows.push_back(i); names->append(presets()[i].name); }
+    names->append("Custom");
+    const bool was = m_painting;
+    m_painting = true;
+    m_preset_dd->set_model(names);
+    m_painting = was;
+}
+
+void AdjustEditor::preset_row() {
+    auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto l = Gtk::make_managed<Gtk::Label>("Preset");
+    l->set_xalign(0.0f);
+    l->set_size_request(76, -1);
+    l->add_css_class("dim-label");
+    row->append(*l);
+    m_preset_dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Default", "Custom"}));
+    m_preset_dd->set_name("adjust.preset");
+    m_preset_dd->set_hexpand(true);
+    m_preset_dd->set_tooltip_text("Settings saved under a name -- or Default (changing nothing, or the kind's own start)");
+    m_preset_dd->property_selected().signal_changed().connect([this] {
+        if (m_painting || !m_preset_dd) return;
+        const guint i = m_preset_dd->get_selected();
+        if (i == 0) m_a = A::fresh(m_a.kind);
+        else if (i <= m_preset_rows.size()) m_a = presets()[m_preset_rows[i - 1]].a;
+        else return;   // Custom: what is in hand
+        m_point = -1;
+        if (m_inks_box) rebuild_inks();
+        emit();
+        paint();
+    });
+    row->append(*m_preset_dd);
+    // Save: a name, then the settings in hand under it.
+    auto save = Gtk::make_managed<Gtk::MenuButton>();
+    save->set_icon_name("document-save-symbolic");
+    save->add_css_class("flat");
+    save->set_name("adjust.preset-save");
+    save->set_tooltip_text("Save these settings as a preset");
+    auto pop = Gtk::make_managed<Gtk::Popover>();
+    auto pbox = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto entry = Gtk::make_managed<Gtk::Entry>();
+    entry->set_name("adjust.preset-name");
+    entry->set_placeholder_text("Preset name");
+    auto ok = Gtk::make_managed<Gtk::Button>("Save");
+    ok->add_css_class("suggested-action");
+    const auto store = [this, entry, pop] {
+        auto& v = presets();
+        const auto name = core::unique_adjust_preset_name(v, m_a.kind, entry->get_text());
+        v.push_back({name, A::normalised(m_a)});
+        if (!presets_path().empty()) core::save_adjust_presets(presets_path(), v);
+        entry->set_text("");
+        pop->popdown();
+        presets_changed().emit();
+    };
+    ok->signal_clicked().connect(store);
+    entry->signal_activate().connect(store);
+    pbox->append(*entry);
+    pbox->append(*ok);
+    pop->set_child(*pbox);
+    save->set_popover(*pop);
+    row->append(*save);
+    m_preset_del = Gtk::make_managed<Gtk::Button>();
+    m_preset_del->set_icon_name("user-trash-symbolic");
+    m_preset_del->add_css_class("flat");
+    m_preset_del->set_name("adjust.preset-delete");
+    m_preset_del->set_tooltip_text("Delete this saved preset (the settings stay as they are)");
+    m_preset_del->signal_clicked().connect([this] {
+        if (!m_preset_dd) return;
+        const guint i = m_preset_dd->get_selected();
+        if (i == 0 || i > m_preset_rows.size()) return;
+        auto& v = presets();
+        v.erase(v.begin() + static_cast<std::ptrdiff_t>(m_preset_rows[i - 1]));
+        if (!presets_path().empty()) core::save_adjust_presets(presets_path(), v);
+        presets_changed().emit();
+    });
+    row->append(*m_preset_del);
+    m_body.append(*row);
+    fill_presets();
+}
+
+// ── s065: Duotone's inks ───────────────────────────────────────────────────
+
+void AdjustEditor::rebuild_inks() {
+    if (!m_inks_box) return;
+    while (auto* c = m_inks_box->get_first_child()) m_inks_box->remove(*c);
+    m_ink_ui.clear();
+    for (std::size_t i = 0; i < m_a.inks.size(); ++i) {
+        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        auto swatch = Gtk::make_managed<Gtk::ColorDialogButton>(Gtk::ColorDialog::create());
+        swatch->set_name("adjust.duotone-ink-" + std::to_string(i + 1));
+        swatch->set_tooltip_text("This ink's colour -- type it, pick it, or take it with the dropper in the colour dialog");
+        swatch->property_rgba().signal_changed().connect([this, i, swatch] {
+            if (m_painting || i >= m_a.inks.size()) return;
+            const auto c = swatch->get_rgba();
+            m_a.inks[i].rgb = {c.get_red(), c.get_green(), c.get_blue()};
+            emit();
+            paint();
+        });
+        row->append(*swatch);
+        auto name = Gtk::make_managed<Gtk::Label>("Ink " + std::to_string(i + 1));
+        name->set_xalign(0.0f);
+        name->set_hexpand(true);
+        row->append(*name);
+        auto control = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Levels", "Curve"}));
+        control->set_name("adjust.duotone-control-" + std::to_string(i + 1));
+        control->set_tooltip_text("How this ink's plate is shaped: Levels (black, grey and white points) or a Curve -- "
+                                  "each is kept, so switching loses nothing");
+        control->property_selected().signal_changed().connect([this, i, control] {
+            if (m_painting || i >= m_a.inks.size()) return;
+            auto& k = m_a.inks[i];
+            const bool curve = control->get_selected() == 1;
+            if (curve == k.use_curve) return;
+            k.use_curve = curve;
+            // A curve never shaped yet starts as the Levels' shape.
+            if (curve && k.curve == std::vector<core::CurvePt>{{0, 0}, {1, 1}} && !(k.levels == core::LevelsCh{})) {
+                const auto& L = k.levels;
+                const double mid = L.in_black + (L.in_white - L.in_black) * std::pow(0.5, L.gamma);
+                k.curve = {{L.in_black, L.out_black}, {mid, A::levels_map(L, mid)}, {L.in_white, L.out_white}};
+            }
+            emit();
+            paint();
+        });
+        row->append(*control);
+        if (m_a.inks.size() > 1) {
+            auto del = Gtk::make_managed<Gtk::Button>();
+            del->set_icon_name("user-trash-symbolic");
+            del->add_css_class("flat");
+            del->set_name("adjust.duotone-remove-" + std::to_string(i + 1));
+            del->set_tooltip_text("Take this ink away");
+            del->signal_clicked().connect([this, i] {
+                if (m_a.inks.size() <= 1 || i >= m_a.inks.size()) return;
+                m_a.inks.erase(m_a.inks.begin() + static_cast<std::ptrdiff_t>(i));
+                Glib::signal_idle().connect_once([this] { rebuild_inks(); paint(); });   // not under the button's own click
+                emit();
+            });
+            row->append(*del);
+        }
+        box->append(*row);
+        auto plate = Gtk::make_managed<Gtk::DrawingArea>();
+        plate->set_name("adjust.duotone-plate-" + std::to_string(i + 1));
+        plate->set_content_height(static_cast<int>(kPlateH));
+        plate->set_hexpand(true);
+        plate->set_tooltip_text("This ink's plate over the picture's greys (the strip: the ink alone, light to dark). "
+                                "Levels: drag the black, grey and white points. Curve: click to add a point, drag it, off to remove");
+        plate->set_draw_func([this, i](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) { draw_plate(i, cr, w, h); });
+        auto drag = Gtk::GestureDrag::create();
+        drag->signal_drag_begin().connect([this, i](double x, double y) { m_begin.emit(); m_press_x = x; m_press_y = y; plate_press(i, x, y); });
+        drag->signal_drag_update().connect([this, i](double dx, double dy) { plate_drag(i, m_press_x + dx, m_press_y + dy); });
+        drag->signal_drag_end().connect([this, i](double, double) { plate_release(i); m_end.emit(); });
+        plate->add_controller(drag);
+        box->append(*plate);
+        m_inks_box->append(*box);
+        m_ink_ui.push_back({plate, swatch, control});
+    }
+}
+
+namespace {
+struct PlateGeo { double x0, x1, top, bottom, ramp, handles; };
+PlateGeo plate_geo(int w, int h) {
+    const double handles = h - kHandleH, ramp = handles - kRampH - 2;
+    return {kPad, w - kPad, 3, ramp - 3, ramp, handles};
+}
+}  // namespace
+
+void AdjustEditor::draw_plate(std::size_t i, const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+    if (i >= m_a.inks.size() || i >= m_ink_ui.size()) return;
+    const auto& k = m_a.inks[i];
+    const auto fg = fg_of(*m_ink_ui[i].plate);
+    const auto g = plate_geo(w, h);
+    const double W = std::max(1.0, g.x1 - g.x0), H = std::max(1.0, g.bottom - g.top);
+    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.06);
+    cr->rectangle(g.x0, g.top, W, H);
+    cr->fill();
+    if (m_hist) {   // the picture's greys
+        const auto& bins = (*m_hist)[0];
+        std::vector<std::uint32_t> sorted(bins.begin(), bins.end());
+        std::sort(sorted.begin(), sorted.end());
+        const double peak = std::max<double>(1, static_cast<double>(sorted[250]));
+        cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.28);
+        const double bw = W / 256;
+        for (int b = 0; b < 256; ++b) {
+            const double v = std::min(1.0, bins[static_cast<std::size_t>(b)] / peak) * H;
+            cr->rectangle(g.x0 + b * bw, g.bottom - v, bw + 0.3, v);
+        }
+        cr->fill();
+    }
+    // The plate: how much ink at each grey (up: more ink).
+    cr->set_line_width(1.5);
+    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.9);
+    for (int x = 0; x <= static_cast<int>(W); x += 2) {
+        const double t = x / W, amount = 1 - A::ink_plate(k, t);
+        const double y = g.bottom - amount * H;
+        if (x == 0) cr->move_to(g.x0 + x, y); else cr->line_to(g.x0 + x, y);
+    }
+    cr->stroke();
+    // The ink alone on paper, grey by grey.
+    for (int x = 0; x < static_cast<int>(W); ++x) {
+        const double amount = 1 - A::ink_plate(k, (x + 0.5) / W);
+        cr->set_source_rgb(1 - amount * (1 - k.rgb[0]), 1 - amount * (1 - k.rgb[1]), 1 - amount * (1 - k.rgb[2]));
+        cr->rectangle(g.x0 + x, g.ramp, 1.05, kRampH);
+        cr->fill();
+    }
+    cr->set_line_width(1);
+    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.3);
+    cr->rectangle(g.x0 - 0.5, g.ramp - 0.5, W + 1, kRampH + 1);
+    cr->stroke();
+    if (!k.use_curve) {   // Levels' three points under the strip
+        const auto& L = k.levels;
+        const double mid = L.in_black + (L.in_white - L.in_black) * std::pow(0.5, L.gamma);
+        const double xs[3] = {L.in_black, mid, L.in_white}, shade[3] = {0, 0.5, 1};
+        for (int j = 0; j < 3; ++j) {
+            tri_up(cr, g.x0 + xs[j] * W, g.handles + 1, 4.5);
+            cr->set_source_rgb(shade[j], shade[j], shade[j]);
+            cr->fill_preserve();
+            cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), static_cast<int>(i) >= 0 && m_plate_handle == j ? 1.0 : 0.7);
+            cr->stroke();
+        }
+    } else {   // the curve's points, on the plate line
+        for (std::size_t j = 0; j < k.curve.size(); ++j) {
+            if (m_plate_off && static_cast<int>(j) == m_plate_handle) continue;
+            const auto& p = k.curve[j];
+            cr->rectangle(g.x0 + p.x * W - 3, g.bottom - (1 - p.y) * H - 3, 6, 6);
+            cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), static_cast<int>(j) == m_plate_handle ? 1.0 : 0.75);
+            cr->fill();
+        }
+    }
+}
+
+void AdjustEditor::plate_press(std::size_t i, double x, double y) {
+    m_plate_handle = -1;
+    m_plate_off = false;
+    if (i >= m_a.inks.size() || i >= m_ink_ui.size()) return;
+    auto& k = m_a.inks[i];
+    const auto g = plate_geo(m_ink_ui[i].plate->get_width(), m_ink_ui[i].plate->get_height());
+    const double W = std::max(1.0, g.x1 - g.x0), H = std::max(1.0, g.bottom - g.top);
+    if (!k.use_curve) {
+        const auto& L = k.levels;
+        const double mid = L.in_black + (L.in_white - L.in_black) * std::pow(0.5, L.gamma);
+        const double xs[3] = {L.in_black, mid, L.in_white};
+        double best = 10;
+        for (int j = 0; j < 3; ++j) {
+            const double d = std::abs(g.x0 + xs[j] * W - x);
+            if (d < best || (d == best && j == 1)) { best = d; m_plate_handle = j; }
+        }
+        return;
+    }
+    double best = 8;
+    for (std::size_t j = 0; j < k.curve.size(); ++j) {
+        const double px = g.x0 + k.curve[j].x * W, py = g.bottom - (1 - k.curve[j].y) * H;
+        const double d = std::hypot(px - x, py - y);
+        if (d < best) { best = d; m_plate_handle = static_cast<int>(j); }
+    }
+    if (m_plate_handle < 0 && y <= g.bottom && k.curve.size() < 16) {   // a new point on the plate line
+        const double t = std::clamp((x - g.x0) / W, 0.0, 1.0);
+        std::size_t at = 0;
+        while (at < k.curve.size() && k.curve[at].x < t) ++at;
+        k.curve.insert(k.curve.begin() + static_cast<std::ptrdiff_t>(at), {t, A::ink_plate(k, t)});
+        m_plate_handle = static_cast<int>(at);
+        emit();
+    }
+    m_ink_ui[i].plate->queue_draw();
+}
+
+void AdjustEditor::plate_drag(std::size_t i, double x, double y) {
+    if (i >= m_a.inks.size() || i >= m_ink_ui.size() || m_plate_handle < 0) return;
+    auto& k = m_a.inks[i];
+    const auto g = plate_geo(m_ink_ui[i].plate->get_width(), m_ink_ui[i].plate->get_height());
+    const double W = std::max(1.0, g.x1 - g.x0), H = std::max(1.0, g.bottom - g.top);
+    const double t = std::clamp((x - g.x0) / W, 0.0, 1.0);
+    if (!k.use_curve) {
+        auto& L = k.levels;
+        if (m_plate_handle == 0) L.in_black = std::min(t, L.in_white - 2.0 / 255);
+        else if (m_plate_handle == 2) L.in_white = std::max(t, L.in_black + 2.0 / 255);
+        else {   // the grey point between them: its place is the gamma
+            const double u = std::clamp((t - L.in_black) / std::max(1e-6, L.in_white - L.in_black), 0.01, 0.99);
+            L.gamma = std::clamp(std::log(u) / std::log(0.5), 0.1, 9.99);
+        }
+    } else {
+        auto& pts = k.curve;
+        const auto j = static_cast<std::size_t>(m_plate_handle);
+        if (j >= pts.size()) return;
+        const double lo = j > 0 ? pts[j - 1].x + kGap : 0, hi = j + 1 < pts.size() ? pts[j + 1].x - kGap : 1;
+        pts[j] = {std::clamp(t, lo, hi), std::clamp(1 - (g.bottom - y) / H, 0.0, 1.0)};
+        // Off the plate: removed on release (two at least stay).
+        m_plate_off = pts.size() > 2 && (y < g.top - 20 || y > m_ink_ui[i].plate->get_height() + 20 || x < -20 || x > g.x1 + 28);
+    }
+    emit();
+    m_ink_ui[i].plate->queue_draw();
+}
+
+void AdjustEditor::plate_release(std::size_t i) {
+    if (m_plate_off && i < m_a.inks.size()) {
+        auto& pts = m_a.inks[i].curve;
+        if (pts.size() > 2 && m_plate_handle >= 0 && m_plate_handle < static_cast<int>(pts.size())) {
+            pts.erase(pts.begin() + m_plate_handle);
+            m_plate_off = false;
+            emit();
+        }
+    }
+    m_plate_off = false;
+    m_plate_handle = -1;
+    paint();   // the Inks dropdown: Custom now, most likely
 }
 
 // ── s064: the eyedroppers ──────────────────────────────────────────────────

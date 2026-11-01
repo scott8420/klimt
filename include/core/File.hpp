@@ -90,4 +90,10 @@ bool export_image(const std::string& path, formats::Kind kind, const Image& im,
                   const std::map<Document::Id, Layer>& layers, std::string& error,
                   const formats::Progress& p = {}, const formats::WriteOptions& o = {});
 
+// s065: one adjustment's settings as JSON text, and back -- what the
+// .klimt keeps, for core/AdjustPresets. nullopt: not one, or refused
+// (adjust::refusal).
+std::string adjust_text(const Adjust& a);
+std::optional<Adjust> adjust_parse(const std::string& text);
+
 }  // namespace klimt::core::file

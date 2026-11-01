@@ -36,7 +36,9 @@ namespace klimt::core {
 enum class AdjustKind : std::uint8_t { None, Levels, Curves, HueSat, BrightCon, Invert, Posterize, Threshold, Exposure,
                                        Vibrance, BlackWhite, PhotoFilter,
                                        // s063: the rest of WEAKNESSES 34.
-                                       ColourBalance, ChannelMixer, SelectiveColour, GradientMap };
+                                       ColourBalance, ChannelMixer, SelectiveColour, GradientMap,
+                                       // s065
+                                       Duotone };
 
 // Levels on one channel: input black / white points and gamma (the middle
 // slider, 0.1 .. 9.99, 1 = none), output black / white. All 0..1.
@@ -75,6 +77,19 @@ struct GradStop {
     bool operator==(const GradStop&) const = default;
 };
 inline constexpr std::size_t kGradStops = 32;   // the most a Gradient Map holds
+
+// s065: one ink of a Duotone (Monotone .. Quadtone). Its PLATE is the grey
+// through its own Levels -- or its own Curve, whichever `use_curve` picks
+// (both are kept, so switching loses nothing): where the plate is dark the
+// ink goes on heavy, where it is white none.
+struct Ink {
+    std::array<double, 3> rgb{};             // the ink, sRGB 0..1
+    bool use_curve = false;
+    LevelsCh levels{};
+    std::vector<CurvePt> curve{{0, 0}, {1, 1}};
+    bool operator==(const Ink&) const = default;
+};
+inline constexpr std::size_t kMaxInks = 4;
 
 struct Adjust {
     AdjustKind kind = AdjustKind::None;
@@ -134,6 +149,12 @@ struct Adjust {
     // other way; Dither is kept (and carried to PSD) but not drawn yet.
     std::vector<GradStop> grad{{0, 0.5, {0, 0, 0}}, {1, 0.5, {1, 1, 1}}};
     bool grad_reverse = false, grad_dither = false;
+    // s065: Duotone -- one to four inks printed over white paper, each by its
+    // plate; the grey from luminosity or (grey_bw) Black & White's mix `bw`.
+    // To start: black kept to the darks (gamma 1.6), and a warm brown.
+    std::vector<Ink> inks{{{0, 0, 0}, false, {0, 1, 1.6, 0, 1}, {{0, 0}, {1, 1}}},
+                          {{166 / 255.0, 124 / 255.0, 82 / 255.0}, false, {}, {{0, 0}, {1, 1}}}};
+    bool grey_bw = false;
     bool operator==(const Adjust&) const = default;
 };
 
@@ -181,6 +202,7 @@ struct Compiled {
     AdjustKind kind = AdjustKind::None;
     std::array<std::vector<float>, 3> lut;   // Levels, Curves, Brightness / Contrast; s061: Invert, Posterize, Exposure
     Adjust a;                                // Hue / Saturation runs per pixel
+    std::vector<std::vector<float>> plates;  // s065: Duotone -- each ink's amount by grey
 };
 // Cached: the compositor asks for the same few per tile.
 std::shared_ptr<const Compiled> compile(const Adjust& a);
@@ -214,6 +236,14 @@ Adjust auto_tone(const Adjust& a, const Histogram& h, double clip = 0.001);
 // point through it. The composite channel is left as it is.
 enum class Dropper : std::uint8_t { None, Black, Grey, White };
 Adjust dropped(const Adjust& a, Dropper d, const std::array<double, 3>& rgb);
+// s065: Duotone's pieces -- the grey a colour gives it, an ink's plate at a
+// grey (0 black .. 1 white), and the printed colour at a grey.
+double duotone_grey(const Adjust& a, double r, double g, double b);
+double ink_plate(const Ink& k, double grey);
+std::array<double, 3> duotone_at(const Adjust& a, double grey);
+// The Gradient Map that looks the same (PSD has no Duotone layer): 32 stops
+// along the grey.
+Adjust duotone_as_gradient(const Adjust& a);
 }  // namespace adjust
 
 }  // namespace klimt::core

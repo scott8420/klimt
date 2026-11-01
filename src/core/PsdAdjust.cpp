@@ -407,6 +407,8 @@ std::vector<Block> blocks(const Adjust& a) {
         case AdjustKind::ChannelMixer:return {{"mixr", mixr_block(a)}};
         case AdjustKind::SelectiveColour:return {{"selc", selc_block(a)}};
         case AdjustKind::GradientMap:return {{"grdm", grdm_block(a)}};
+        // s065: Photoshop has no Duotone layer -- the Gradient Map that looks the same.
+        case AdjustKind::Duotone:   return {{"grdm", grdm_block(adjust::duotone_as_gradient(a))}};
         case AdjustKind::None:      break;
     }
     return {};

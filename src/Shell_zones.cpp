@@ -273,6 +273,7 @@ Gtk::Widget& Shell::build_dock() {  // zone
         show_rulers(m_prefs.rulers);
     }
     m_strip.set_presets_file(Glib::build_filename(Glib::get_user_config_dir(), "klimt", "brushes.json"));   // s021
+    AdjustEditor::set_presets_file(Glib::build_filename(Glib::get_user_config_dir(), "klimt", "adjustments.json"));   // s065
     m_strip.set_defaults_file(Glib::build_filename(Glib::get_user_config_dir(), "klimt", "tools.json"));     // s029
     core::pattern::set_library_dir(Glib::build_filename(Glib::get_user_config_dir(), "klimt", "patterns"));   // s033
     split->set_position(m_prefs.dock_split);

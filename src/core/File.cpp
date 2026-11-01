@@ -155,6 +155,20 @@ json adjust_json(const Adjust& a) {
             j["stops"] = std::move(st); j["reverse"] = a.grad_reverse; j["dither"] = a.grad_dither;
             break;
         }
+        case AdjustKind::Duotone: {       // s065: the inks; the grey's source (and its mix)
+            json inks = json::array();
+            for (const auto& k : a.inks) {
+                json pts = json::array();
+                for (const auto& p : k.curve) pts.push_back({p.x, p.y});
+                const auto& c = k.levels;
+                inks.push_back({{"colour", k.rgb}, {"control", k.use_curve ? "curve" : "levels"},
+                                {"levels", {c.in_black, c.in_white, c.gamma, c.out_black, c.out_white}}, {"curve", std::move(pts)}});
+            }
+            j["inks"] = std::move(inks);
+            j["grey"] = a.grey_bw ? "black-white" : "luminosity";
+            j["mix"] = a.bw;
+            break;
+        }
         case AdjustKind::Invert:
         case AdjustKind::None: break;
     }
@@ -667,6 +681,34 @@ std::optional<Adjust> adjust_from(const json& j) {
             a.grad.push_back({s[0].get<double>(), s[1].get<double>(), {s[2].get<double>(), s[3].get<double>(), s[4].get<double>()}});
         }
     }
+    if (j.contains("inks")) {   // s065
+        const auto& inks = j.at("inks");
+        if (!inks.is_array() || inks.empty() || inks.size() > kMaxInks) return std::nullopt;
+        a.inks.clear();
+        for (const auto& ji : inks) {
+            Ink k;
+            const auto& c = ji.at("colour");
+            if (!c.is_array() || c.size() != 3) return std::nullopt;
+            for (std::size_t i = 0; i < 3; ++i) k.rgb[i] = c[i].get<double>();
+            k.use_curve = ji.value("control", std::string("levels")) == "curve";
+            if (ji.contains("levels")) {
+                const auto& v = ji.at("levels");
+                if (!v.is_array() || v.size() != 5) return std::nullopt;
+                k.levels = {v[0].get<double>(), v[1].get<double>(), v[2].get<double>(), v[3].get<double>(), v[4].get<double>()};
+            }
+            if (ji.contains("curve")) {
+                const auto& pts = ji.at("curve");
+                if (!pts.is_array() || pts.size() > 16) return std::nullopt;
+                k.curve.clear();
+                for (const auto& p : pts) {
+                    if (!p.is_array() || p.size() != 2) return std::nullopt;
+                    k.curve.push_back({p[0].get<double>(), p[1].get<double>()});
+                }
+            }
+            a.inks.push_back(std::move(k));
+        }
+    }
+    a.grey_bw = j.value("grey", std::string("luminosity")) == "black-white";
     a.grad_reverse = j.value("reverse", false);
     a.grad_dither = j.value("dither", false);
     if (j.contains("mono")) {
@@ -1468,6 +1510,18 @@ bool export_image(const std::string& path, formats::Kind kind, const Image& im,
     }
     error = "export as PNG, JPEG, TIFF or WebP";
     return false;
+}
+
+// s065
+std::string adjust_text(const Adjust& a) { return adjust_json(adjust::normalised(a)).dump(); }
+std::optional<Adjust> adjust_parse(const std::string& text) {
+    try {
+        const auto a = adjust_from(json::parse(text));
+        if (!a || !adjust::refusal(*a).empty()) return std::nullopt;
+        return a;
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
 }
 
 }  // namespace klimt::core::file

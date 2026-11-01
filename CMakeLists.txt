@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s064")
+set(KLIMT_BUILD "s065")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -128,6 +128,7 @@ add_library(klimt_core STATIC
     src/core/Heal.cpp         # s015 m3: the healing brushes
     src/core/Fade.cpp         # s020: Edit > Fade
     src/core/BrushPresets.cpp # s021: saved brushes
+    src/core/AdjustPresets.cpp # s065: saved adjustments
     src/core/Transfer.cpp     # s022: layers between documents
     src/core/Session.cpp      # s023: the open tabs, remembered
     src/core/ColourRange.cpp  # s024: Select > Color Range
