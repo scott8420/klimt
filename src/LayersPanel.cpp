@@ -232,8 +232,8 @@ void LayersPanel::set_outlines_off(const std::set<Id>& off) {
     queue_repaint();
 }
 
-// s056 [w10] LOG MODE (WEAKNESSES 10); unload when the bug is closed.
-static std::string w10_ids(const std::vector<std::string>& v) {
+// s056: ids for a log line, "[L1,L2]".
+static std::string ids_text(const std::vector<std::string>& v) {
     std::string s = "[";
     for (const auto& id : v) s += (s.size() > 1 ? "," : "") + id;
     return s + "]";
@@ -241,7 +241,6 @@ static std::string w10_ids(const std::vector<std::string>& v) {
 
 void LayersPanel::select(const std::vector<Id>& ids, bool keys) {
     m_sel = in_walk_order(ids);
-    if (auto lg = log::get(log::Area::Shell)) lg->info("[w10] panel select {} keys {}", w10_ids(m_sel), keys);
     m_keys_to_list = m_keys_to_list || keys;
     // A selected layer inside a collapsed group opens the group (an undo that
     // brings back a layer must show it).
@@ -287,11 +286,6 @@ void LayersPanel::repaint() {
         }
     }
     m_painting = false;
-    if (auto lg = log::get(log::Area::Shell)) {   // s056 [w10]
-        std::vector<Id> gtk;
-        for (auto* row : m_list.get_selected_rows()) gtk.push_back(row->get_name());
-        lg->info("[w10] repaint: sel {} GTK rows {} keys {}", w10_ids(m_sel), w10_ids(gtk), m_keys_to_list);
-    }
 
     if (m_rename_field) {
         m_rename_field->grab_focus();
@@ -387,6 +381,22 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
         box->append(*nb);
     } else {
         box->append(*kind);
+    }
+    // s059: the LINK between a pixel layer and its mask (Photoshop's chain).
+    if (l.mask && core::draws_pixels(l.kind)) {
+        auto link = Gtk::make_managed<Gtk::Button>();
+        link->set_icon_name("klimt-link-symbolic");
+        link->set_has_frame(false);
+        link->set_focus_on_click(false);
+        link->add_css_class("flat");
+        if (!l.mask_linked) link->set_opacity(0.3);
+        link->set_tooltip_text(l.mask_linked
+            ? "Mask linked -- they move together; click to unlink (then Move moves the layer, or the mask when it's what you paint)"
+            : "Mask UNLINKED -- Move moves the layer alone, or the mask alone when it's what you paint; click to link");
+        link->signal_clicked().connect([this, id] {
+            if (const auto cur = m_doc.get(id)) L::set_mask_linked(m_journal, m_doc, id, !cur->mask_linked);
+        });
+        box->append(*link);
     }
     // s012: the mask chip.
     if (l.mask) {
@@ -628,7 +638,7 @@ void LayersPanel::on_rows_selected() {
     // s056 (WEAKNESSES 10): no click or key on the list just now -- GTK moved
     // the selection on its own as the list took focus. Put the rows back.
     if (std::chrono::steady_clock::now() - m_input_at > std::chrono::milliseconds(800) && in_walk_order(ids) != m_sel) {
-        if (auto lg = log::get(log::Area::Shell)) lg->info("[w10] GTK changed the rows with no click or key: {} put back to {}", w10_ids(in_walk_order(ids)), w10_ids(m_sel));
+        if (auto lg = log::get(log::Area::Shell)) lg->info("layers: GTK moved the selection with no click or key ({} -> {}) -- put back", ids_text(m_sel), ids_text(in_walk_order(ids)));
         m_painting = true;
         for (auto* c = m_list.get_first_child(); c; c = c->get_next_sibling())
             if (auto* row = dynamic_cast<Gtk::ListBoxRow*>(c)) {
@@ -640,7 +650,6 @@ void LayersPanel::on_rows_selected() {
         return;
     }
     const Id was = mask_target();
-    if (auto lg = log::get(log::Area::Shell)) lg->info("[w10] rows selected (GTK) {} -> {}", w10_ids(m_sel), w10_ids(in_walk_order(ids)));
     m_sel = in_walk_order(ids);
     if (mask_target() != was) queue_repaint();   // s013: an adjustment layer's chip frames itself
     // s012: painting a mask follows the layer: another layer, its pixels.

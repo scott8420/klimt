@@ -63,8 +63,9 @@ struct Plan {
     pixel::Rect box;   // what is transformed: the selection's bounds, or all the targets hold
 };
 // "" yes, else why not (nothing to transform; a Position / All lock).
-std::string refusal(const Document& d, const std::vector<Document::Id>& selected);
-std::optional<Plan> plan(const Document& d, const std::vector<Document::Id>& selected, const pixel::Px& background);
+std::string refusal(const Document& d, const std::vector<Document::Id>& selected, const Document::Id& mask_target = {});
+std::optional<Plan> plan(const Document& d, const std::vector<Document::Id>& selected, const pixel::Px& background,
+                         const Document::Id& mask_target = {});   // s059: see move::plan
 // The box alone, from a Move plan: the selection's bounds, or everything the
 // targets hold. Pure (it scans pixels -- a worker's job); empty: nothing.
 pixel::Rect box_of(const move::Plan& p);

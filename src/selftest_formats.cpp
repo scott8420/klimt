@@ -336,7 +336,10 @@ bool same_tree(const std::map<std::string, core::Layer>& a, const std::map<std::
         core::Layer x = la, y = it->second;
         const auto px = x.pixels, py = y.pixels;
         x.pixels = y.pixels = nullptr;
+        const auto mx = x.mask, my = y.mask;   // s059: a mask comes back as a new map -- compared by its pixels
+        x.mask = y.mask = nullptr;
         if (!(x == y)) { why = "fields of " + id; return false; }
+        if (!!mx != !!my || (mx && diff(*mx, *my) != 0)) { why = "mask of " + id; return false; }
         if (!!px != !!py) { why = "pixels present on " + id; return false; }
         if (px && (px->width() != py->width() || !(px->format() == py->format()) || diff(*px, *py) != 0)) {
             why = "pixels of " + id;
@@ -449,6 +452,22 @@ void selftest_files(const Check& check) {
         const auto still = cf::open(path("doc.klimt"), err);
         check("klimt: a cancelled save leaves the old file as it was",
               cancelled && still && still->layers.at("L5").name == "Top" && !fs::exists(path("doc.klimt.partial")), err);
+        // s059: an unlinked mask stays unlinked across a save.
+        {
+            cf::Contents u = c;
+            u.layers.at("L1").mask = std::make_shared<const klimt::pixel::TileMap>(
+                klimt::pixel::TileMap(klimt::pixel::Format{f.depth, klimt::pixel::Mode::Gray, false}, c.image.width, c.image.height)
+                    .fill({0, 0, 40, 40}, klimt::pixel::rgba(1, 1, 1)));
+            u.layers.at("L1").mask_linked = false;
+            bool any = false;
+            for (const auto& [id, L] : u.layers) any = any || !L.mask_linked;
+            std::string e3, w3;
+            const bool saved3 = cf::save_klimt(path("link.klimt"), u, e3);
+            const auto b = saved3 ? cf::open(path("link.klimt"), e3) : std::nullopt;
+            check("klimt: s059 -- an unlinked mask comes back unlinked",
+                  any && b && b->layers.at("L1").mask && !b->layers.at("L1").mask_linked && same_tree(u.layers, b->layers, w3),
+                  std::string(any ? "" : "none unlinked; ") + (saved3 ? "" : "not saved; ") + (b ? "" : "not opened; ") + w3 + e3);
+        }
         // s056 (WEAKNESSES 8, 21): the view rides in the .klimt.
         {
             cf::Contents v = c;

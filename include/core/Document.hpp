@@ -117,6 +117,10 @@ struct Layer {
     // map with no tiles: a mask that hides nothing. Pixel layers only.
     std::shared_ptr<const pixel::TileMap> mask;
     bool          mask_on = true;      // Shift-click the mask: off (it stays, shows nothing)
+    // s059 (WEAKNESSES 29, 31): the chain between a pixel layer and its mask.
+    // Unlinked, Move / Free Transform move the pixels alone -- or the mask
+    // alone when it is what's painted (docs/masks.md "The link").
+    bool          mask_linked = true;
     // s036: the mask's EDGES (docs/masks.md) -- live, the mask itself never
     // changes. On a path layer they shape the path's mask.
     MaskEdges     edges;
@@ -392,6 +396,10 @@ bool delete_mask(DocJournal& j, Document& d, const Id& id);
 // under a Pixels or Alpha lock.
 bool apply_mask(DocJournal& j, Document& d, const Id& id);
 bool set_mask_on(DocJournal& j, Document& d, const Id& id, bool on);
+// s059: link / unlink a pixel or text layer's mask -- one step. Refused with
+// no mask, on a group or an adjustment (their masks: docs/masks.md), or when
+// nothing changes.
+bool set_mask_linked(DocJournal& j, Document& d, const Id& id, bool linked);
 bool invert_mask(DocJournal& j, Document& d, const Id& id);
 // s036: the mask's edges (density / feather / defringe) -- one step; quick
 // presses (a slider's drag) fold into one. Refused without a mask (a path

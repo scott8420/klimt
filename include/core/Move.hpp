@@ -37,7 +37,9 @@ using MapPtr = std::shared_ptr<const pixel::TileMap>;
 std::vector<Id> targets(const Document& d, const std::vector<Id>& selected);
 // May they move? "" yes, else why not (for a toast): nothing to move, a
 // Position or All lock (on the layer or a group above it).
-std::string refusal(const Document& d, const std::vector<Id>& selected);
+// s059: `mask_target` -- the layer whose MASK is what's painted (the Layers
+// panel's framed chip), or "". An unlinked layer's mask moves alone then.
+std::string refusal(const Document& d, const std::vector<Id>& selected, const Id& mask_target = {});
 
 // What a move starts from: the targets' pixels at the press, the selection
 // then, and (with a selection) each layer with its selected pixels lifted out.
@@ -60,7 +62,8 @@ struct Plan {
     std::map<Id, std::shared_ptr<const text::Spec>> texts;
 };
 // nullopt when refused.
-std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, const pixel::Px& background);
+std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, const pixel::Px& background,
+                         const Id& mask_target = {});
 
 // The result of moving by (dx, dy): each target's new pixels (nullptr:
 // empty) and the selection's new mask (nullptr: it went wholly off the

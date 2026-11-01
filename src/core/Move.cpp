@@ -49,8 +49,12 @@ std::vector<Id> mask_layers(const Document& d, const std::vector<Id>& selected) 
     return out;
 }
 
-std::string refusal(const Document& d, const std::vector<Id>& selected) {
+std::string refusal(const Document& d, const std::vector<Id>& selected, const Id& mask_target) {
     const auto ids = targets(d, selected);
+    // s059: an unlinked mask being painted moves whole; a selection lifts pixels.
+    if (!mask_target.empty() && d.selection_ptr() && std::find(ids.begin(), ids.end(), mask_target) != ids.end())
+        if (const auto l = d.get(mask_target); l && l->mask && !l->mask_linked)
+            return "a mask moves whole -- deselect (Ctrl+D) to move it";
     const auto masks = mask_layers(d, selected);
     if (ids.empty() && masks.empty()) {
         if (selected.empty()) return "pick a layer to move";
@@ -67,10 +71,21 @@ std::string refusal(const Document& d, const std::vector<Id>& selected) {
     return {};
 }
 
-std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, const pixel::Px& background) {
-    if (!refusal(d, selected).empty()) return std::nullopt;
+std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, const pixel::Px& background,
+                         const Id& mask_target) {
+    if (!refusal(d, selected, mask_target).empty()) return std::nullopt;
     Plan p;
     p.ids = targets(d, selected);
+    // s059: an UNLINKED mask that is what's painted moves alone -- its
+    // layer's pixels stay (the layer leaves the pixel targets, its mask rides
+    // as an adjustment's does).
+    if (!mask_target.empty() && !d.selection_ptr())
+        if (const auto l = d.get(mask_target); l && l->mask && !l->mask_linked)
+            if (const auto it = std::find(p.ids.begin(), p.ids.end(), mask_target); it != p.ids.end()) {
+                p.ids.erase(it);
+                p.mask_only.push_back(mask_target);
+                p.masks[mask_target] = l->mask;
+            }
     p.mask = d.selection_ptr();
     p.width = d.image().width;
     p.height = d.image().height;
@@ -94,7 +109,7 @@ std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, con
     for (const auto& id : p.ids) {
         const auto l = *d.get(id);
         p.original[id] = l.pixels;
-        if (l.mask) p.masks[id] = l.mask;
+        if (l.mask && l.mask_linked) p.masks[id] = l.mask;   // s059: unlinked, it stays
         if (l.kind == Kind::Text && l.text) { p.texts[id] = l.text; continue; }   // s046: moves whole
         if (p.mask) {
             const pixel::TileMap src = l.pixels ? *l.pixels : d.blank();
@@ -229,7 +244,7 @@ void put(Document& d, const Plan& p, const Result& r) {
 bool by(DocJournal& j, Document& d, const std::vector<Id>& selected, int dx, int dy,
         const pixel::Px& background, const std::string& merge_key) {
     if (dx == 0 && dy == 0) return false;
-    const auto p = plan(d, selected, background);
+    const auto p = plan(d, selected, background);   // by(): the layers, as linked
     if (!p) return false;
     const auto r = compute(*p, dx, dy);
     if (!r) return false;

@@ -924,6 +924,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 if (!read_map(l, "mask", "mask_outside", P::Format{f.depth, P::Mode::Gray, false}, m)) return std::nullopt;
                 L.mask = std::make_shared<const P::TileMap>(std::move(m));
                 L.mask_on = l.value("mask_on", true);
+                L.mask_linked = l.value("mask_linked", true);   // s059
             }
             if (l.contains("mask_edges")) {   // s036: density / feather / defringe
                 const auto& e = l.at("mask_edges");
@@ -1168,6 +1169,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         if (L.mask) {   // s012: the layer mask (s024: a group's too)
             if (!write_map(l, *L.mask, "mask", "mask_outside")) return false;
             l["mask_on"] = L.mask_on;
+            if (!L.mask_linked) l["mask_linked"] = false;   // s059
         }
         if (L.edges.any())   // s036
             l["mask_edges"] = {{"density", L.edges.density}, {"feather", L.edges.feather}, {"defringe", L.edges.defringe}};

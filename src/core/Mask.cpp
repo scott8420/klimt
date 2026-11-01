@@ -72,6 +72,16 @@ bool set_mask_on(DocJournal& j, Document& d, const Id& id, bool on) {
     return put_mask(j, d, id, l.mask, on, on ? "Enable Layer Mask" : "Disable Layer Mask");
 }
 
+bool set_mask_linked(DocJournal& j, Document& d, const Id& id, bool linked) {
+    const auto l = d.get(id);
+    if (!l || !l->mask || !draws_pixels(l->kind) || l->mask_linked == linked) return false;
+    return j.run(linked ? "Link Layer Mask" : "Unlink Layer Mask", {id}, [&] {
+        auto n = *d.get(id);
+        n.mask_linked = linked;
+        d.put(id, n);
+    });
+}
+
 bool invert_mask(DocJournal& j, Document& d, const Id& id) {
     if (!maskable(d, id)) return false;
     const auto l = *d.get(id);

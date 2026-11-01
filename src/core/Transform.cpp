@@ -298,8 +298,8 @@ std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const
 }
 
 // ── plans and verbs ─────────────────────────────────────────────────────────
-std::string refusal(const Document& d, const std::vector<Document::Id>& selected) {
-    if (auto why = move::refusal(d, selected); !why.empty()) return why == "pick a layer to move" ? "pick a layer to transform" : why;
+std::string refusal(const Document& d, const std::vector<Document::Id>& selected, const Document::Id& mask_target) {
+    if (auto why = move::refusal(d, selected, mask_target); !why.empty()) return why == "pick a layer to move" ? "pick a layer to transform" : why;
     return {};
 }
 
@@ -346,8 +346,9 @@ pixel::Rect box_of(const move::Plan& p) {
     return {x0, y0, x1 - x0, y1 - y0};
 }
 
-std::optional<Plan> plan(const Document& d, const std::vector<Document::Id>& selected, const pixel::Px& background) {
-    auto mp = move::plan(d, selected, background);
+std::optional<Plan> plan(const Document& d, const std::vector<Document::Id>& selected, const pixel::Px& background,
+                         const Document::Id& mask_target) {
+    auto mp = move::plan(d, selected, background, mask_target);
     if (!mp) return std::nullopt;
     Plan p{std::move(*mp), {}};
     p.box = box_of(p.p);

@@ -203,4 +203,50 @@ void selftest_move(const Check& check) {
         f.j.run("lock", {id}, [&] { auto l = *f.d.get(id); l.locks = core::lock::Position; f.d.put(id, l); });
         check("adjust mask: locked in place -- refused", M::refusal(f.d, {id}).find("locked") != std::string::npos, "");
     }
+    std::cout << "\n-- move: the layer-mask link (s059) --\n";
+    {
+        Fix f;
+        // L5 "Top": red 20 x 20 at (10, 10); its mask hides a block at (200, 100).
+        f.j.run("setup", {"L5"}, [&] {
+            auto l = *f.d.get("L5");
+            l.pixels = std::make_shared<const P::TileMap>(f.d.blank().fill({10, 10, 20, 20}, P::rgba(1, 0, 0)));
+            l.mask = std::make_shared<const P::TileMap>(f.d.blank_mask().fill({200, 100, 30, 30}, P::rgba(1, 1, 1)));
+            f.d.put("L5", l);
+        });
+        const auto hidden = [&](int x, int y) { const auto l = f.d.get("L5"); return l->mask && l->mask->get(x, y).c[0] > 0.5f; };
+        check("link: a new mask is linked", f.d.get("L5")->mask_linked, "");
+        check("link: unlink is one step; again changes nothing (refused)",
+              core::layers::set_mask_linked(f.j, f.d, "L5", false) && !f.d.get("L5")->mask_linked &&
+                  !core::layers::set_mask_linked(f.j, f.d, "L5", false), "");
+        check("link: a group's mask has no link (refused)", !core::layers::set_mask_linked(f.j, f.d, "L2", false), "");
+        // Unlinked, the layer picked: its pixels move, the mask stays.
+        M::by(f.j, f.d, {"L5"}, 50, 0, P::rgba(1, 1, 1));
+        check("link: unlinked -- Move moves the pixels, the mask stays", red(f.at("L5", 65, 15)) && hidden(210, 110) && !hidden(260, 110), "");
+        f.j.undo();
+        // Unlinked, the MASK what's painted: the mask moves, the pixels stay.
+        auto p = M::plan(f.d, {"L5"}, P::rgba(1, 1, 1), "L5");
+        auto r = p ? M::compute(*p, 50, 0) : std::nullopt;
+        if (r) f.j.run("Move", M::step_ids(*p), [&] { M::put(f.d, *p, *r); });
+        check("link: unlinked, the mask painted -- Move moves the mask, the pixels stay",
+              r && red(f.at("L5", 15, 15)) && !red(f.at("L5", 65, 15)) && hidden(260, 110) && !hidden(210, 110), "");
+        f.j.undo();
+        // Linked again, the mask target changes nothing: both move.
+        core::layers::set_mask_linked(f.j, f.d, "L5", true);
+        auto p2 = M::plan(f.d, {"L5"}, P::rgba(1, 1, 1), "L5");
+        auto r2 = p2 ? M::compute(*p2, 50, 0) : std::nullopt;
+        if (r2) f.j.run("Move", M::step_ids(*p2), [&] { M::put(f.d, *p2, *r2); });
+        check("link: linked -- both move, whichever is painted", r2 && red(f.at("L5", 65, 15)) && hidden(260, 110), "");
+        f.j.undo();
+        core::layers::set_mask_linked(f.j, f.d, "L5", false);
+        // Free Transform on the unlinked mask: its box is what it hides.
+        auto xp = klimt::core::xform::plan(f.d, {"L5"}, P::rgba(1, 1, 1), "L5");
+        check("link: Free Transform on the unlinked mask -- the box is the mask's", xp && xp->box.x == 200 && xp->box.w == 30, "");
+        // A selection with the unlinked mask painted: refused, said.
+        f.j.run("sel", {core::kSelectionId}, [&] {
+            core::Layer sl; sl.name = "Selection"; sl.pixels = std::make_shared<const P::TileMap>(f.d.blank_mask().fill({0, 0, 50, 50}, P::rgba(1, 1, 1)));
+            f.d.put(core::kSelectionId, sl);
+        });
+        check("link: a selection with the unlinked mask painted -- refused", M::refusal(f.d, {"L5"}, "L5").find("moves whole") != std::string::npos, "");
+        check("link: ... the layer painted: lifts pixels as ever", M::refusal(f.d, {"L5"}).empty(), "");
+    }
 }

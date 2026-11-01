@@ -39,8 +39,8 @@ void Shell::on_free_transform() {
     if (m_xform.active || m_xform.planning || m_move.active || m_stroke.active) return;
     if (!has_image()) { toast("Free Transform: no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     const auto sel = m_layers.selection();
-    if (const auto why = Xf::refusal(m_doc, sel); !why.empty()) { toast("Free Transform: " + why); return; }
-    auto mp = core::move::plan(m_doc, sel, background_px());   // cheap, as the Move tool's press
+    if (const auto why = Xf::refusal(m_doc, sel, m_layers.mask_target()); !why.empty()) { toast("Free Transform: " + why); return; }
+    auto mp = core::move::plan(m_doc, sel, background_px(), m_layers.mask_target());   // cheap, as the Move tool's press
     if (!mp) return;
     m_xform.planning = true;
     auto shared = std::make_shared<const core::move::Plan>(std::move(*mp));
@@ -131,8 +131,8 @@ void Shell::run_xform(const std::string& label, std::function<Xf::Affine(const p
     if (m_xform.active || m_move.active || m_stroke.active) return;
     if (!has_image()) { toast(label + ": no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     const auto sel = m_layers.selection();
-    if (const auto why = Xf::refusal(m_doc, sel); !why.empty()) { toast(label + ": " + why); return; }
-    auto mp = core::move::plan(m_doc, sel, background_px());
+    if (const auto why = Xf::refusal(m_doc, sel, m_layers.mask_target()); !why.empty()) { toast(label + ": " + why); return; }
+    auto mp = core::move::plan(m_doc, sel, background_px(), m_layers.mask_target());
     if (!mp) return;
     auto shared = std::make_shared<const core::move::Plan>(std::move(*mp));
     start_job(label, [this, shared, map, label](core::Jobs::Token& t) -> core::Jobs::Landing {

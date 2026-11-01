@@ -1363,6 +1363,7 @@ const std::vector<Verb>& verbs() {
              [](Document& d) { load_selection(d, {120, 110, 60, 60}); }},
         {"invert_mask",   [](DocJournal& j, Document& d) { invert_mask(j, d, "L4"); }, [](Document& d) { load_mask(d, "L4"); }},
         {"mask_off",      [](DocJournal& j, Document& d) { set_mask_on(j, d, "L4", false); }, [](Document& d) { load_mask(d, "L4"); }},
+        {"mask_unlink",   [](DocJournal& j, Document& d) { set_mask_linked(j, d, "L4", false); }, [](Document& d) { load_mask(d, "L4"); }},   // s059
         {"mask_edges",    [](DocJournal& j, Document& d) {   // s036
              MaskEdges e; e.density = 60; e.feather = 8; set_mask_edges(j, d, "L4", e); }, [](Document& d) { load_mask(d, "L4"); }},
         {"apply_mask",    [](DocJournal& j, Document& d) { apply_mask(j, d, "L4"); }, [](Document& d) { load_mask(d, "L4"); }},

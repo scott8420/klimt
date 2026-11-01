@@ -38,8 +38,8 @@ void Shell::on_move(CanvasView::MoveAt at, int dx, int dy) {
     if (at == A::Begin) {
         if (m_move.active || m_stroke.active) return;
         const auto sel = m_layers.selection();
-        if (const auto why = Mv::refusal(m_doc, sel); !why.empty()) { toast("Move: " + why); return; }
-        auto p = Mv::plan(m_doc, sel, background_px());
+        if (const auto why = Mv::refusal(m_doc, sel, m_layers.mask_target()); !why.empty()) { toast("Move: " + why); return; }
+        auto p = Mv::plan(m_doc, sel, background_px(), m_layers.mask_target());
         if (!p) return;
         m_nudge = {};   // a drag ends any run of nudges
         m_move = {};
@@ -82,8 +82,8 @@ void Shell::on_nudge(int dx, int dy) {
             if (!l || l->mask != m) { same = false; break; }
         }
     if (!same) {
-        if (const auto why = Mv::refusal(m_doc, sel); !why.empty()) { toast("Move: " + why); return; }
-        auto p = Mv::plan(m_doc, sel, background_px());
+        if (const auto why = Mv::refusal(m_doc, sel, m_layers.mask_target()); !why.empty()) { toast("Move: " + why); return; }
+        auto p = Mv::plan(m_doc, sel, background_px(), m_layers.mask_target());
         if (!p) return;
         m_nudge = {};
         m_nudge.plan = std::make_shared<const Mv::Plan>(std::move(*p));
