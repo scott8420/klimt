@@ -30,7 +30,7 @@ std::string nudge_key(const Mv::Plan& p) {
 
 pixel::Px Shell::background_px() const {
     const auto bg = m_rail.background();
-    return core::from_srgb(m_doc.image().format, bg.r, bg.g, bg.b);
+    return core::from_srgb(m_doc.image(), bg.r, bg.g, bg.b);
 }
 
 void Shell::on_move(CanvasView::MoveAt at, int dx, int dy) {

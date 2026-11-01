@@ -154,6 +154,8 @@ public:
     // s028 m2: the colours colour jitter works from -- encoded sRGB 0..1 --
     // and the document's format (each dab's colour is made in its mode).
     void colours(const pixel::Format& f, const float fg[3], const float bg[3]);
+    // s067: and the document's profile -- each dab's colour through it.
+    void colours(const Image& im, const float fg[3], const float bg[3]);
     std::vector<Dab> apply(const std::vector<Dab>& path, const Brush& b);
     double next();   // 0 .. 1
 private:
@@ -161,7 +163,7 @@ private:
     bool   m_have_last = false;
     double m_lx = 0, m_ly = 0, m_dx = 1, m_dy = 0;   // the path's direction
     bool   m_colours = false;
-    pixel::Format m_format;
+    Image  m_image;   // its format (s067: and profile)
     float  m_fg[3]{0, 0, 0}, m_bg[3]{1, 1, 1};
     bool   m_stroke_drawn = false;   // per_tip off: the stroke's one colour
     pixel::Px m_stroke_colour{};

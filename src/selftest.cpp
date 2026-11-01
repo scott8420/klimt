@@ -106,6 +106,7 @@ void selftest_modify(const std::function<void(const std::string&, bool, const st
 void selftest_masks(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_gradient(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_adjust(const std::function<void(const std::string&, bool, const std::string&)>& check);
+void selftest_colour(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s067
 void selftest_filter(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_retouch(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_brush(const std::function<void(const std::string&, bool, const std::string&)>& check);
@@ -1260,6 +1261,7 @@ int main() {
     selftest_masks([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_gradient([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_adjust([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_colour([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s067
     selftest_filter([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_retouch([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_brush([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });

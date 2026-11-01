@@ -103,8 +103,8 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         }
         const auto fmt = m_doc.image().format;
         const auto fg = m_rail.foreground(), bg = m_rail.background();
-        b.colour = core::from_srgb(fmt, fg.r, fg.g, fg.b);
-        b.background = core::from_srgb(fmt, bg.r, bg.g, bg.b);
+        b.colour = core::from_srgb(m_doc.image(), fg.r, fg.g, fg.b);   // s067: through the profile
+        b.background = core::from_srgb(m_doc.image(), bg.r, bg.g, bg.b);
         // s016: Quick Mask -- the Brush and Eraser paint the selection.
         if (m_quick_mask && !sampled && !smudge) {
             on_selection_stroke(p, erase, b, o.smoothing);
@@ -158,7 +158,7 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
         if (b.dyn.colour() && !erase && !sampled && !smudge && !on_mask) {
             const float f3[3] = {static_cast<float>(fg.r), static_cast<float>(fg.g), static_cast<float>(fg.b)};
             const float b3[3] = {static_cast<float>(bg.r), static_cast<float>(bg.g), static_cast<float>(bg.b)};
-            m_stroke.jitter.colours(fmt, f3, b3);
+            m_stroke.jitter.colours(m_doc.image(), f3, b3);
             m_stroke.tint = std::make_shared<const pixel::TileMap>(Pa::new_tint(fmt, m_doc.image().width, m_doc.image().height));
         }
         m_journal.begin(on_fmask ? (erase ? "Eraser on Filter Mask" : "Brush on Filter Mask") : on_mask ? (erase ? "Eraser on Mask" : "Brush on Mask") : (sampled || smudge ? verb : erase ? "Eraser" : "Brush Stroke"), {id});
@@ -181,7 +181,7 @@ void Shell::on_stroke(CanvasView::StrokeAt at, core::select::Pt pt, bool shift, 
             m_stroke.spot = spot;
             m_stroke.heal_brush = m_stroke.brush;
             if (spot) {
-                m_stroke.brush.colour = core::from_srgb(fmt, 0.5, 0.5, 0.5);
+                m_stroke.brush.colour = core::from_srgb(m_doc.image(), 0.5, 0.5, 0.5);
                 m_stroke.brush.opacity = 0.5;
             }
             if (!all_layers) {

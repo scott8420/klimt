@@ -37,6 +37,23 @@ bool composite_argb(const Image& im, const Layers& layers, std::vector<std::uint
 // -- unmanaged, the inverse of how the compositor shows each mode (gray =
 // luminance; CMYK = naive with full black generation; Lab via D50). Alpha 1.
 pixel::Px from_srgb(const pixel::Format& f, float r, float g, float b);
+// s067 (WEAKNESSES 14; docs/colour.md): the same through the document's
+// profile when it has one (libs/tint, relative colorimetric + BPC) -- the
+// inverse of how the compositor then shows it. No profile: as above.
+pixel::Px from_srgb(const Image& im, float r, float g, float b);
+// s067: is the document shown through its profile (a Gray / CMYK / Lab
+// document carrying one that lcms can use)?
+bool managed(const Image& im);
+// s067: the profile's description for the status bar ("" -- none; "(unreadable
+// profile)" when lcms can't read it). Cached by the profile.
+std::string profile_name(const Image& im);
+// s067 m2: an RGB document whose profile isn't sRGB (Adobe RGB, Display P3,
+// ProPhoto ...) composites in ITS space -- its numbers are its numbers --
+// and is turned to sRGB only on the way to the screen: the view's tiles
+// (`shown_argb`, in place) and the colour the Eyedropper hands the colour
+// pair (`shown`). The way in is from_srgb(Image, ...) above.
+bool display_managed(const Image& im);
+void shown_argb(const Image& im, std::vector<std::uint32_t>& argb);
 
 // s060 (WEAKNESSES 33): IMAGE > ADJUSTMENTS' PREVIEW as the render shows it,
 // put into `layers`. `exact` -- the target's own pixels through
@@ -56,6 +73,8 @@ void preview_adjust(Layers& layers, const Document::Id& target, const Adjust& a,
 // alpha 0. `radius` 1 = 3 x 3, 2 = 5 x 5 (an average, premultiplied).
 struct Sampled { float r = 0, g = 0, b = 0, a = 0; };
 Sampled sample_composite(const Image& im, const Layers& layers, int x, int y, int radius = 0);
+// s067 m2: a sampled colour as the screen shows it (see display_managed).
+Sampled shown(const Image& im, const Sampled& s);
 
 // ── s007 m4: dirty tiles ─────────────────────────────────────────────────────
 // Which tiles of the composite can differ between two snapshots of a

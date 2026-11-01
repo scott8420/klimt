@@ -86,8 +86,8 @@ void Shell::on_gradient(core::select::Pt a, core::select::Pt b) {
         s.from.c[0] = mask_hide_of(c0);
         s.to.c[0] = o.to_transparent ? s.from.c[0] : mask_hide_of(c1);
     } else {
-        s.from = core::from_srgb(fmt, c0.r, c0.g, c0.b);
-        s.to = o.to_transparent ? s.from : core::from_srgb(fmt, c1.r, c1.g, c1.b);
+        s.from = core::from_srgb(m_doc.image(), c0.r, c0.g, c0.b);   // s067: through the profile
+        s.to = o.to_transparent ? s.from : core::from_srgb(m_doc.image(), c1.r, c1.g, c1.b);
         if (o.to_transparent && fmt.alpha) s.to.c[static_cast<std::size_t>(fmt.channels() - 1)] = 0.f;
         if (o.reverse && o.to_transparent) std::swap(s.from, s.to);
         s.alpha_lock = (l->locks & core::lock::Alpha) != 0;

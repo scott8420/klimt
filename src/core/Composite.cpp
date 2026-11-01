@@ -5,9 +5,11 @@
 #include <array>
 #include "core/Adjust.hpp"
 #include "core/Live.hpp"   // s018
+#include "tint/Tint.hpp"   // s067
 
 #include <algorithm>
 #include <map>
+#include <mutex>
 #include <thread>
 #include <atomic>
 #include <cmath>
@@ -16,6 +18,27 @@ namespace klimt::core {
 
 namespace {
 using pixel::kTile;
+
+// s067: a Gray / CMYK / Lab document's profile, to sRGB and back (nullptr:
+// no profile, an RGB document, or one lcms can't use -- unmanaged).
+tint::Space space_of(pixel::Mode m) {
+    switch (m) {
+        case pixel::Mode::Gray: return tint::Space::Gray;
+        case pixel::Mode::CMYK: return tint::Space::CMYK;
+        case pixel::Mode::Lab:  return tint::Space::Lab;
+        case pixel::Mode::RGB:  break;
+    }
+    return tint::Space::RGB;
+}
+std::shared_ptr<const tint::Link> mode_link(const Image& im, bool to) {
+    if (!im.icc || im.format.mode == pixel::Mode::RGB) return nullptr;
+    return to ? tint::to_srgb(im.icc, space_of(im.format.mode)) : tint::from_srgb(im.icc, space_of(im.format.mode));
+}
+// s067 m2: an RGB document's profile, when it isn't sRGB.
+std::shared_ptr<const tint::Link> rgb_link(const Image& im, bool to) {
+    if (!im.icc || im.format.mode != pixel::Mode::RGB || tint::is_srgb(im.icc)) return nullptr;
+    return to ? tint::to_srgb(im.icc, tint::Space::RGB) : tint::from_srgb(im.icc, tint::Space::RGB);
+}
 constexpr std::size_t kPx = static_cast<std::size_t>(kTile) * kTile;
 
 // Klimt's normalised Lab (L 0..1 = 0..100; a, b 0..1 = -128..127), D50, to
@@ -55,7 +78,9 @@ struct Walker {
     int col, row;
     std::map<Document::Id, std::vector<Document::Id>> kids;   // parent -> bottom first
 
-    Walker(const Image& i, const Layers& l, int c, int r) : im(i), layers(l), col(c), row(r) {
+    std::shared_ptr<const tint::Link> link;   // s067: the profile to sRGB, or none
+
+    Walker(const Image& i, const Layers& l, int c, int r) : im(i), layers(l), col(c), row(r), link(mode_link(i, true)) {
         for (const auto& [id, layer] : layers) kids[layer.parent].push_back(id);
         for (auto& [p, v] : kids)
             std::stable_sort(v.begin(), v.end(), [&](const auto& a, const auto& b) {
@@ -101,6 +126,27 @@ struct Walker {
         thread_local std::vector<float> raw;
         t->premultiplied(raw);
         out.resize(kPx * 4);
+        if (link) {   // s067: through the document's profile
+            thread_local std::vector<float> src, rgb;
+            const int cc = f.colour_channels();
+            src.resize(kPx * static_cast<std::size_t>(cc));
+            rgb.resize(kPx * 3);
+            for (std::size_t i = 0; i < kPx; ++i) {
+                const float* s = raw.data() + i * static_cast<std::size_t>(n);
+                const float a = f.alpha ? s[n - 1] : 1.f;
+                for (int c = 0; c < cc; ++c)
+                    src[i * static_cast<std::size_t>(cc) + static_cast<std::size_t>(c)] = a > 0.f ? s[c] / a : 0.f;
+            }
+            link->run(src.data(), rgb.data(), kPx);
+            for (std::size_t i = 0; i < kPx; ++i) {
+                const float a = f.alpha ? raw[i * static_cast<std::size_t>(n) + static_cast<std::size_t>(n - 1)] : 1.f;
+                float* d = out.data() + i * 4;
+                for (int c = 0; c < 3; ++c) d[c] = rgb[i * 3 + static_cast<std::size_t>(c)] * a;
+                d[3] = a;
+            }
+            masked();
+            return true;
+        }
         for (std::size_t i = 0; i < kPx; ++i) {
             const float* s = raw.data() + i * static_cast<std::size_t>(n);
             float* d = out.data() + i * 4;
@@ -338,6 +384,50 @@ pixel::Px from_srgb(const pixel::Format& f, float r, float g, float b) {
     }
     if (f.alpha) p.c[static_cast<std::size_t>(f.channels() - 1)] = 1.f;
     return p;
+}
+
+pixel::Px from_srgb(const Image& im, float r, float g, float b) {
+    auto link = mode_link(im, false);
+    if (!link) link = rgb_link(im, false);   // m2
+    if (!link) return from_srgb(im.format, r, g, b);
+    const float in[3] = {r, g, b};
+    float out[4] = {};
+    link->run(in, out, 1);
+    pixel::Px p;
+    for (int c = 0; c < link->out; ++c) p.c[static_cast<std::size_t>(c)] = out[c];
+    if (im.format.alpha) p.c[static_cast<std::size_t>(im.format.channels() - 1)] = 1.f;
+    return p;
+}
+
+bool managed(const Image& im) { return mode_link(im, true) != nullptr; }
+
+bool display_managed(const Image& im) { return im.format.mode == pixel::Mode::RGB && tint::display(im.icc) != nullptr; }
+
+void shown_argb(const Image& im, std::vector<std::uint32_t>& argb) {
+    if (im.format.mode != pixel::Mode::RGB || argb.empty()) return;
+    if (const auto d = tint::display(im.icc)) d->run(argb.data(), argb.size());
+}
+
+Sampled shown(const Image& im, const Sampled& s) {
+    const auto link = rgb_link(im, true);
+    if (!link) return s;
+    const float in[3] = {s.r, s.g, s.b};
+    float out[3] = {};
+    link->run(in, out, 1);
+    return {out[0], out[1], out[2], s.a};
+}
+
+std::string profile_name(const Image& im) {
+    if (!im.icc || im.icc->empty()) return {};
+    static std::mutex mu;
+    static std::map<const std::vector<std::uint8_t>*, std::pair<std::shared_ptr<const std::vector<std::uint8_t>>, std::string>> names;
+    std::lock_guard lk(mu);
+    if (auto it = names.find(im.icc.get()); it != names.end()) return it->second.second;
+    const auto i = tint::inspect(*im.icc);
+    std::string n = !i.ok ? "(unreadable profile)" : i.name.empty() ? "(unnamed profile)" : i.name;
+    if (names.size() > 16) names.clear();
+    names[im.icc.get()] = {im.icc, n};
+    return n;
 }
 
 void composite_tile_argb(const Image& im, const Layers& layers, int col, int row,

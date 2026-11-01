@@ -95,8 +95,14 @@ double Jitter::next() {   // xorshift64*: small, fast, the same everywhere
 
 void Jitter::colours(const pixel::Format& f, const float fg[3], const float bg[3]) {
     m_colours = true;
-    m_format = f;
+    m_image = Image{};
+    m_image.format = f;
     for (int i = 0; i < 3; ++i) { m_fg[i] = fg[i]; m_bg[i] = bg[i]; }
+}
+
+void Jitter::colours(const Image& im, const float fg[3], const float bg[3]) {
+    colours(im.format, fg, bg);
+    m_image.icc = im.icc;
 }
 
 void jitter_hsb(float rgb[3], double dh, double ds, double dv) {
@@ -133,7 +139,7 @@ pixel::Px Jitter::colour_of(const Brush& b) {
     for (int i = 0; i < 3; ++i) rgb[i] = static_cast<float>(m_fg[i] + (m_bg[i] - m_fg[i]) * t);
     const double dh = (next() * 2 - 1) * 0.5 * y.hue, ds = (next() * 2 - 1) * y.sat, dv = (next() * 2 - 1) * y.bri;
     if (dh != 0 || ds != 0 || dv != 0) jitter_hsb(rgb, dh, ds, dv);
-    return from_srgb(m_format, rgb[0], rgb[1], rgb[2]);
+    return from_srgb(m_image, rgb[0], rgb[1], rgb[2]);
 }
 
 std::vector<Dab> Jitter::apply(const std::vector<Dab>& path, const Brush& b) {

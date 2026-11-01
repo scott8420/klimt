@@ -14,7 +14,7 @@ std::shared_ptr<const pixel::TileMap> text_pixels(const Image& im, const text::S
     const auto cov = text::render(s, im.width, im.height);
     if (cov.at.empty()) return nullptr;
     const pixel::Format& f = im.format;
-    const pixel::Px ink = from_srgb(f, s.colour[0], s.colour[1], s.colour[2]);
+    const pixel::Px ink = from_srgb(im, s.colour[0], s.colour[1], s.colour[2]);
     const auto ai = static_cast<std::size_t>(f.channels() - 1);
     std::uint32_t last_key = 0xFFFFFFFFu;
     pixel::Px last = ink;
@@ -39,7 +39,7 @@ std::shared_ptr<const pixel::TileMap> text_pixels(const Image& im, const text::S
                         const std::uint32_t key = (std::uint32_t{cov.rgb[i]} << 16) | (std::uint32_t{cov.rgb[i + 1]} << 8) | cov.rgb[i + 2];
                         if (key != last_key) {
                             last_key = key;
-                            last = from_srgb(f, cov.rgb[i] / 255.f, cov.rgb[i + 1] / 255.f, cov.rgb[i + 2] / 255.f);
+                            last = from_srgb(im, cov.rgb[i] / 255.f, cov.rgb[i + 1] / 255.f, cov.rgb[i + 2] / 255.f);
                         }
                         p = last;
                     }

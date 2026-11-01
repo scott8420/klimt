@@ -200,8 +200,10 @@ void Shell::update_summary() {   // s012: says when the mask is what's painted
                      : im.format.mode == pixel::Mode::Lab ? "Lab" : "Gray";
     const char* depth = im.format.depth == pixel::Depth::U8 ? "8-bit" : im.format.depth == pixel::Depth::U16 ? "16-bit"
                       : "32-bit float";
+    // s067: the colour profile, when the document has one.
+    const std::string prof = core::profile_name(im);
     m_status.set_summary(std::to_string(im.width) + " × " + std::to_string(im.height) + " px  ·  " + mode + " " +
-                         depth + "  ·  " + s + (n ? "  ·  " + std::to_string(n) + " selected" : std::string{}) +
+                         depth + (prof.empty() ? std::string{} : "  ·  " + prof) + "  ·  " + s + (n ? "  ·  " + std::to_string(n) + " selected" : std::string{}) +
                          (m_layers.mask_target().empty() ? std::string{} : "  ·  painting the MASK (white shows, black hides)"));
 }
 
@@ -361,6 +363,7 @@ void Shell::queue_render() {
                     if (!r) return [] {};
                     auto px = std::make_shared<std::vector<std::uint32_t>>();
                     if (!core::composite_reduced_argb(*r, *px, stop)) return [] {};
+                    core::shown_argb(im, *px);   // s067: the profile to the screen
                     return [this, px, k, w = r->image.width, h = r->image.height] {
                         std::vector<std::pair<int, int>> still;   // only where the tile itself hasn't landed
                         for (int row = 0; row < m_dirty.rows; ++row)
@@ -386,8 +389,10 @@ void Shell::queue_render() {
                     tile.row = row;
                     if (!view.empty() && shared->count(view) && shared->at(view).mask)   // s012: the mask itself
                         core::mask_tile_argb(*shared->at(view).mask, col, row, *px, tile.w, tile.h);
-                    else
+                    else {
                         core::composite_tile_argb(im, *shared, col, row, *px, tile.w, tile.h);
+                        if (chan < 0) core::shown_argb(im, *px);   // s067: the profile to the screen (a channel alone: its own numbers)
+                    }
                     // s026: one colour channel alone, as grey.
                     if (chan >= 0 && view.empty())
                         for (auto& v : *px) {

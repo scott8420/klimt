@@ -140,7 +140,7 @@ void Shell::run_pixel_job(const std::string& verb, bool fill, ToolRail::RGB colo
     const auto before = l->pixels;
     const auto mask = m_doc.selection_ptr();
     const auto blank = m_doc.blank();
-    const pixel::Px px = core::from_srgb(m_doc.image().format, colour.r, colour.g, colour.b);
+    const pixel::Px px = core::from_srgb(m_doc.image(), colour.r, colour.g, colour.b);
     const std::string label = (fill ? "Fill “" : "Delete in “") + l->name + "”";
     start_job(label, [this, id, before, mask, blank, px, fill, alpha_lock, label](core::Jobs::Token& t) -> core::Jobs::Landing {
         const pixel::TileMap& src = before ? *before : blank;
@@ -255,7 +255,7 @@ void Shell::on_pick(int x, int y, bool background) {
     }
     m_jobs.submit("Eyedropper", [this, im, layers = std::move(layers), x, y, radius, background](core::Jobs::Token&)
                                     -> core::Jobs::Landing {
-        const auto s = core::sample_composite(im, layers, x, y, radius);
+        const auto s = core::shown(im, core::sample_composite(im, layers, x, y, radius));   // s067: as the screen shows it
         return [this, s, background] {
             if (s.a <= 0.f) { toast("Eyedropper: nothing there (transparent)"); return; }
             const ToolRail::RGB c{s.r, s.g, s.b};
