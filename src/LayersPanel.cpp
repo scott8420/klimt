@@ -75,6 +75,23 @@ LayersPanel::LayersPanel(core::Document& doc, core::DocJournal& journal)
     m_list.set_selection_mode(Gtk::SelectionMode::MULTIPLE);
     m_list.set_activate_on_single_click(false);
     m_list.signal_selected_rows_changed().connect(sigc::mem_fun(*this, &LayersPanel::on_rows_selected));
+    // s056: a click or a key ON the list -- what may change its selection
+    // (CAPTURE: seen before the list's own handlers; never claimed).
+    {
+        auto press = Gtk::GestureClick::create();
+        press->set_button(0);
+        press->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+        press->signal_pressed().connect([this](int, double, double) { m_input_at = std::chrono::steady_clock::now(); });
+        press->signal_released().connect([this](int, double, double) { m_input_at = std::chrono::steady_clock::now(); });
+        m_list.add_controller(press);
+        auto typed = Gtk::EventControllerKey::create();
+        typed->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+        typed->signal_key_pressed().connect([this](guint, guint, Gdk::ModifierType) {
+            m_input_at = std::chrono::steady_clock::now();
+            return false;
+        }, false);
+        m_list.add_controller(typed);
+    }
     // Delete / F2 when the list has the keyboard. BUBBLE: a rename field in a
     // row takes its own keys first.
     auto keys = Gtk::EventControllerKey::create();
@@ -215,8 +232,16 @@ void LayersPanel::set_outlines_off(const std::set<Id>& off) {
     queue_repaint();
 }
 
+// s056 [w10] LOG MODE (WEAKNESSES 10); unload when the bug is closed.
+static std::string w10_ids(const std::vector<std::string>& v) {
+    std::string s = "[";
+    for (const auto& id : v) s += (s.size() > 1 ? "," : "") + id;
+    return s + "]";
+}
+
 void LayersPanel::select(const std::vector<Id>& ids, bool keys) {
     m_sel = in_walk_order(ids);
+    if (auto lg = log::get(log::Area::Shell)) lg->info("[w10] panel select {} keys {}", w10_ids(m_sel), keys);
     m_keys_to_list = m_keys_to_list || keys;
     // A selected layer inside a collapsed group opens the group (an undo that
     // brings back a layer must show it).
@@ -262,6 +287,11 @@ void LayersPanel::repaint() {
         }
     }
     m_painting = false;
+    if (auto lg = log::get(log::Area::Shell)) {   // s056 [w10]
+        std::vector<Id> gtk;
+        for (auto* row : m_list.get_selected_rows()) gtk.push_back(row->get_name());
+        lg->info("[w10] repaint: sel {} GTK rows {} keys {}", w10_ids(m_sel), w10_ids(gtk), m_keys_to_list);
+    }
 
     if (m_rename_field) {
         m_rename_field->grab_focus();
@@ -595,7 +625,22 @@ void LayersPanel::on_rows_selected() {
     if (m_painting) return;
     std::vector<Id> ids;
     for (auto* row : m_list.get_selected_rows()) ids.push_back(row->get_name());
+    // s056 (WEAKNESSES 10): no click or key on the list just now -- GTK moved
+    // the selection on its own as the list took focus. Put the rows back.
+    if (std::chrono::steady_clock::now() - m_input_at > std::chrono::milliseconds(800) && in_walk_order(ids) != m_sel) {
+        if (auto lg = log::get(log::Area::Shell)) lg->info("[w10] GTK changed the rows with no click or key: {} put back to {}", w10_ids(in_walk_order(ids)), w10_ids(m_sel));
+        m_painting = true;
+        for (auto* c = m_list.get_first_child(); c; c = c->get_next_sibling())
+            if (auto* row = dynamic_cast<Gtk::ListBoxRow*>(c)) {
+                const bool want = std::find(m_sel.begin(), m_sel.end(), Id(row->get_name())) != m_sel.end();
+                if (want && !row->is_selected()) m_list.select_row(*row);
+                else if (!want && row->is_selected()) m_list.unselect_row(row);
+            }
+        m_painting = false;
+        return;
+    }
     const Id was = mask_target();
+    if (auto lg = log::get(log::Area::Shell)) lg->info("[w10] rows selected (GTK) {} -> {}", w10_ids(m_sel), w10_ids(in_walk_order(ids)));
     m_sel = in_walk_order(ids);
     if (mask_target() != was) queue_repaint();   // s013: an adjustment layer's chip frames itself
     // s012: painting a mask follows the layer: another layer, its pixels.

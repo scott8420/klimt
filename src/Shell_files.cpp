@@ -102,6 +102,10 @@ void Shell::adopt(core::file::Contents c, const std::string& path, const std::st
     m_canvas.set_document(c.image.width, c.image.height);
     m_dirty = {};
     m_canvas.fit();
+    if (c.view.set) {   // s056: the view the .klimt was saved with
+        m_canvas.set_view({c.view.zoom, c.view.cx, c.view.cy, c.view.fit});
+        m_layers.set_collapsed(c.view.collapsed);
+    }
     update_title();
     update_summary();
     std::string note;
@@ -448,6 +452,10 @@ void Shell::save_to(const std::string& path, std::function<void()> then) {
     c.channels = m_doc.channels();   // s016
     c.selection = m_doc.selection_ptr();   // s026
     c.next_id = m_doc.next_id();
+    {   // s056: the view goes with it (WEAKNESSES 8, 21)
+        const auto v = m_canvas.view();
+        c.view = {true, v.fit, v.zoom, v.cx, v.cy, m_layers.collapsed()};
+    }
     const auto mark = m_journal.mark();
     const std::string name = fs::path(path).filename().string();
     m_folder = fs::path(path).parent_path().string();

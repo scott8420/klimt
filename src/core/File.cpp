@@ -12,6 +12,7 @@
 #include "json.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <thread>
 #include <atomic>
 #include <bit>
@@ -973,6 +974,33 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
         }
     }
     if (const auto bad = check_tree(c); !bad.empty()) { error = "a damaged Klimt file (" + bad + ")"; return std::nullopt; }
+    // s056: the view it was saved with. Anything odd in it is dropped, never
+    // a reason to refuse the file: a zoom out of reach or not a number fits;
+    // a collapsed id that isn't a group here is left out.
+    if (const auto vi = doc.find("view"); vi != doc.end() && vi->is_object()) {
+        const json& v = *vi;
+        const auto num = [&](const char* k, double& out) {
+            const auto it = v.find(k);
+            if (it == v.end() || !it->is_number()) return false;
+            out = it->get<double>();
+            return std::isfinite(out);
+        };
+        View w;
+        w.set = true;
+        w.fit = v.value("fit", true);
+        double z = 0, x = 0, y = 0;
+        if (!w.fit && num("zoom", z) && num("centre_x", x) && num("centre_y", y) && z >= 0.001 && z <= 1000) {
+            w.zoom = z; w.cx = x; w.cy = y;
+        } else {
+            w.fit = true;
+        }
+        if (const auto ci = v.find("collapsed"); ci != v.end() && ci->is_array())
+            for (const auto& id : *ci)
+                if (id.is_string())
+                    if (const auto it = c.layers.find(id.get<std::string>()); it != c.layers.end() && it->second.kind == Kind::Group)
+                        w.collapsed.push_back(it->first);
+        c.view = std::move(w);
+    }
     p.at(1);
     return c;
 }
@@ -1067,6 +1095,12 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         doc["image"]["origin_y"] = c.image.origin_y;
     }
     doc["next_id"] = c.next_id;
+    if (c.view.set) {   // s056
+        json collapsed = json::array();
+        for (const auto& id : c.view.collapsed) collapsed.push_back(id);
+        doc["view"] = {{"fit", c.view.fit}, {"zoom", c.view.zoom}, {"centre_x", c.view.cx}, {"centre_y", c.view.cy},
+                       {"collapsed", std::move(collapsed)}};
+    }
     std::unordered_map<const P::Tile*, std::string> named;   // a shared tile, written once
     std::vector<P::Format> packed_fmt;   // each packed tile's format (its byte order)
     json layers = json::array();

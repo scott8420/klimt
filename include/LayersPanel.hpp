@@ -23,6 +23,7 @@
 #include <gtkmm/spinbutton.h>
 #include <gtkmm/togglebutton.h>
 
+#include <chrono>
 #include <functional>
 #include <set>
 #include <sigc++/signal.h>
@@ -48,6 +49,9 @@ public:
     // s007: a different document -- forget the old one's selection and
     // collapsed groups (its ids may be reused by the new one).
     void forget_view() { m_sel.clear(); m_collapsed.clear(); queue_repaint(); }
+    // s056: the collapsed groups, kept in the .klimt with the view.
+    std::vector<Id> collapsed() const { return {m_collapsed.begin(), m_collapsed.end()}; }
+    void set_collapsed(const std::vector<Id>& ids) { m_collapsed = {ids.begin(), ids.end()}; queue_repaint(); }
     void queue_repaint();
     // Called after every repaint: the Shell greys its layer actions here.
     void set_on_change(std::function<void()> f) { m_changed = std::move(f); }
@@ -106,6 +110,13 @@ private:
     Id                m_renaming;           // the row whose name is a field
     Gtk::Entry*       m_rename_field = nullptr;   // that field, this repaint (managed by its row)
     bool              m_painting = false;   // a repaint sets fields: not a user choice
+    // s056 (WEAKNESSES 10): when a click or key last reached the list. GTK
+    // re-selects the row it last focused, alone, when the list takes focus
+    // (the Layers tab shown again, a row given the keyboard) -- a change no
+    // one asked for, which dropped a multi-selection an undo had just made.
+    // A selection change with no click or key on the list just before it is
+    // put back.
+    std::chrono::steady_clock::time_point m_input_at{};
     bool              m_repaint_queued = false;
     bool              m_keys_to_list = false;
     std::function<void()> m_changed;

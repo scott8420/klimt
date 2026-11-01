@@ -38,6 +38,7 @@ void Shell::on_undo() {
     const auto r = m_journal.undo();
     if (!r.done) return;
     toast("Undid " + r.label);
+    if (auto lg = log::get(log::Area::Shell)) lg->info("[w10] undo hands back {} items", r.selection.size());   // s056 log mode
     m_layers.select(r.selection, !focus_is_text());
     if (auto lg = log::get(log::Area::Shell)) lg->info("undo: {}", r.label);
 }
@@ -129,12 +130,32 @@ void Shell::set_rail(bool open) {
 
 // A History row: walk the journal to that point, one undo / redo at a time
 // (the one door), then select what the last step hands back.
+// s056 [w10] LOG MODE (WEAKNESSES 10) -- loaded to find why a jump back over a
+// two-layer step re-selected one; unload when the bug is closed.
+static std::string w10_ids(const std::vector<std::string>& v) {
+    std::string s = "[";
+    for (const auto& id : v) s += (s.size() > 1 ? "," : "") + id;
+    return s + "]";
+}
+
 void Shell::on_history_go(std::size_t position) {
     text_close();   // s046
+    auto lg = log::get(log::Area::Shell);
+    if (lg) lg->info("[w10] history go: {} -> {}, panel sel {}", m_journal.position(), position, w10_ids(m_layers.selection()));
     core::DocJournal::Result last;
-    while (m_journal.position() > position) last = m_journal.undo();
-    while (m_journal.position() < position) last = m_journal.redo();
+    while (m_journal.position() > position) {
+        if (lg) if (const auto* st = m_journal.last_done())
+            lg->info("[w10]   undo \"{}\" sel_before {} sel_after {}", st->label, w10_ids(st->sel_before), w10_ids(st->sel_after));
+        last = m_journal.undo();
+        if (lg) lg->info("[w10]   -> hands back {}", w10_ids(last.selection));
+    }
+    while (m_journal.position() < position) {
+        last = m_journal.redo();
+        if (lg) if (const auto* st = m_journal.last_done())
+            lg->info("[w10]   redo \"{}\" sel_before {} sel_after {} -> hands back {}", st->label, w10_ids(st->sel_before), w10_ids(st->sel_after), w10_ids(last.selection));
+    }
     if (last.done) m_layers.select(last.selection, false);
+    if (lg) lg->info("[w10] history go done: panel sel {}", w10_ids(m_layers.selection()));
 }
 
 void Shell::on_palette() {

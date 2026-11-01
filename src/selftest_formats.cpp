@@ -449,6 +449,26 @@ void selftest_files(const Check& check) {
         const auto still = cf::open(path("doc.klimt"), err);
         check("klimt: a cancelled save leaves the old file as it was",
               cancelled && still && still->layers.at("L5").name == "Top" && !fs::exists(path("doc.klimt.partial")), err);
+        // s056 (WEAKNESSES 8, 21): the view rides in the .klimt.
+        {
+            cf::Contents v = c;
+            std::string gid;
+            for (const auto& [id, L] : v.layers) if (L.kind == core::Kind::Group) { gid = id; break; }
+            v.view = {true, false, 2.5, 123.5, 77.25, {gid, "L1", "nope"}};   // L1 is a pixel layer; "nope" isn't there
+            const bool ok = cf::save_klimt(path("view.klimt"), v, err);
+            const auto b = cf::open(path("view.klimt"), err);
+            check("klimt: s056 -- the view comes back: zoom, centre, not fitting",
+                  ok && b && b->view.set && !b->view.fit && b->view.zoom == 2.5 && b->view.cx == 123.5 && b->view.cy == 77.25, err);
+            check("klimt: s056 -- collapsed groups come back; an id that isn't a group here is left out",
+                  b && !gid.empty() && b->view.collapsed == std::vector<std::string>{gid}, gid);
+            const auto none = cf::open(path("doc.klimt"), err);
+            check("klimt: s056 -- a file saved without a view opens fitting, nothing collapsed",
+                  none && !none->view.set && none->view.collapsed.empty(), "");
+            v.view = {true, false, 1e9, 1, 1, {}};   // a zoom out of reach
+            const bool ok2 = cf::save_klimt(path("view2.klimt"), v, err);
+            const auto b2 = cf::open(path("view2.klimt"), err);
+            check("klimt: s056 -- a zoom out of reach opens fitting (the file still opens)", ok2 && b2 && b2->view.set && b2->view.fit, err);
+        }
         // s055 (Responsive): tiles deflated on the cores and handed to the zip
         // already deflated; read back on the cores, one zip handle a thread.
         {

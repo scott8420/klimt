@@ -36,6 +36,17 @@ constexpr int kVersion = 1;   // document.json's "klimt": a newer one is refused
 // and `Thumbnails/thumbnail.png` at 256. Written on every save; never read.
 constexpr int kPreviewSide = 1024;
 
+// s056 (WEAKNESSES 8, 21): how the document was being looked at when it was
+// saved -- the zoom and the image point at the window's centre (or fitting),
+// and the collapsed groups. Kept in a .klimt's document.json ("view"); not a
+// step, not a change (moving the view doesn't make the document unsaved).
+struct View {
+    bool   set = false;          // false: the file had none -- fit, all open
+    bool   fit = true;
+    double zoom = 1, cx = 0, cy = 0;
+    std::vector<Document::Id> collapsed;
+};
+
 // A whole document: what Document::replace takes, what a save writes.
 struct Contents {
     Image                     image;
@@ -45,6 +56,7 @@ struct Contents {
     int                       next_id = 1;
     formats::Kind             kind = formats::Kind::Unknown;   // what it was opened from
     std::vector<std::string>  notes;                           // "first page of 3"
+    View                      view;                            // s056: .klimt only
 };
 
 // Open anything Klimt reads: a .klimt, an OpenRaster (s049, core/Ora.hpp),
