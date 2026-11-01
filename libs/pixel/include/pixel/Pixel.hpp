@@ -62,6 +62,10 @@ public:
     // bytes on a format WITH alpha are fully transparent and come back
     // nullptr (an absent tile). A wrong size comes back nullptr too.
     static std::shared_ptr<const Tile> from_bytes(const Format& f, std::vector<std::uint8_t> data);
+    // s055 -- a uniform tile from ONE stored pixel (bytes_per_pixel bytes, as
+    // from_bytes): what a .klimt file keeps for a tile of one colour. All-zero
+    // on a format with alpha: nullptr, as from_bytes. A wrong size: nullptr.
+    static std::shared_ptr<const Tile> uniform_bytes(const Format& f, std::vector<std::uint8_t> pixel);
     // The stored bytes: one pixel when uniform, else the whole tile.
     const std::uint8_t* data() const { return m_data.data(); }
 

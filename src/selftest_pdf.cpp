@@ -118,8 +118,63 @@ void selftest_pdf(const Check& check) {
         ls4["G"] = L{}; ls4["G"].kind = core::Kind::Group; ls4["G"].name = "Words"; ls4["G"].pos = 5; ls4["G"].blend = core::Blend::PassThrough;
         ls4["L4"].parent = "G"; ls4["L4"].pos = 1;
         const auto p4 = pdf::plan(im, ls4);
-        check("pdf: type inside a group bakes; Title under the plain group stays type",
-              p4.live == std::vector<std::string>{"L2"} && has(p4.list.baked, "1 text layer as pixels -- inside a group"), "");
+        check("pdf: s055 -- type inside a plain Pass Through group stays type",
+              p4.live == std::vector<std::string>{"L2", "L4"} && p4.list.baked.empty(), p4.list.baked.empty() ? "" : p4.list.baked[0]);
+        // Nested plain groups, and a Multiply layer BELOW the type inside them: still type.
+        auto n = ls4;
+        n["H"] = L{}; n["H"].kind = core::Kind::Group; n["H"].name = "Inner"; n["H"].parent = "G"; n["H"].pos = 2; n["H"].blend = core::Blend::PassThrough;
+        n["L4"].parent = "H"; n["L4"].pos = 2;
+        n["M"] = patch; n["M"].name = "Shade"; n["M"].parent = "H"; n["M"].pos = 1; n["M"].blend = core::Blend::Multiply;
+        // (Title, under the Multiply, bakes -- it blends with it.)
+        const auto pn = pdf::plan(im, n);
+        check("pdf: s055 -- nested plain groups, a Multiply below the type inside: type",
+              pn.live == std::vector<std::string>{"L4"} && has(pn.list.baked, "1 text layer as pixels -- under a layer that blends"), "");
+        // ... and a Multiply ABOVE it inside the group bakes both (it blends with them).
+        n["M"].pos = 3;
+        const auto pm = pdf::plan(im, n);
+        check("pdf: s055 -- a Multiply above the type inside the group: both bake",
+              pm.live.empty() && has(pm.list.baked, "2 text layers as pixels -- under a layer that blends"), pm.list.baked.empty() ? "" : pm.list.baked[0]);
+        // What keeps a group from opening: each one alone.
+        const auto group_bakes = [&](const std::function<void(std::map<std::string, L>&)>& how) {
+            auto g = ls4;
+            how(g);
+            const auto pg = pdf::plan(im, g);
+            return pg.live == std::vector<std::string>{"L2"} && has(pg.list.baked, "1 text layer as pixels -- inside a group");
+        };
+        check("pdf: s055 -- a group at 50 % opacity: its type bakes", group_bakes([](auto& g) { g["G"].opacity = 50; }), "");
+        check("pdf: s055 -- an isolated (Normal) group: its type bakes", group_bakes([](auto& g) { g["G"].blend = core::Blend::Normal; }), "");
+        check("pdf: s055 -- a group with styles: its type bakes", group_bakes([](auto& g) { g["G"].styles.stroke.on = true; }), "");
+        check("pdf: s055 -- a group with a mask: its type bakes", group_bakes([&](auto& g) { g["G"].mask = std::make_shared<const P::TileMap>(P::TileMap(P::Format{P::Depth::U8, P::Mode::Gray, false}, W, H)); }), "");
+        check("pdf: s055 -- a layer clipped to the group: its type bakes", group_bakes([&](auto& g) { g["C"] = patch; g["C"].name = "Clip"; g["C"].pos = 6; g["C"].clipped = true; }), "");
+        check("pdf: s055 -- a clipped bottom layer inside the group: its type bakes", group_bakes([&](auto& g) { g["C"] = patch; g["C"].name = "Clip"; g["C"].parent = "G"; g["C"].pos = 0.5; g["C"].clipped = true; }), "");
+        check("pdf: s055 -- a path mask inside the group: its type bakes", group_bakes([&](auto& g) {
+            g["P"] = L{}; g["P"].kind = core::Kind::Path; g["P"].name = "Path"; g["P"].parent = "G"; g["P"].pos = 0.5; g["P"].path_mask = true;
+        }), "");
+        // A hidden group's type isn't drawn: not counted at all.
+        auto hid = ls4;
+        hid["G"].visible = false;
+        const auto ph = pdf::plan(im, hid);
+        check("pdf: s055 -- type in a hidden group: not drawn, not listed", ph.live == std::vector<std::string>{"L2"} && ph.list.baked.empty(), "");
+        // A path mask two layers above still masks the type (every layer below it at its level).
+        auto pth = ls;
+        pth["P"] = L{}; pth["P"].kind = core::Kind::Path; pth["P"].name = "Path"; pth["P"].pos = 3.5; pth["P"].path_mask = true;   // over Patch, Title further down
+        const auto pp = pdf::plan(im, pth);
+        check("pdf: s055 -- a path mask over the layer above still masks the type: it bakes",
+              pp.live == std::vector<std::string>{"L4"} && has(pp.list.baked, "1 text layer as pixels -- a layer is clipped or path-masked"), "");
+        // Written: the grouped Caption is type in the file -- a font, and a band between.
+        {
+            const std::string f = at("grouped.pdf");
+            std::string err;
+            std::vector<std::string> notes;
+            auto w = n;
+            w["M"].pos = 1;   // the Multiply back below the type
+            const bool ok = pdf::save(f, im, w, "grouped", err, notes);
+            const std::string b = ok ? slurp(f) : std::string{};
+            check("pdf: s055 -- grouped type written as type: a font, the picture below it",
+                  ok && b.find("/FontFile") != std::string::npos && count(b, "/Subtype /Image") >= 1 && has(notes, "1 text layer as type"), err);
+            std::string e2;
+            core::file::export_image(at("grouped.png"), klimt::formats::Kind::PNG, im, w, e2);
+        }
         auto ls5 = ls;
         ls5["L6"] = patch; ls5["L6"].name = "Clip"; ls5["L6"].pos = 4.5; ls5["L6"].clipped = true;   // clipped to Caption
         const auto p5 = pdf::plan(im, ls5);

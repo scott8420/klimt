@@ -9,7 +9,8 @@
 //                                  drawn (Cairo, as the canvas does), before
 //                                  (every segment, full size) and after (the
 //                                  view's level, its cells only) -- WEAKNESSES 25
-//   ./build/klimt_bench files [16]   s052: a 4000 x 3000, 8-layer document saved
+//   ./build/klimt_bench files [8|16] [grain]   s052: a 4000 x 3000, 8-layer document saved
+//     (s055 grain: a 9th layer of noise, a photo's worth of tiles that deflate slowly)
 //                                  and opened as .klimt and PSD, and written as PDF
 //
 // Composites every tile once, on ONE thread (the app spreads tiles over the
@@ -20,6 +21,7 @@
 #include "core/Document.hpp"
 #include "core/Selection.hpp"   // s049
 #include "core/File.hpp"        // s052: files
+#include "core/Ora.hpp"         // s055: .ora in the files bench
 #include "core/Pdf.hpp"
 #include "core/Psd.hpp"
 
@@ -189,26 +191,46 @@ core::Layers demo_layers(const P::Format& f, int W, int H) {
 }
 
 // s052: opening and writing a big layered document -- the .klimt, PSD, PDF.
-int bench_files(int depth) {
+int bench_files(int depth, bool grain) {
     namespace fs = std::filesystem;
     const P::Format f{depth == 16 ? P::Depth::U16 : P::Depth::U8, P::Mode::RGB, true};
     const int W = 4000, H = 3000;
     core::file::Contents c;
     c.image = core::Image{.width = W, .height = H, .format = f};
     c.layers = demo_layers(f, W, H);
+    if (grain) {   // s055: a photo's worth of grain -- tiles that don't deflate to nothing
+        std::uint32_t seed = 12345;
+        const auto rnd = [&seed] { seed = seed * 1664525u + 1013904223u; return static_cast<float>(seed >> 8) / 16777216.f; };
+        core::Layer g;
+        g.name = "grain";
+        g.pos = 9;
+        g.blend = P::Blend::Overlay;
+        g.opacity = 30;
+        g.pixels = std::make_shared<const P::TileMap>(P::TileMap(f, W, H).paint({0, 0, W, H}, [&](int, int, const P::Px&) {
+            const float v = rnd();
+            return P::rgba(v, 0.5f * v + 0.25f, 1.f - v, 1);
+        }));
+        c.layers["grain"] = g;
+    }
     c.next_id = 100;
     const auto dir = fs::temp_directory_path() / "klimt_bench_files";
     fs::create_directories(dir);
     const auto ms = [](auto t0) { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); };
     std::string err;
     std::vector<std::string> notes;
-    std::printf("%d x %d, %d-bit, 8 layers (%u cores)\n", W, H, depth, std::thread::hardware_concurrency());
+    std::printf("%d x %d, %d-bit, %d layers (%u cores)\n", W, H, depth, grain ? 9 : 8, std::thread::hardware_concurrency());
     auto t = std::chrono::steady_clock::now();
     const bool k = core::file::save_klimt((dir / "big.klimt").string(), c, err);
     std::printf("  save .klimt  %7.0f ms %s\n", ms(t), k ? "" : err.c_str());
     t = std::chrono::steady_clock::now();
     auto kk = core::file::open((dir / "big.klimt").string(), err);
     std::printf("  open .klimt  %7.0f ms %s\n", ms(t), kk ? "" : err.c_str());
+    t = std::chrono::steady_clock::now();
+    const bool o = core::ora::save((dir / "big.ora").string(), c.image, c.layers, err, notes);   // s055
+    std::printf("  save .ora    %7.0f ms %s\n", ms(t), o ? "" : err.c_str());
+    t = std::chrono::steady_clock::now();
+    auto oo = core::file::open((dir / "big.ora").string(), err);
+    std::printf("  open .ora    %7.0f ms %s\n", ms(t), oo ? "" : err.c_str());
     t = std::chrono::steady_clock::now();
     const bool p = core::psd::save((dir / "big.psd").string(), c.image, c.layers, err, notes);
     std::printf("  save .psd    %7.0f ms %s\n", ms(t), p ? "" : err.c_str());
@@ -218,11 +240,11 @@ int bench_files(int depth) {
     t = std::chrono::steady_clock::now();
     const bool d = core::pdf::save((dir / "big.pdf").string(), c.image, c.layers, "big", err, notes);
     std::printf("  save .pdf    %7.0f ms %s\n", ms(t), d ? "" : err.c_str());
-    return k && kk && p && pp && d ? 0 : 1;
+    return k && kk && o && oo && p && pp && d ? 0 : 1;
 }
 }  // namespace
 int main(int argc, char** argv) {
-    if (argc > 1 && std::string(argv[1]) == "files") return bench_files(argc > 2 ? std::atoi(argv[2]) : 8);   // s052
+    if (argc > 1 && std::string(argv[1]) == "files") return bench_files(argc > 2 ? std::atoi(argv[2]) : 8, argc > 3 && std::string(argv[3]) == "grain");   // s052
     if (argc > 1 && std::string(argv[1]) == "size") return bench_size();
     if (argc > 1 && std::string(argv[1]) == "ants") return bench_ants();   // s049
     const int depth = argc > 1 ? std::atoi(argv[1]) : 8;

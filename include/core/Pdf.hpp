@@ -11,7 +11,8 @@
 // image (lossless, 8-bit, its transparency a soft mask).
 //
 // A text layer stays TYPE only where cutting the stack there leaves the look
-// exactly as it is: at the top level of the stack, visible, Normal, no
+// exactly as it is: at the top level of the stack -- or inside plain Pass
+// Through groups, opened in place (s055) -- visible, Normal, no
 // styles, no mask, not clipped and not a clipping base; and everything drawn
 // above it Normal too, with no adjustment / filter layer above it reaching
 // down (an isolated group above is fine whatever is inside it). Any other

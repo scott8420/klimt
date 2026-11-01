@@ -5,8 +5,10 @@
 #include "core/Text.hpp"   // s046
 #include "core/Ora.hpp"    // s049
 #include "core/Psd.hpp"   // s050
+#include "core/Cores.hpp"   // s055
 
 #include <zip.h>
+#include <zlib.h>   // s055: tiles deflated / inflated on the cores
 #include "json.hpp"
 
 #include <algorithm>
@@ -18,6 +20,10 @@
 #include <tuple>
 #include <filesystem>
 #include <unordered_map>
+#include <unordered_set>
+#include <future>
+#include <functional>
+#include <mutex>
 
 namespace klimt::core::file {
 
@@ -593,8 +599,92 @@ bool read_entry(zip_t* z, zip_int64_t idx, std::vector<std::uint8_t>& out, std::
     zip_file_t* f = zip_fopen_index(z, static_cast<zip_uint64_t>(idx), 0);
     if (!f) return false;
     const zip_int64_t got = st.size ? zip_fread(f, out.data(), st.size) : 0;
+    // s055: one read past the end -- libzip checks the CRC only there.
+    std::uint8_t past = 0;
+    const zip_int64_t end = zip_fread(f, &past, 1);
     zip_fclose(f);
-    return got == static_cast<zip_int64_t>(st.size);
+    return got == static_cast<zip_int64_t>(st.size) && end == 0;
+}
+
+// Every "tiles/..." name the document refers to, anywhere in it.
+void tile_refs(const json& j, std::unordered_set<std::string>& out) {
+    if (j.is_string()) {
+        const auto& s = j.get_ref<const std::string&>();
+        if (s.rfind("tiles/", 0) == 0) out.insert(s);
+    } else if (j.is_array() || j.is_object()) {
+        for (const auto& v : j) tile_refs(v, out);
+    }
+}
+
+// s055: a tile's bytes as the zip holds them -- deflated on a core, ready.
+struct Packed {
+    std::string name;
+    P::TileMap::TileRef tile;          // kept alive until the zip closes
+    std::vector<std::uint8_t> data;    // raw deflate
+    std::uint32_t crc = 0;
+    std::uint64_t size = 0;
+    std::size_t off = 0;
+};
+
+bool pack(Packed& k, const P::Format& fm) {
+    const std::uint8_t* src = k.tile->data();
+    const std::size_t n = k.tile->bytes();
+    std::vector<std::uint8_t> le;
+    if constexpr (std::endian::native != std::endian::little) {
+        le.assign(src, src + n);
+        to_little(fm, le.data(), le.size());
+        src = le.data();
+    }
+    z_stream zs{};
+    if (deflateInit2(&zs, 1, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK) return false;
+    k.data.resize(deflateBound(&zs, static_cast<uLong>(n)));
+    zs.next_in = const_cast<Bytef*>(src);
+    zs.avail_in = static_cast<uInt>(n);
+    zs.next_out = k.data.data();
+    zs.avail_out = static_cast<uInt>(k.data.size());
+    const int r = deflate(&zs, Z_FINISH);
+    k.data.resize(zs.total_out);
+    deflateEnd(&zs);
+    if (r != Z_STREAM_END) return false;
+    k.crc = static_cast<std::uint32_t>(crc32(crc32(0L, Z_NULL, 0), src, static_cast<uInt>(n)));
+    k.size = n;
+    return true;
+}
+
+// libzip reads a Packed through this, told it is deflated already (its
+// method, CRC and size in the stat), so zip_close only copies it.
+zip_int64_t packed_source(void* ud, void* data, zip_uint64_t len, zip_source_cmd_t cmd) {
+    auto* k = static_cast<Packed*>(ud);
+    switch (cmd) {
+        case ZIP_SOURCE_OPEN: k->off = 0; return 0;
+        case ZIP_SOURCE_READ: {
+            const std::size_t n = std::min<std::size_t>(static_cast<std::size_t>(len), k->data.size() - k->off);
+            std::memcpy(data, k->data.data() + k->off, n);
+            k->off += n;
+            return static_cast<zip_int64_t>(n);
+        }
+        case ZIP_SOURCE_CLOSE: return 0;
+        case ZIP_SOURCE_STAT: {
+            auto* st = static_cast<zip_stat_t*>(data);
+            zip_stat_init(st);
+            st->size = k->size;
+            st->comp_size = k->data.size();
+            st->comp_method = ZIP_CM_DEFLATE;
+            st->crc = k->crc;
+            st->valid = ZIP_STAT_SIZE | ZIP_STAT_COMP_SIZE | ZIP_STAT_COMP_METHOD | ZIP_STAT_CRC;
+            return sizeof(zip_stat_t);
+        }
+        case ZIP_SOURCE_ERROR: {
+            auto* e = static_cast<int*>(data);
+            e[0] = e[1] = 0;
+            return 2 * sizeof(int);
+        }
+        case ZIP_SOURCE_FREE: return 0;
+        case ZIP_SOURCE_SUPPORTS:
+            return zip_source_make_command_bitmap(ZIP_SOURCE_OPEN, ZIP_SOURCE_READ, ZIP_SOURCE_CLOSE, ZIP_SOURCE_STAT,
+                                                  ZIP_SOURCE_ERROR, ZIP_SOURCE_FREE, -1);
+        default: return -1;
+    }
 }
 
 std::optional<Contents> open_klimt(const std::string& path, std::string& error, const formats::Progress& p) {
@@ -658,6 +748,42 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
         const int cols = blank_cols, rows = blank_rows;
         std::unordered_map<std::string, P::TileMap::TileRef> loaded;   // a shared tile, read once
 
+        // s055 (Responsive): every tile the document names, inflated on the
+        // cores first -- each thread its own handle on the zip (one zip_t is
+        // not for two threads) -- then the maps are put together from them.
+        std::unordered_map<std::string, std::vector<std::uint8_t>> fetched;
+        {
+            std::unordered_set<std::string> refs;
+            tile_refs(doc, refs);
+            std::vector<std::string> names(refs.begin(), refs.end());
+            std::vector<std::vector<std::uint8_t>> bytes(names.size());
+            std::vector<char> found(names.size(), 0);
+            constexpr std::size_t kMaxTile = static_cast<std::size_t>(P::kTile) * P::kTile * 4 * 5;   // 32-bit float, 5 channels
+            std::mutex handles_mu;
+            std::unordered_map<std::thread::id, zip_t*> handles;
+            const auto handle = [&]() -> zip_t* {
+                std::lock_guard lk(handles_mu);
+                const auto me = std::this_thread::get_id();
+                if (const auto it = handles.find(me); it != handles.end()) return it->second;
+                int ec = 0;
+                zip_t* h = zip_open(path.c_str(), ZIP_RDONLY, &ec);
+                handles[me] = h;
+                return h;
+            };
+            const bool all = on_cores(names.size(), [&](std::size_t i) {
+                zip_t* h = handle();
+                if (!h) return false;
+                const zip_int64_t ti = zip_name_locate(h, names[i].c_str(), 0);
+                if (ti >= 0 && read_entry(h, ti, bytes[i], kMaxTile)) found[i] = 1;
+                return true;   // a missing / bad one: said where it is used
+            }, p, 0, 0.8);
+            for (auto& [id, h] : handles) if (h) zip_discard(h);
+            if (!all) { error = p.stop() ? "cancelled" : "not a readable Klimt file"; return std::nullopt; }
+            fetched.reserve(names.size());
+            for (std::size_t i = 0; i < names.size(); ++i)
+                if (found[i]) fetched.emplace(std::move(names[i]), std::move(bytes[i]));
+        }
+
         const json& layers = doc.at("layers");
         std::size_t total = 0, done = 0;
         for (const auto& l : layers) {
@@ -697,18 +823,17 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                     auto px = unhex(ref.substr(2));
                     if (!px || px->size() != static_cast<std::size_t>(fm.bytes_per_pixel())) { error = "a damaged Klimt file (a uniform tile)"; return false; }
                     to_little(fm, px->data(), px->size());
-                    std::vector<std::uint8_t> full(tb);
-                    for (std::size_t i = 0; i < tb; i += px->size()) std::memcpy(full.data() + i, px->data(), px->size());
-                    tile = P::Tile::from_bytes(fm, std::move(full));
+                    tile = P::Tile::uniform_bytes(fm, std::move(*px));   // s055: not expanded and scanned back
                 } else if (auto it = loaded.find(ref); it != loaded.end()) {
                     tile = it->second;
                 } else {
-                    const zip_int64_t ti = entry(ref.c_str());
-                    std::vector<std::uint8_t> bytes;
-                    if (ti < 0 || !read_entry(z, ti, bytes, tb) || bytes.size() != tb) {
+                    const auto fi = fetched.find(ref);
+                    if (fi == fetched.end() || fi->second.size() != tb) {
                         error = "a damaged Klimt file (" + ref + ")";
                         return false;
                     }
+                    std::vector<std::uint8_t> bytes = std::move(fi->second);
+                    fetched.erase(fi);
                     to_little(fm, bytes.data(), bytes.size());
                     tile = P::Tile::from_bytes(fm, std::move(bytes));
                     loaded[ref] = tile;
@@ -716,7 +841,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 if (pass == 0) grid[static_cast<std::size_t>(row) * static_cast<std::size_t>(cols) + static_cast<std::size_t>(col)] = tile;
                 else if (tile) outside[{col, row}] = tile;
                 ++done;
-                if (total && (done & 15) == 0) p.at(static_cast<double>(done) / static_cast<double>(total));
+                if (total && (done & 15) == 0) p.at(0.8 + 0.2 * static_cast<double>(done) / static_cast<double>(total));
             }
             result = P::TileMap::from_tiles(fm, mw, mh, std::move(grid)).with_outside(std::move(outside));
             return true;
@@ -854,7 +979,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
 
 // libzip's callbacks: progress while it writes, and a cancel it asks about.
 struct ZipState { const formats::Progress* p; };
-void zip_progress(zip_t*, double f, void* ud) { static_cast<ZipState*>(ud)->p->at(f); }
+void zip_progress(zip_t*, double f, void* ud) { static_cast<ZipState*>(ud)->p->at(0.8 + 0.2 * f); }   // s055: after the tiles' 0.8
 int  zip_cancel(zip_t*, void* ud) { return static_cast<ZipState*>(ud)->p->stop() ? 1 : 0; }
 }  // namespace
 
@@ -913,7 +1038,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
 
     // Everything libzip reads at close must live until then: these.
     static const char kMime[] = "image/x-klimt";
-    std::vector<std::vector<std::uint8_t>> swapped;   // big-endian hosts only
+    std::vector<Packed> packed;   // s055: the tiles, deflated on the cores before the zip closes
     std::string doc_text;
     const auto add = [&](const std::string& name, const void* data, std::size_t n, zip_int32_t method, zip_uint32_t level) {
         zip_source_t* s = zip_source_buffer(z, data, n, 0);
@@ -943,6 +1068,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
     }
     doc["next_id"] = c.next_id;
     std::unordered_map<const P::Tile*, std::string> named;   // a shared tile, written once
+    std::vector<P::Format> packed_fmt;   // each packed tile's format (its byte order)
     json layers = json::array();
     int next_tile = 0;
 // One map's tiles into `l` under in_key / out_key (s012: pixels, or
@@ -967,13 +1093,8 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
             auto it = named.find(t.get());
             if (it == named.end()) {
                 const std::string name = "tiles/" + std::to_string(next_tile++);
-                const std::uint8_t* data = t->data();
-                if constexpr (std::endian::native != std::endian::little) {
-                    swapped.emplace_back(t->data(), t->data() + t->bytes());
-                    to_little(fm, swapped.back().data(), swapped.back().size());
-                    data = swapped.back().data();
-                }
-                if (!add(name, data, t->bytes(), ZIP_CM_DEFLATE, 1)) { error = zip_strerror(z); return false; }
+                packed.push_back({name, t, {}, 0, 0, 0});
+                packed_fmt.push_back(fm);
                 it = named.emplace(t.get(), name).first;
             }
             list.push_back({col, row, it->second});
@@ -1046,8 +1167,9 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
     // at most kPreviewSide a side) and `Thumbnails/thumbnail.png` (256) --
     // so a file manager shows a preview without knowing Klimt's tiles.
     // Ignored on reading. A failure to make them never fails the save.
+    // s055: made beside the tiles' deflating, not before it.
     std::vector<std::uint8_t> merged_png, thumb_png;
-    {
+    auto preview = std::async(std::launch::async, [&] {
         formats::Progress cancel_only;
         cancel_only.cancelled = p.cancelled;
         // Composited at the largest halving that still covers kPreviewSide
@@ -1064,7 +1186,19 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
             ora::png_bytes(merged, merged_png, ignored, cancel_only, 3);
             ora::png_bytes(ora::thumbnail(merged, 256), thumb_png, ignored, cancel_only, 6);
         }
-        if (p.stop()) { error = "cancelled"; return false; }
+    });
+    // s055 (Responsive): the tiles deflated on the cores (zip_close used to
+    // do it on one), then handed to the zip as deflated already.
+    const bool packed_all = on_cores(packed.size(), [&](std::size_t i) { return pack(packed[i], packed_fmt[i]); }, p, 0, 0.8);
+    preview.wait();
+    if (p.stop()) { error = "cancelled"; return false; }
+    if (!packed_all) { error = "can't be written (a tile wouldn't compress)"; return false; }
+    for (auto& k : packed) {
+        zip_source_t* s = zip_source_function(z, packed_source, &k);
+        if (!s) { error = zip_strerror(z); return false; }
+        const zip_int64_t i = zip_file_add(z, k.name.c_str(), s, ZIP_FL_ENC_UTF_8 | ZIP_FL_OVERWRITE);
+        if (i < 0) { zip_source_free(s); error = zip_strerror(z); return false; }
+        if (zip_set_file_compression(z, static_cast<zip_uint64_t>(i), ZIP_CM_DEFLATE, 1) != 0) { error = zip_strerror(z); return false; }
     }
     if ((!merged_png.empty() && !add("mergedimage.png", merged_png.data(), merged_png.size(), ZIP_CM_STORE, 0)) ||
         (!thumb_png.empty() && !add("Thumbnails/thumbnail.png", thumb_png.data(), thumb_png.size(), ZIP_CM_STORE, 0))) {

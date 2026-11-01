@@ -56,37 +56,91 @@ bool safe(const Layers& ls, const Kids& kids, const Document::Id& id) {
     }
 }
 
+// s055: a PLAIN Pass Through group -- one whose children can be laid straight
+// into its parent's stack with nothing changed: the compositor draws a visible
+// Pass Through group at 100 % opacity with no mask exactly so (Composite.cpp
+// `group`). And nothing may lean on the group as one thing: no styles (they
+// isolate it), not clipped, no layer clipped to it, no path above masking it;
+// inside, no path mask (it masks only the group's own layers) and no clipped
+// bottom layer (it would find a new base below the group).
+bool plain(const Layers& ls, const Kids& kids, const Document::Id& id) {
+    const Layer& G = ls.at(id);
+    if (G.kind != Kind::Group || !G.visible || G.blend != Blend::PassThrough || G.opacity < 100 ||
+        (G.mask && G.mask_on) || G.styles.any() || G.clipped)
+        return false;
+    const auto mask_path = [&](const Document::Id& o) {
+        const Layer& A = ls.at(o);
+        return A.kind == Kind::Path && A.path_mask && A.visible;
+    };
+    const auto& sibs = kids.at(G.parent);
+    std::size_t i = 0;
+    while (i < sibs.size() && sibs[i].second != id) ++i;
+    if (i + 1 < sibs.size() && ls.at(sibs[i + 1].second).clipped) return false;
+    for (std::size_t j = i + 1; j < sibs.size(); ++j)
+        if (mask_path(sibs[j].second)) return false;
+    if (const auto it = kids.find(id); it != kids.end() && !it->second.empty()) {
+        if (ls.at(it->second.front().second).clipped) return false;
+        for (const auto& k : it->second)
+            if (mask_path(k.second)) return false;
+    }
+    return true;
+}
+
+// The stack as the cut sees it, bottom first: the top level, each plain Pass
+// Through group opened in place (recursively). Every other layer -- an
+// isolated or non-plain group with its whole tree -- is one entry.
+void sequence(const Layers& ls, const Kids& kids, const Document::Id& parent, std::vector<Document::Id>& out) {
+    const auto it = kids.find(parent);
+    if (it == kids.end()) return;
+    for (const auto& [pos, id] : it->second) {
+        if (plain(ls, kids, id)) sequence(ls, kids, id, out);
+        else out.push_back(id);
+    }
+}
+
+// Drawn at all: it and every group it sits in visible.
+bool shown(const Layers& ls, const Document::Id& id) {
+    for (Document::Id p = id; !p.empty();) {
+        const auto it = ls.find(p);
+        if (it == ls.end() || !it->second.visible) return false;
+        p = it->second.parent;
+    }
+    return true;
+}
+
 enum class Why { Live, Group, Look, Base, Above, Empty, Mode };
 
-// Every text layer's fate: kept as type, or why not.
-std::map<Document::Id, Why> judge(const Image& im, const Layers& ls, const Kids& kids) {
+// Every drawn text layer's fate: kept as type, or why not.
+std::map<Document::Id, Why> judge(const Image& im, const Layers& ls, const Kids& kids, const std::vector<Document::Id>& seq) {
     std::map<Document::Id, Why> out;
     const bool rgb = im.format.mode == P::Mode::RGB;
     for (const auto& [id, L] : ls) {
-        if (id.empty() || id[0] == '@' || L.kind != Kind::Text || !L.visible) continue;
+        if (id.empty() || id[0] == '@' || L.kind != Kind::Text || !shown(ls, id)) continue;
         if (!L.text || !L.pixels) { out[id] = Why::Empty; continue; }
         if (!rgb) { out[id] = Why::Mode; continue; }
-        if (!L.parent.empty()) { out[id] = Why::Group; continue; }
+        if (std::find(seq.begin(), seq.end(), id) == seq.end()) { out[id] = Why::Group; continue; }
         if (L.blend != Blend::Normal || L.styles.any() || (L.mask && L.mask_on) || L.clipped) { out[id] = Why::Look; continue; }
         out[id] = Why::Live;
     }
-    const auto it = kids.find("");
-    if (it == kids.end()) return out;
-    const auto& top = it->second;
-    for (std::size_t i = 0; i < top.size(); ++i) {
-        const auto f = out.find(top[i].second);
+    for (std::size_t i = 0; i < seq.size(); ++i) {
+        const auto f = out.find(seq[i]);
         if (f == out.end() || f->second != Why::Live) continue;
-        // The layers directly above: a clipped one makes this its base; a
-        // path layer masking the layer below it masks this.
-        for (std::size_t j = i + 1; j < top.size(); ++j) {
-            const Layer& A = ls.at(top[j].second);
-            if (A.kind == Kind::Path && A.path_mask && j == i + 1) { f->second = Why::Base; break; }
+        // The layers directly above: a clipped one makes this its base (a
+        // plain group never stands between -- see `plain`).
+        for (std::size_t j = i + 1; j < seq.size(); ++j) {
+            const Layer& A = ls.at(seq[j]);
             if (!A.clipped) break;
             if (A.visible) { f->second = Why::Base; break; }
         }
         if (f->second != Why::Live) continue;
-        for (std::size_t j = i + 1; j < top.size(); ++j)
-            if (!safe(ls, kids, top[j].second)) { f->second = Why::Above; break; }
+        // A path mask above masks every layer below it at its level -- this one too.
+        for (std::size_t j = i + 1; j < seq.size(); ++j) {
+            const Layer& A = ls.at(seq[j]);
+            if (A.kind == Kind::Path && A.path_mask && A.visible) { f->second = Why::Base; break; }
+        }
+        if (f->second != Why::Live) continue;
+        for (std::size_t j = i + 1; j < seq.size(); ++j)
+            if (!safe(ls, kids, seq[j])) { f->second = Why::Above; break; }
     }
     return out;
 }
@@ -149,7 +203,9 @@ void take(const Layers& ls, const Kids& kids, const Document::Id& id, Layers& ou
 
 Plan plan(const Image& im, const std::map<Document::Id, Layer>& layers) {
     const Kids kids = kids_of(layers);
-    const auto fate = judge(im, layers, kids);
+    std::vector<Document::Id> seq;
+    sequence(layers, kids, "", seq);
+    const auto fate = judge(im, layers, kids, seq);
     Plan pl;
     int live = 0, group = 0, look = 0, base = 0, above = 0, mode = 0;
     for (const auto& [id, w] : fate) {
@@ -163,15 +219,14 @@ Plan plan(const Image& im, const std::map<Document::Id, Layer>& layers) {
             case Why::Empty: break;
         }
     }
-    if (const auto it = kids.find(""); it != kids.end())
-        for (const auto& [pos, id] : it->second)
-            if (const auto f = fate.find(id); f != fate.end() && f->second == Why::Live) pl.live.push_back(id);
+    for (const auto& id : seq)
+        if (const auto f = fate.find(id); f != fate.end() && f->second == Why::Live) pl.live.push_back(id);
     auto& L = pl.list;
     if (live) L.kept.push_back(plural(live, "text layer", "text layers") + " as type -- sharp at any size, its fonts embedded");
     if (above) L.baked.push_back(plural(above, "text layer", "text layers") + " as pixels -- under a layer that blends, has styles or adjusts");
     if (look) L.baked.push_back(plural(look, "text layer", "text layers") + " as pixels -- its own blend, styles, mask or clipping");
     if (base) L.baked.push_back(plural(base, "text layer", "text layers") + " as pixels -- a layer is clipped or path-masked to it");
-    if (group) L.baked.push_back(plural(group, "text layer", "text layers") + " as pixels -- inside a group");
+    if (group) L.baked.push_back(plural(group, "text layer", "text layers") + " as pixels -- inside a group that blends, fades, masks or has styles");
     if (mode) L.baked.push_back(plural(mode, "text layer", "text layers") + " as pixels -- not an RGB document");
     if (im.format.mode != P::Mode::RGB) L.left_out.push_back("written as RGB");
     if (im.format.depth != P::Depth::U8) L.left_out.push_back("the picture at 8 bits (a PDF image's depth here)");
@@ -196,18 +251,25 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
     cancel_only.cancelled = p.cancelled;
     const P::Format f8{P::Depth::U8, P::Mode::RGB, true};
 
-    // The bands: the top-level layers between the live text layers.
+    // The bands: the stack's entries (plain Pass Through groups opened in
+    // place) between the live text layers, each entry laid at the band's top
+    // level in stack order, its own tree under it.
+    std::vector<Document::Id> seq;
+    sequence(layers, kids, "", seq);
     std::vector<Layers> bands(1);
     std::vector<Document::Id> types;   // the type after each band
-    if (const auto it = kids.find(""); it != kids.end())
-        for (const auto& [pos, id] : it->second) {
-            if (std::find(pl.live.begin(), pl.live.end(), id) != pl.live.end()) {
-                types.push_back(id);
-                bands.emplace_back();
-                continue;
-            }
-            take(layers, kids, id, bands.back());
+    for (std::size_t i = 0; i < seq.size(); ++i) {
+        const Document::Id& id = seq[i];
+        if (std::find(pl.live.begin(), pl.live.end(), id) != pl.live.end()) {
+            types.push_back(id);
+            bands.emplace_back();
+            continue;
         }
+        take(layers, kids, id, bands.back());
+        Layer& e = bands.back().at(id);
+        e.parent.clear();
+        e.pos = static_cast<double>(i + 1);
+    }
 
     const std::string tmp = path + ".partial";
     std::remove(tmp.c_str());

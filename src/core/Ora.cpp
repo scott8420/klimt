@@ -2,16 +2,22 @@
 #include "core/Ora.hpp"
 #include "core/Composite.hpp"
 #include "core/Transfer.hpp"
+#include "core/Cores.hpp"   // s055
 
 #include <zip.h>
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <future>
+#include <mutex>
+#include <unordered_map>
 #include <sstream>
 
 namespace klimt::core::ora {
@@ -348,7 +354,7 @@ pixel::TileMap thumbnail(const pixel::TileMap& flat, int side) {
     const bool alpha = src.format().alpha;
     const bool gray = src.format().mode == P::Mode::Gray;
     const double fx = static_cast<double>(sw) / tw, fy = static_cast<double>(sh) / th;
-    return P::TileMap(out, tw, th).paint({0, 0, tw, th}, [&](int x, int y, const P::Px&) {
+    const auto at = [&](int x, int y) {
         // The box this pixel covers in `src`, averaged premultiplied.
         const int x0 = static_cast<int>(x * fx), x1 = std::max(x0 + 1, std::min(sw, static_cast<int>(std::ceil((x + 1) * fx))));
         const int y0 = static_cast<int>(y * fy), y1 = std::max(y0 + 1, std::min(sh, static_cast<int>(std::ceil((y + 1) * fy))));
@@ -364,7 +370,35 @@ pixel::TileMap thumbnail(const pixel::TileMap& flat, int side) {
             }
         if (a <= 0) return P::transparent();
         return P::rgba(static_cast<float>(r / a), static_cast<float>(g / a), static_cast<float>(b / a), static_cast<float>(a / n));
-    });
+    };
+    // s055 (Responsive): the output's tiles on the cores, as each frees up --
+    // a .klimt save waits on this preview.
+    const P::TileMap blank(out, tw, th);
+    const int cols = blank.cols();
+    const std::size_t n = static_cast<std::size_t>(cols) * static_cast<std::size_t>(blank.rows());
+    std::vector<P::TileMap::TileRef> grid(n);
+    std::atomic<std::size_t> next{0};
+    const auto work = [&] {
+        for (std::size_t i; (i = next++) < n;) {
+            const int c0 = static_cast<int>(i) % cols * P::kTile, r0 = static_cast<int>(i) / cols * P::kTile;
+            P::TileWriter w(out, P::transparent());
+            bool any = false;
+            for (int y = r0; y < std::min(th, r0 + P::kTile); ++y)
+                for (int x = c0; x < std::min(tw, c0 + P::kTile); ++x) {
+                    const P::Px p = at(x, y);
+                    if (p.c[3] <= 0.f) continue;
+                    w.set(x - c0, y - r0, p);
+                    any = true;
+                }
+            if (any) grid[i] = w.freeze();
+        }
+    };
+    const unsigned nt = static_cast<unsigned>(std::min<std::size_t>(std::max<std::size_t>(n, 1), std::max(1u, std::thread::hardware_concurrency())));
+    std::vector<std::thread> pool;
+    for (unsigned t = 1; t < nt; ++t) pool.emplace_back(work);
+    work();
+    for (auto& t : pool) t.join();
+    return P::TileMap::from_tiles(out, tw, th, std::move(grid));
 }
 
 bool png_bytes(const pixel::TileMap& m, std::vector<std::uint8_t>& out, std::string& error,
@@ -425,8 +459,12 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
     c.image.format = P::Format{deep ? P::Depth::U16 : P::Depth::U8, P::Mode::RGB, true};
     const double xres = num(root->attr("xres"), 72);
     c.image.dpi = (xres >= 1 && xres <= 10000) ? xres : 72;
-    int next = 1, done = 0, skipped = 0, unknown_blend = 0, beyond = 0;
+    int next = 1, skipped = 0, unknown_blend = 0, beyond = 0;
     std::string fail;
+    // s055 (Responsive): the walk makes the tree; each layer's PNG is read,
+    // decoded and placed afterwards, on the cores.
+    struct Pending { std::string id, src; int ox = 0, oy = 0; std::shared_ptr<const P::TileMap> pixels; std::string err; bool cut = false; };
+    std::vector<Pending> pending;
     std::function<bool(const Elem&, const std::string&)> walk = [&](const Elem& s, const std::string& parent) -> bool {
         // Top first in the file; Klimt's pos ascends bottom -> top.
         std::vector<const Elem*> items;
@@ -458,27 +496,49 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
             const std::string src = e->attr("src");
             const std::string low = fold(src);
             if (low.size() < 4 || low.substr(low.size() - 4) != ".png") { ++skipped; ++pos; continue; }   // an SVG / text layer
-            std::vector<std::uint8_t> bytes;
-            if (!read_entry(z, src, bytes, kMaxPng)) { fail = "a damaged OpenRaster file (" + src + ")"; return false; }
-            std::string err;
-            auto r = formats::read_png_bytes(bytes.data(), bytes.size(), err);
-            if (!r) { fail = src + ": " + err; return false; }
-            bytes = {};
-            const int ox = static_cast<int>(num(e->attr("x"), 0)), oy = static_cast<int>(num(e->attr("y"), 0));
-            if (ox < 0 || oy < 0 || ox + r->pixels.width() > W || oy + r->pixels.height() > H) ++beyond;
-            P::TileMap m = r->pixels.format() == c.image.format ? std::move(r->pixels) : transfer::converted(r->pixels, c.image.format);
             L.kind = Kind::Pixel;
             L.name = e->attr("name", "Layer " + std::to_string(next));
             L.blend = *blend == Blend::PassThrough ? Blend::Normal : *blend;
-            L.pixels = std::make_shared<const P::TileMap>(place(m, ox, oy, W, H));
+            pending.push_back({id, src, static_cast<int>(num(e->attr("x"), 0)), static_cast<int>(num(e->attr("y"), 0)), nullptr, {}, false});
             ++next;
             c.layers[id] = std::move(L);
-            ++done;
-            p.at(0.05 + 0.95 * done / std::max(1, total));
         }
         return true;
     };
     if (!walk(*top, "")) { error = fail; return std::nullopt; }
+    {
+        // Each thread its own handle on the zip (one zip_t is not for two threads).
+        std::mutex mu;
+        std::unordered_map<std::thread::id, zip_t*> handles;
+        const auto handle = [&]() -> zip_t* {
+            std::lock_guard lk(mu);
+            auto& h = handles[std::this_thread::get_id()];
+            if (!h) { int ec = 0; h = zip_open(path.c_str(), ZIP_RDONLY, &ec); }
+            return h;
+        };
+        const P::Format to = c.image.format;
+        const bool all = on_cores(pending.size(), [&](std::size_t i) {
+            Pending& q = pending[i];
+            zip_t* h = handle();
+            std::vector<std::uint8_t> bytes;
+            if (!h || !read_entry(h, q.src, bytes, kMaxPng)) { q.err = "a damaged OpenRaster file (" + q.src + ")"; return true; }
+            std::string err;
+            auto r = formats::read_png_bytes(bytes.data(), bytes.size(), err);
+            if (!r) { q.err = q.src + ": " + err; return true; }
+            bytes = {};
+            q.cut = q.ox < 0 || q.oy < 0 || q.ox + r->pixels.width() > W || q.oy + r->pixels.height() > H;
+            P::TileMap m = r->pixels.format() == to ? std::move(r->pixels) : transfer::converted(r->pixels, to);
+            q.pixels = std::make_shared<const P::TileMap>(place(m, q.ox, q.oy, W, H));
+            return true;
+        }, p, 0.05, 1.0);
+        for (auto& [t, h] : handles) if (h) zip_discard(h);
+        if (!all) { error = "cancelled"; return std::nullopt; }
+        for (auto& q : pending) {   // the first failure in the file's order is the one said
+            if (!q.err.empty()) { error = q.err; return std::nullopt; }
+            if (q.cut) ++beyond;
+            c.layers.at(q.id).pixels = std::move(q.pixels);
+        }
+    }
     // Positions skipped by a left-out layer leave gaps; gaps are harmless
     // (pos only orders), but keep them 1..n for a tidy tree.
     {
@@ -573,13 +633,77 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
     for (const auto& [id, L] : layers)
         if (!id.empty() && id[0] != '@') kids[L.parent].emplace_back(L.pos, id);
     for (auto& [par, v] : kids) std::sort(v.rbegin(), v.rend());
-    int drawn = 0;
-    for (const auto& [id, L] : layers) if (draws_pixels(L.kind)) ++drawn;
 
-    int n_png = 0, done = 0;
+    int n_png = 0;
     const bool rgb = im.format.mode == P::Mode::RGB;
     formats::Progress cancel_only;
     cancel_only.cancelled = p.cancelled;
+
+    // s055 (Responsive): every layer's PNG made on the cores first (drawn
+    // alone where it has a look of its own, cut to what it holds, encoded),
+    // the merged picture and its thumbnail beside them; then the zip is
+    // written in the tree's order from the results.
+    struct Encoded { Document::Id id; std::vector<std::uint8_t> png; int x = 0, y = 0; std::string err; };
+    std::vector<Encoded> enc;
+    {
+        std::function<void(const std::string&)> collect = [&](const std::string& parent) {
+            const auto it = kids.find(parent);
+            if (it == kids.end()) return;
+            for (const auto& [pos, id] : it->second) {
+                const Layer& L = layers.at(id);
+                if (L.kind == Kind::Group) { collect(id); continue; }
+                if (L.kind == Kind::Adjustment || L.kind == Kind::Filter || !draws_pixels(L.kind)) continue;
+                enc.push_back({id, {}, 0, 0, {}});
+            }
+        };
+        collect("");
+    }
+    std::optional<P::TileMap> flat;
+    std::vector<std::uint8_t> merged_png, thumb_png;
+    std::string merged_err;
+    auto merged_job = std::async(std::launch::async, [&] {
+        flat = file::flatten(im, layers, cancel_only);
+        if (!flat) return;
+        const P::TileMap m8 = flat->format() == fmt ? *flat : transfer::converted(*flat, fmt);
+        if (!png_bytes(m8, merged_png, merged_err, cancel_only, 6, im.dpi)) return;
+        png_bytes(thumbnail(*flat, 256), thumb_png, merged_err, cancel_only, 6);
+    });
+    const bool encoded = on_cores(enc.size(), [&](std::size_t i) {
+        Encoded& e = enc[i];
+        const Layer& L = layers.at(e.id);
+        // Its pixels as ORA holds them: straight RGBA. A plain RGB pixel
+        // layer goes as it is; anything with a look of its own (a mask,
+        // live filters, styles, text, another mode) is drawn alone, at
+        // full opacity in Normal, and that picture goes.
+        const bool plain = L.kind == Kind::Pixel && rgb && !(L.mask && L.mask_on) && L.filters.empty() && !L.styles.any();
+        P::TileMap m;
+        if (plain) {
+            if (L.pixels) m = L.pixels->format() == fmt ? L.pixels->without_outside() : transfer::converted(L.pixels->without_outside(), fmt);
+        } else {
+            Layer solo = L;
+            solo.parent = "";
+            solo.pos = 1;
+            solo.visible = true;
+            solo.opacity = 100;
+            solo.blend = Blend::Normal;
+            solo.clipped = false;
+            const std::map<Document::Id, Layer> alone{{e.id, solo}};
+            auto f = file::flatten(im, alone, cancel_only);
+            if (!f) return false;
+            m = f->format() == fmt ? std::move(*f) : transfer::converted(*f, fmt);
+        }
+        P::TileMap part(fmt, 1, 1);
+        if (m.width() > 0) {
+            const TileBox b = held(m);
+            if (!b.empty()) { part = cut(m, b); e.x = b.c0 * P::kTile; e.y = b.r0 * P::kTile; }
+        }
+        if (!png_bytes(part, e.png, e.err, cancel_only, 6)) return !e.err.empty();
+        return true;
+    }, p, 0, 0.5);
+    merged_job.wait();
+    if (!encoded || p.stop()) { error = "cancelled"; return false; }
+    for (const auto& e : enc) if (!e.err.empty()) { error = e.err; return false; }
+    std::size_t next_enc = 0;
     std::ostringstream xml;
     xml << "<?xml version='1.0' encoding='UTF-8'?>\n<image version=\"0.0.5\" w=\"" << im.width << "\" h=\"" << im.height
         << "\" xres=\"" << fmt_num(im.dpi) << "\" yres=\"" << fmt_num(im.dpi) << "\">\n";
@@ -602,44 +726,15 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
             }
             if (L.kind == Kind::Adjustment || L.kind == Kind::Filter) continue;   // plan(): left out
             if (!draws_pixels(L.kind)) continue;
-            // Its pixels as ORA holds them: straight RGBA. A plain RGB pixel
-            // layer goes as it is; anything with a look of its own (a mask,
-            // live filters, styles, text, another mode) is drawn alone, at
-            // full opacity in Normal, and that picture goes.
-            const bool plain = L.kind == Kind::Pixel && rgb && !(L.mask && L.mask_on) && L.filters.empty() && !L.styles.any();
-            P::TileMap m;
+            Encoded& e = enc[next_enc++];
             double opacity = L.opacity / 100.0;
-            if (plain) {
-                if (L.pixels) m = L.pixels->format() == fmt ? L.pixels->without_outside() : transfer::converted(L.pixels->without_outside(), fmt);
-                opacity *= L.fill / 100.0;
-            } else {
-                Layer solo = L;
-                solo.parent = "";
-                solo.pos = 1;
-                solo.visible = true;
-                solo.opacity = 100;
-                solo.blend = Blend::Normal;
-                solo.clipped = false;
-                Image one = im;
-                const std::map<Document::Id, Layer> alone{{id, solo}};
-                auto flat = file::flatten(one, alone, cancel_only);
-                if (!flat) { error = "cancelled"; return false; }
-                m = flat->format() == fmt ? std::move(*flat) : transfer::converted(*flat, fmt);
-            }
-            int x = 0, y = 0;
-            P::TileMap part(fmt, 1, 1);
-            if (m.width() > 0) {
-                const TileBox b = held(m);
-                if (!b.empty()) { part = cut(m, b); x = b.c0 * P::kTile; y = b.r0 * P::kTile; }
-            }
-            std::vector<std::uint8_t> png;
-            std::string err;
-            if (!png_bytes(part, png, err, cancel_only, 6)) { error = err; return false; }
+            if (L.kind == Kind::Pixel && rgb && !(L.mask && L.mask_on) && L.filters.empty() && !L.styles.any()) opacity *= L.fill / 100.0;
+            std::vector<std::uint8_t> png = std::move(e.png);
+            const int x = e.x, y = e.y;
             const std::string src = "data/layer" + std::to_string(n_png++) + ".png";
             if (!add(src, std::move(png), ZIP_CM_STORE, 0)) { error = zip_strerror(z); return false; }
             xml << ind << "<layer" << common << " opacity=\"" << fmt_num(opacity) << "\" composite-op=\""
                 << composite_op(L.blend) << "\" src=\"" << src << "\" x=\"" << x << "\" y=\"" << y << "\"/>\n";
-            p.at(0.5 * ++done / std::max(1, drawn));
         }
         return true;
     };
@@ -648,23 +743,13 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
     xml << " </stack>\n</image>\n";
     if (!add("stack.xml", text(xml.str()), ZIP_CM_DEFLATE, 6)) { error = zip_strerror(z); return false; }
 
-    // The picture, and its thumbnail.
-    auto flat = file::flatten(im, layers, cancel_only);
+    // The picture, and its thumbnail (made beside the layers, above).
     if (!flat) { error = "cancelled"; return false; }
-    p.at(0.55);
-    {
-        std::string err;
-        std::vector<std::uint8_t> merged, thumb;
-        const P::TileMap m8 = flat->format() == fmt ? *flat : transfer::converted(*flat, fmt);
-        if (!png_bytes(m8, merged, err, cancel_only, 6, im.dpi) || !png_bytes(thumbnail(*flat, 256), thumb, err, cancel_only, 6)) {
-            error = err;
-            return false;
-        }
-        if (!add("mergedimage.png", std::move(merged), ZIP_CM_STORE, 0) ||
-            !add("Thumbnails/thumbnail.png", std::move(thumb), ZIP_CM_STORE, 0)) {
-            error = zip_strerror(z);
-            return false;
-        }
+    if (!merged_err.empty()) { error = merged_err; return false; }
+    if (!add("mergedimage.png", std::move(merged_png), ZIP_CM_STORE, 0) ||
+        !add("Thumbnails/thumbnail.png", std::move(thumb_png), ZIP_CM_STORE, 0)) {
+        error = zip_strerror(z);
+        return false;
     }
     p.at(0.6);
     ZipState st{&p};

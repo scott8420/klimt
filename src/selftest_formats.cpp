@@ -5,6 +5,8 @@
 #include "formats/Formats.hpp"
 #include "pixel/Pixel.hpp"
 
+#include <zip.h>   // s055: reads the zips it writes
+
 #include <cmath>
 #include <cstring>
 #include <cstdio>
@@ -96,6 +98,15 @@ std::string fmt_name(const P::Format& f) {
 void selftest_formats(const Check& check) {
     std::cout << "\n-- pixel: raw tiles (s007) --\n";
     {
+        {   // s055: a uniform tile from one stored pixel
+            const P::Format f8{P::Depth::U8, P::Mode::RGB, true};
+            const auto u = P::Tile::uniform_bytes(f8, {10, 20, 30, 255});
+            check("pixel: uniform_bytes -- one pixel makes a uniform tile of it",
+                  u && u->is_uniform() && u->bytes() == 4 && std::abs(u->get(200, 17).c[1] - 20.f / 255.f) < 1e-6f, "");
+            check("pixel: uniform_bytes -- all zero with alpha: absent (nullptr); a wrong size: nullptr",
+                  !P::Tile::uniform_bytes(f8, {0, 0, 0, 0}) && !P::Tile::uniform_bytes(f8, {1, 2, 3}) &&
+                      P::Tile::uniform_bytes(P::Format{P::Depth::U8, P::Mode::RGB, false}, {0, 0, 0}), "");
+        }
         const P::Format f{P::Depth::U8, P::Mode::RGB, true};
         std::vector<std::uint8_t> same(static_cast<std::size_t>(P::kTile) * P::kTile * 4);
         for (std::size_t i = 0; i < same.size(); i += 4) { same[i] = 10; same[i + 1] = 20; same[i + 2] = 30; same[i + 3] = 255; }
@@ -438,6 +449,66 @@ void selftest_files(const Check& check) {
         const auto still = cf::open(path("doc.klimt"), err);
         check("klimt: a cancelled save leaves the old file as it was",
               cancelled && still && still->layers.at("L5").name == "Top" && !fs::exists(path("doc.klimt.partial")), err);
+        // s055 (Responsive): tiles deflated on the cores and handed to the zip
+        // already deflated; read back on the cores, one zip handle a thread.
+        {
+            cf::Contents g = c;
+            std::uint32_t seed = 7;
+            const auto rnd = [&seed] { seed = seed * 1664525u + 1013904223u; return static_cast<float>(seed >> 8) / 16777216.f; };
+            g.layers.at("L4").pixels = std::make_shared<const klimt::pixel::TileMap>(
+                klimt::pixel::TileMap(f, c.image.width, c.image.height).paint({0, 0, c.image.width, c.image.height}, [&](int, int, const klimt::pixel::Px&) {
+                    return klimt::pixel::rgba(rnd(), rnd(), rnd(), 0.25f + 0.75f * rnd());
+                }));
+            const bool ok = cf::save_klimt(path("grain.klimt"), g, err);
+            // Every entry read whole by libzip itself: its CRC and size checked.
+            bool crc_ok = ok;
+            int tiles = 0;
+            if (ok) {
+                int ec = 0;
+                zip_t* z = zip_open(path("grain.klimt").c_str(), ZIP_RDONLY | ZIP_CHECKCONS, &ec);
+                crc_ok = z != nullptr;
+                for (zip_int64_t i = 0; z && i < zip_get_num_entries(z, 0); ++i) {
+                    zip_stat_t st;
+                    zip_stat_index(z, static_cast<zip_uint64_t>(i), 0, &st);
+                    if (std::string(st.name).rfind("tiles/", 0) == 0) {
+                        ++tiles;
+                        crc_ok = crc_ok && st.comp_method == ZIP_CM_DEFLATE;
+                    }
+                    std::vector<char> buf(static_cast<std::size_t>(st.size) + 1);
+                    zip_file_t* zf = zip_fopen_index(z, static_cast<zip_uint64_t>(i), 0);
+                    zip_int64_t got = 0, r = 0;
+                    while (zf && (r = zip_fread(zf, buf.data(), buf.size())) > 0) got += r;
+                    crc_ok = crc_ok && zf && r == 0 && got == static_cast<zip_int64_t>(st.size);
+                    if (zf) zip_fclose(zf);
+                }
+                if (z) zip_discard(z);
+            }
+            check("klimt: s055 -- tiles deflated on the cores: every entry's CRC and size check, tiles deflated",
+                  crc_ok && tiles > 0, std::to_string(tiles) + " tiles");
+            const auto b = cf::open(path("grain.klimt"), err);
+            check("klimt: s055 -- an incompressible layer round trips exactly (tiles read on the cores)",
+                  b && same_tree(g.layers, b->layers, why), why + err);
+            // A tile the document names that isn't in the zip: damaged, said.
+            {
+                int ec = 0;
+                fs::copy_file(path("grain.klimt"), path("holed.klimt"), fs::copy_options::overwrite_existing);
+                zip_t* z = zip_open(path("holed.klimt").c_str(), 0, &ec);
+                const zip_int64_t t0 = z ? zip_name_locate(z, "tiles/0", 0) : -1;
+                const bool cut = z && t0 >= 0 && zip_delete(z, static_cast<zip_uint64_t>(t0)) == 0 && zip_close(z) == 0;
+                if (z && !cut) zip_discard(z);
+                std::string e2;
+                const auto h = cf::open(path("holed.klimt"), e2);
+                check("klimt: s055 -- a named tile missing from the zip: damaged, and which", cut && !h && e2.find("tiles/0") != std::string::npos, e2);
+            }
+            // Cancelled while the tiles deflate: false, no file.
+            int calls = 0;
+            klimt::formats::Progress late;
+            late.cancelled = [&calls] { return ++calls > 5; };
+            fs::remove(path("late.klimt"));
+            const bool ran = cf::save_klimt(path("late.klimt"), g, err, late);
+            check("klimt: s055 -- cancelled while the tiles deflate: false, nothing left",
+                  !ran && !fs::exists(path("late.klimt")) && !fs::exists(path("late.klimt.partial")), err);
+        }
         // Damage.
         {
             std::ifstream in(path("doc.klimt"), std::ios::binary);

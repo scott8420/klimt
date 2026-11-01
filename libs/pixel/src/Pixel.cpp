@@ -111,6 +111,16 @@ std::shared_ptr<const Tile> Tile::from_bytes(const Format& f, std::vector<std::u
     return t;
 }
 
+std::shared_ptr<const Tile> Tile::uniform_bytes(const Format& f, std::vector<std::uint8_t> pixel) {
+    if (pixel.size() != static_cast<std::size_t>(f.bytes_per_pixel())) return nullptr;
+    if (f.alpha && std::all_of(pixel.begin(), pixel.end(), [](std::uint8_t b) { return b == 0; })) return nullptr;
+    auto t = std::shared_ptr<Tile>(new Tile());
+    t->m_format = f;
+    t->m_uniform = true;
+    t->m_data = std::move(pixel);
+    return t;
+}
+
 Px Tile::get(int x, int y) const {
     if (m_uniform) return decode(m_format, m_data.data());
     const auto bpp = static_cast<std::size_t>(m_format.bytes_per_pixel());
