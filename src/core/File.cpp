@@ -116,6 +116,12 @@ json adjust_json(const Adjust& a) {
         }
         case AdjustKind::HueSat:
             j["hue"] = a.hue; j["saturation"] = a.saturation; j["lightness"] = a.lightness; j["colorize"] = a.colorize;
+            {   // s064: [fall-off start, band start, band end, fall-off end, hue, saturation, lightness] x 6
+                json rs = json::array();
+                for (const auto& rg : a.ranges)
+                    rs.push_back({rg.band[0], rg.band[1], rg.band[2], rg.band[3], rg.hue, rg.saturation, rg.lightness});
+                j["ranges"] = std::move(rs);
+            }
             break;
         case AdjustKind::BrightCon:
             j["brightness"] = a.brightness; j["contrast"] = a.contrast;
@@ -604,6 +610,17 @@ std::optional<Adjust> adjust_from(const json& j) {
     a.saturation = j.value("saturation", 0);
     a.lightness = j.value("lightness", 0);
     a.colorize = j.value("colorize", false);
+    if (j.contains("ranges")) {   // s064
+        const auto& rs = j.at("ranges");
+        if (!rs.is_array() || rs.size() != a.ranges.size()) return std::nullopt;
+        for (std::size_t i = 0; i < a.ranges.size(); ++i) {
+            const auto& v = rs[i];
+            if (!v.is_array() || v.size() != 7) return std::nullopt;
+            auto& rg = a.ranges[i];
+            for (std::size_t k = 0; k < 4; ++k) rg.band[k] = v[k].get<int>();
+            rg.hue = v[4].get<int>(); rg.saturation = v[5].get<int>(); rg.lightness = v[6].get<int>();
+        }
+    }
     a.brightness = j.value("brightness", 0);
     a.contrast = j.value("contrast", 0);
     a.posterize = j.value("steps", 4);   // s061

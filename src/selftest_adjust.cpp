@@ -661,6 +661,76 @@ void selftest_adjust(const Check& check) {
         check("gradient map layer: the red square turns grey 0.299, white stays white", near(g.seen(150, 150).r, 0.299) && near(g.seen(150, 150).b, 0.299) &&
               near(g.seen(20, 20).g, 1) && !gid.empty(), num(g.seen(150, 150).r));
 
+        // ── s064: Hue/Saturation's colour ranges ──
+        auto hs = A::fresh(K::HueSat);
+        check("hue/sat ranges: Photoshop's six bands to start, changing nothing", A::identity(hs) && hs.ranges[0].band == core::kHueBands[0] &&
+              hs.ranges[5].band == std::array<int, 4>{255, 285, 315, 345}, "");
+        check("hue/sat ranges: Reds' weight -- 1 at 0, 1 at 15, half at 30, none at 60, half at 330",
+              near(A::range_weight(core::kHueBands[0], 0), 1) && near(A::range_weight(core::kHueBands[0], 15), 1) &&
+              near(A::range_weight(core::kHueBands[0], 30), 0.5) && near(A::range_weight(core::kHueBands[0], 60), 0) &&
+              near(A::range_weight(core::kHueBands[0], 330), 0.5), "");
+        hs.ranges[0].saturation = -100;
+        const auto rr = rgb(hs, 1, 0, 0), bb = rgb(hs, 0, 0, 1), gg = rgb(hs, 0.4f, 0.4f, 0.4f);
+        check("hue/sat ranges: Reds saturation -100 -- red turns grey, blue stays, grey stays", !A::identity(hs) &&
+              near(rr[0], rr[1]) && near(rr[1], rr[2]) && near(bb[2], 1) && near(bb[0], 0) && near(gg[0], 0.4), num(rr[0]));
+        hs = A::fresh(K::HueSat); hs.ranges[0].lightness = 100;
+        const auto gl = rgb(hs, 0.4f, 0.4f, 0.4f);
+        check("hue/sat ranges: Reds lightness +100 -- red turns white, a grey (hue 0 in HSL) doesn't move", near(rgb(hs, 1, 0, 0)[1], 1) && near(gl[0], 0.4), num(gl[0]));
+        hs = A::fresh(K::HueSat); hs.ranges[4].hue = 180; hs.hue = 10;
+        const auto bh = rgb(hs, 0, 0, 1), rh = rgb(hs, 1, 0, 0);
+        check("hue/sat ranges: Blues hue +180 with the master's +10 -- blue goes yellowish, red only the master's 10",
+              bh[0] > 0.8f && bh[1] > 0.6f && bh[2] < 0.1f && rh[0] > 0.9f && rh[1] > 0.1f && rh[1] < 0.25f && rh[2] < 0.02f, num(bh[1]) + "," + num(rh[1]));
+        hs = A::fresh(K::HueSat); hs.colorize = true; hs.hue = 200; hs.saturation = 50; hs.ranges[0].lightness = 100;
+        auto hs2 = hs; hs2.ranges[0].lightness = 0;
+        const auto cz1 = rgb(hs, 1, 0, 0), cz2 = rgb(hs2, 1, 0, 0);
+        check("hue/sat ranges: Colorize leaves the ranges be", near(cz1[0], cz2[0], 1e-6) && near(cz1[2], cz2[2], 1e-6), "");
+        auto bnd = A::fresh(K::HueSat); bnd.ranges[1].band = {400, 30, 20, 120}; bnd.ranges[2].hue = 190;
+        const auto nb = A::normalised(bnd);
+        check("hue/sat ranges: bands wrapped into 0..359 and kept in order; out of range refused",
+              !A::refusal(bnd).empty() && nb.ranges[1].band[0] == 40 && nb.ranges[1].band[2] >= 30 && nb.ranges[2].hue == 180 &&
+              A::refusal(nb).empty(), std::to_string(nb.ranges[1].band[2]));
+
+        // ── s064: Auto ──
+        A::Histogram h{};
+        for (int v = 40; v <= 200; ++v) { h[1][static_cast<std::size_t>(v)] = 100; h[2][static_cast<std::size_t>(v + 20)] = 100; }
+        h[3][128] = 1000;          // blue: one tone -- left
+        h[1][0] = 5; h[1][255] = 5;   // a few strays: under 0.1 %, let go
+        const auto al = A::auto_tone(A::fresh(K::Levels), h);
+        check("auto: Levels -- red 40..200, green 60..220 stretched; strays let go; one-tone blue and RGB left",
+              near(al.levels[1].in_black * 255, 40, 1e-6) && near(al.levels[1].in_white * 255, 200, 1e-6) &&
+              near(al.levels[2].in_black * 255, 60, 1e-6) && near(al.levels[2].in_white * 255, 220, 1e-6) &&
+              al.levels[3] == core::LevelsCh{} && al.levels[0] == core::LevelsCh{}, num(al.levels[1].in_black * 255));
+        const auto ac = A::auto_tone(A::fresh(K::Curves), h);
+        const auto ct = A::curve_table(ac.curves[1], 256);
+        check("auto: Curves -- red a straight line from 40 to 200 (120 maps to half)", ac.curves[1].size() == 2 && near(ct[40], 0) &&
+              near(ct[200], 1) && near(ct[120], 0.5, 0.01) && ac.curves[3].size() == 2 && near(ac.curves[3][1].y, 1), num(ct[120]));
+        A::Histogram empty{};
+        check("auto: an empty histogram changes nothing", A::auto_tone(A::fresh(K::Levels), empty) == A::fresh(K::Levels), "");
+
+        // ── s064: the eyedroppers ──
+        {
+            const std::array<double, 3> warm{0.6, 0.5, 0.3};
+            const auto lb = A::dropped(A::fresh(K::Levels), A::Dropper::Black, warm);
+            const auto lbo = rgb(lb, 0.6f, 0.5f, 0.3f);
+            check("eyedropper: Levels black point -- the picked colour turns black, channel by channel",
+                  near(lb.levels[1].in_black, 0.6) && near(lb.levels[3].in_black, 0.3) && near(lbo[0], 0) && near(lbo[1], 0) && near(lbo[2], 0), "");
+            const auto lw = A::dropped(A::fresh(K::Levels), A::Dropper::White, warm);
+            const auto lwo = rgb(lw, 0.6f, 0.5f, 0.3f);
+            check("eyedropper: Levels white point -- the picked colour turns white", near(lwo[0], 1) && near(lwo[1], 1) && near(lwo[2], 1), "");
+            const auto lg = A::dropped(A::fresh(K::Levels), A::Dropper::Grey, warm);
+            const auto lgo = rgb(lg, 0.6f, 0.5f, 0.3f);
+            check("eyedropper: Levels grey point -- the picked colour turns neutral (its average, 0.467)", near(lgo[0], lgo[1], 0.004) &&
+                  near(lgo[1], lgo[2], 0.004) && near(lgo[0], 1.4 / 3, 0.006) && lg.levels[0] == core::LevelsCh{}, num(lgo[0]) + "," + num(lgo[2]));
+            const auto cg = A::dropped(A::fresh(K::Curves), A::Dropper::Grey, warm);
+            const auto cgo = rgb(cg, 0.6f, 0.5f, 0.3f);
+            check("eyedropper: Curves grey point -- a point per channel, the colour neutral", cg.curves[1].size() == 3 && near(cgo[0], cgo[2], 0.004) &&
+                  near(cgo[0], 1.4 / 3, 0.006), num(cgo[0]));
+            const auto cb = A::dropped(A::fresh(K::Curves), A::Dropper::Black, warm), cw = A::dropped(cb, A::Dropper::White, {0.9, 0.95, 0.8});
+            check("eyedropper: Curves black then white -- the end points move", near(cw.curves[1].front().x, 0.6) && near(cw.curves[1].front().y, 0) &&
+                  near(cw.curves[3].back().x, 0.8) && near(cw.curves[3].back().y, 1) && cw.curves[1].size() == 2, "");
+            check("eyedropper: other kinds untouched", A::dropped(A::fresh(K::HueSat), A::Dropper::Black, warm) == A::fresh(K::HueSat), "");
+        }
+
         // ── the .klimt keeps them ──
         Fix f;
         auto c1 = A::fresh(K::ColourBalance); c1.balance = {{{10, -20, 30}, {-40, 50, -60}, {70, -80, 90}}}; c1.keep_luma = false;
@@ -668,8 +738,9 @@ void selftest_adjust(const Check& check) {
         auto c3 = A::fresh(K::SelectiveColour); c3.selective[0] = {1, -2, 3, -4}; c3.selective[8] = {100, -100, 50, 7}; c3.selective_absolute = true;
         auto c4 = A::fresh(K::GradientMap); c4.grad = {{0, 0.5, {0.1, 0.2, 0.3}}, {0.4, 0.3, {1, 0, 0.5}}, {1, 0.7, {0, 1, 0}}};
         c4.grad_reverse = true; c4.grad_dither = true;
-        const auto i1 = f.adj(K::ColourBalance), i2 = f.adj(K::ChannelMixer), i3 = f.adj(K::SelectiveColour), i4 = f.adj(K::GradientMap);
-        f.set(i1, c1); f.set(i2, c2); f.set(i3, c3); f.set(i4, c4);
+        auto c6 = A::fresh(K::HueSat); c6.hue = 12; c6.ranges[3] = {{140, 160, 200, 230}, 25, -60, 10};
+        const auto i1 = f.adj(K::ColourBalance), i2 = f.adj(K::ChannelMixer), i3 = f.adj(K::SelectiveColour), i4 = f.adj(K::GradientMap), i5 = f.adj(K::HueSat);
+        f.set(i1, c1); f.set(i2, c2); f.set(i3, c3); f.set(i4, c4); f.set(i5, c6);
         core::file::Contents c;
         c.image = f.d.image(); c.layers = f.d.snapshot(); c.next_id = f.d.next_id();
         const auto dir = fs::temp_directory_path() / "klimt_selftest_adjust63";
@@ -680,8 +751,8 @@ void selftest_adjust(const Check& check) {
         const auto back = saved ? core::file::open(path, err) : std::nullopt;
         bool same = back.has_value();
         if (back)
-            for (const auto& i : {i1, i2, i3, i4}) same = same && back->layers.at(i).adjust == c.layers.at(i).adjust;
-        check("file: Colour Balance (three tones, luminosity), Channel Mixer (outputs, grey, Monochrome), Selective Colour (inks, Absolute), Gradient Map (stops, midpoints, Reverse, Dither) come back", same, err);
+            for (const auto& i : {i1, i2, i3, i4, i5}) same = same && back->layers.at(i).adjust == c.layers.at(i).adjust;
+        check("file (s064: + Hue/Saturation's ranges): Colour Balance (three tones, luminosity), Channel Mixer (outputs, grey, Monochrome), Selective Colour (inks, Absolute), Gradient Map (stops, midpoints, Reverse, Dither) come back", same, err);
         fs::remove_all(dir);
     }
 }

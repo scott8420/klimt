@@ -186,6 +186,11 @@ private:
     void on_feather();                           // category: select: Select > Feather (asks the radius)
     void on_modify(core::select::Modify k);      // category: select: Select > Modify > ... (asks; a job) (s011 m4)
     void on_pick(int x, int y, bool background); // category: select: the Eyedropper
+    // s064: Levels / Curves' eyedroppers -- armed in Properties (1) or the
+    // Image > Adjustments dialog (2): the Eyedropper's picks go there.
+    void on_dropper(int source, core::adjust::Dropper d);
+    int  m_dropper_src = 0;
+    std::string m_dropper_prev_tool;    // the tool before arming switched to the Eyedropper
     void on_focal_point(int x, int y);            // category: filter: s039 m2 -- Lens Blur's Set Focal Point
     void filter_dialog_channels();                // category: filter: s041 m4 -- the channels, for Lens Blur's Source
     void with_colours(core::Filter& f) const;     // category: filter: s042 m3 -- Clouds' colours from the rail

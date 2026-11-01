@@ -1,3 +1,4 @@
+#include "AdjustDialog.hpp"   // s064: the eyedroppers
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "core/Selection.hpp"
@@ -221,6 +222,37 @@ void Shell::on_pick(int x, int y, bool background) {
     const auto im = m_doc.image();
     auto layers = m_doc.snapshot();
     const int radius = m_strip.variant("eyedropper");   // Point, 3 x 3, 5 x 5
+    // s064: an armed Levels / Curves eyedropper takes the pick -- from what
+    // the adjustment sees: below the adjustment layer, or the dialog's layer alone.
+    if (m_dropper_src) {
+        const int src = m_dropper_src;
+        if (src == 1) {
+            const auto id = m_properties.adjust_layer();
+            if (id.empty() || !m_doc.get(id)) return;
+            layers = core::below(layers, id);
+        } else {
+            const auto l = m_doc.get(m_adjust_target);
+            if (!l) return;
+            core::Layer alone = *l;
+            alone.parent.clear();
+            alone.visible = true;
+            alone.opacity = alone.fill = 100;
+            alone.blend = core::Blend::Normal;
+            alone.clipped = false;
+            layers = core::Layers{{m_adjust_target, alone}};
+        }
+        m_jobs.submit("Eyedropper", [this, im, layers = std::move(layers), x, y, radius, src](core::Jobs::Token&) -> core::Jobs::Landing {
+            const auto s = core::sample_composite(im, layers, x, y, radius);
+            return [this, s, src] {
+                if (m_dropper_src != src) return;
+                if (s.a <= 0.f) { toast("Eyedropper: nothing there (transparent)"); return; }
+                const std::array<double, 3> c{s.r, s.g, s.b};
+                if (src == 1) m_properties.dropped(c);
+                else if (m_adjust_dialog) m_adjust_dialog->dropped(c);
+            };
+        });
+        return;
+    }
     m_jobs.submit("Eyedropper", [this, im, layers = std::move(layers), x, y, radius, background](core::Jobs::Token&)
                                     -> core::Jobs::Landing {
         const auto s = core::sample_composite(im, layers, x, y, radius);

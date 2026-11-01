@@ -93,6 +93,38 @@ void rgb_of(double h, double s, double l, double& r, double& g, double& b) {
 }
 
 void hue_sat(const Adjust& a, double& r, double& g, double& b) {
+    // s064: the master plus each colour range by how much of it this hue is
+    // (none on greys: the weight fades in over the first 8 % of chroma).
+    int H = a.hue, S = a.saturation, L = a.lightness;
+    bool any_range = false;
+    for (const auto& rg : a.ranges) any_range = any_range || rg.hue || rg.saturation || rg.lightness;
+    if (!a.colorize && any_range) {
+        double h, s, l;
+        hsl_of(r, g, b, h, s, l);
+        const double chroma = std::max({r, g, b}) - std::min({r, g, b});
+        const double fade = std::clamp(chroma / 0.08, 0.0, 1.0);
+        double dh = 0, ds = 0, dl = 0;
+        for (const auto& rg : a.ranges) {
+            if (!rg.hue && !rg.saturation && !rg.lightness) continue;
+            const double w = range_weight(rg.band, h * 360) * fade;
+            dh += w * rg.hue; ds += w * rg.saturation; dl += w * rg.lightness;
+        }
+        const double hh = H + dh, ss = std::clamp(S + ds, -100.0, 100.0), ll = std::clamp(L + dl, -100.0, 100.0);
+        // The same maths as the master's, with fractional amounts.
+        hsl_of(r, g, b, h, s, l);
+        if (hh != 0 || ss != 0) {
+            h = std::fmod(h + hh / 360.0 + 2.0, 1.0);
+            const double k = ss / 100.0;
+            s = k <= 0 ? s * (1 + k) : clamp01(s + (1 - s) * s * k * 2);
+            rgb_of(h, s, l, r, g, b);
+        }
+        if (ll != 0) {
+            const double k = ll / 100.0;
+            const auto f = [k](double v) { return k < 0 ? v * (1 + k) : v + (1 - v) * k; };
+            r = f(r); g = f(g); b = f(b);
+        }
+        return;
+    }
     if (a.colorize) {
         // The colour's lightness kept, hue and saturation set.
         const double lum = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -246,6 +278,15 @@ double lut_kind(const Adjust& a, const std::vector<double>* tables, int c, doubl
 
 void to_hsl(double r, double g, double b, double& h, double& s, double& l) { hsl_of(r, g, b, h, s, l); }
 
+double range_weight(const std::array<int, 4>& bd, double hue) {
+    const auto off = [&](double v) { return std::fmod(std::fmod(v - bd[0], 360.0) + 360.0, 360.0); };
+    const double o1 = off(bd[1]), o2 = off(bd[2]), o3 = off(bd[3]), x = off(hue);
+    if (x < o1) return o1 > 0 ? x / o1 : 1;
+    if (x <= o2) return 1;
+    if (x < o3) return (o3 - x) / std::max(1e-9, o3 - o2);
+    return 0;
+}
+
 std::array<double, 3> gradient_at(const std::vector<GradStop>& stops, double t) {
     if (stops.empty()) return {t, t, t};
     t = clamp01(t);
@@ -316,6 +357,16 @@ Adjust normalised(Adjust a) {
     a.hue = a.colorize ? ((a.hue % 360) + 360) % 360 : std::clamp(a.hue, -180, 180);
     a.saturation = std::clamp(a.saturation, a.colorize ? 0 : -100, 100);
     a.lightness = std::clamp(a.lightness, -100, 100);
+    for (auto& rg : a.ranges) {   // s064: degrees 0..359, in order round the wheel from the first
+        for (auto& v : rg.band) v = ((v % 360) + 360) % 360;
+        int o[4] = {0, (rg.band[1] - rg.band[0] + 360) % 360, (rg.band[2] - rg.band[0] + 360) % 360, (rg.band[3] - rg.band[0] + 360) % 360};
+        o[2] = std::max(o[2], o[1]);
+        o[3] = std::max(o[3], o[2]);
+        for (int i = 1; i < 4; ++i) rg.band[static_cast<std::size_t>(i)] = (rg.band[0] + o[i]) % 360;
+        rg.hue = std::clamp(rg.hue, -180, 180);
+        rg.saturation = std::clamp(rg.saturation, -100, 100);
+        rg.lightness = std::clamp(rg.lightness, -100, 100);
+    }
     a.brightness = std::clamp(a.brightness, -150, 150);
     a.contrast = std::clamp(a.contrast, -50, 100);
     a.posterize = std::clamp(a.posterize, 2, 255);
@@ -354,7 +405,10 @@ bool identity(const Adjust& a) {
             for (const auto& c : a.curves)
                 for (const auto& p : c) if (std::abs(p.x - p.y) > 1e-9) return false;
             return true;
-        case AdjustKind::HueSat: return !a.colorize && a.hue == 0 && a.saturation == 0 && a.lightness == 0;
+        case AdjustKind::HueSat:
+            if (a.colorize || a.hue != 0 || a.saturation != 0 || a.lightness != 0) return false;
+            for (const auto& rg : a.ranges) if (rg.hue || rg.saturation || rg.lightness) return false;   // s064
+            return true;
         case AdjustKind::BrightCon: return a.brightness == 0 && a.contrast == 0;
         case AdjustKind::Exposure:  return a.exposure == 0 && a.offset == 0 && a.exp_gamma == 1;
         case AdjustKind::Invert:
@@ -560,6 +614,76 @@ std::optional<pixel::TileMap> applied(const pixel::TileMap& src, const Adjust& a
         });
     }
     return out;
+}
+
+Adjust auto_tone(const Adjust& in, const Histogram& h, double clip) {
+    Adjust a = in;
+    for (std::size_t c = 1; c <= 3; ++c) {
+        std::uint64_t total = 0;
+        for (const auto v : h[c]) total += v;
+        if (total == 0) continue;
+        const auto cut = static_cast<std::uint64_t>(std::floor(static_cast<double>(total) * std::clamp(clip, 0.0, 0.49)));
+        int lo = 0, hi = 255;
+        for (std::uint64_t run = 0; lo < 255; ++lo) { run += h[c][static_cast<std::size_t>(lo)]; if (run > cut) break; }
+        for (std::uint64_t run = 0; hi > 0; --hi) { run += h[c][static_cast<std::size_t>(hi)]; if (run > cut) break; }
+        if (hi - lo < 2) continue;   // one tone: nothing to stretch
+        if (a.kind == AdjustKind::Levels) {
+            auto& L = a.levels[c];
+            L.in_black = lo / 255.0;
+            L.in_white = hi / 255.0;
+            L.gamma = 1;
+        } else if (a.kind == AdjustKind::Curves) {
+            a.curves[c] = {{lo / 255.0, 0}, {hi / 255.0, 1}};
+        }
+    }
+    return normalised(a);
+}
+
+Adjust dropped(const Adjust& in, Dropper d, const std::array<double, 3>& rgb) {
+    Adjust a = in;
+    if (d == Dropper::None || (a.kind != AdjustKind::Levels && a.kind != AdjustKind::Curves)) return a;
+    const auto curve_at = [&](std::size_t c, double x) {
+        const auto t = curve_table(a.curves[c], 1024);
+        const double p = clamp01(x) * 1023;
+        const auto i = std::min<std::size_t>(static_cast<std::size_t>(p), 1022);
+        return t[i] + (t[i + 1] - t[i]) * (p - static_cast<double>(i));
+    };
+    double target = 0;   // grey: the average of what the three map to now
+    for (std::size_t c = 0; c < 3; ++c)
+        target += (a.kind == AdjustKind::Levels ? levels_map(a.levels[c + 1], rgb[c]) : curve_at(c + 1, rgb[c])) / 3;
+    for (std::size_t c = 0; c < 3; ++c) {
+        const double v = clamp01(rgb[c]);
+        if (a.kind == AdjustKind::Levels) {
+            auto& L = a.levels[c + 1];
+            if (d == Dropper::Black) L.in_black = std::min(v, L.in_white - 2.0 / 255);
+            else if (d == Dropper::White) L.in_white = std::max(v, L.in_black + 2.0 / 255);
+            else {
+                const double t = clamp01((v - L.in_black) / std::max(1e-6, L.in_white - L.in_black));
+                const double u = (target - L.out_black) / std::max(1e-6, L.out_white - L.out_black);
+                if (t > 1e-4 && t < 1 - 1e-4 && u > 1e-4 && u < 1 - 1e-4) L.gamma = std::clamp(std::log(t) / std::log(u), 0.1, 9.99);
+            }
+        } else {
+            auto pts = a.curves[c + 1];
+            if (pts.size() < 2) pts = {{0, 0}, {1, 1}};
+            std::vector<CurvePt> kept;
+            if (d == Dropper::Black) {
+                kept.push_back({v, 0});
+                for (const auto& p : pts) if (p.x > v + 1.0 / 255) kept.push_back(p);
+                if (kept.size() < 2) kept.push_back({1, 1});
+            } else if (d == Dropper::White) {
+                for (const auto& p : pts) if (p.x < v - 1.0 / 255) kept.push_back(p);
+                if (kept.empty()) kept.push_back({0, 0});
+                kept.push_back({v, 1});
+            } else {
+                if (v <= 1.0 / 255 || v >= 1 - 1.0 / 255) continue;
+                for (const auto& p : pts) if (std::abs(p.x - v) >= 1.0 / 255) kept.push_back(p);
+                if (kept.size() >= 16) continue;
+                kept.push_back({v, clamp01(target)});
+            }
+            a.curves[c + 1] = std::move(kept);
+        }
+    }
+    return normalised(a);
 }
 
 Histogram histogram(const std::vector<std::uint32_t>& argb) {

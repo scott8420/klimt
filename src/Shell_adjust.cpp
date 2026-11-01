@@ -23,6 +23,32 @@ void Shell::on_adjust_new(core::AdjustKind k) {
     if (m_doc.selection()) toast("“" + m_doc.get(id)->name + "” -- only inside the selection (its mask); paint the mask to change where");
 }
 
+// s064: a Levels / Curves eyedropper armed (in Properties, 1, or the
+// dialog, 2) or let go. Armed: the Eyedropper tool, its picks to that editor;
+// let go: the tool that was in hand before.
+void Shell::on_dropper(int source, core::adjust::Dropper d) {
+    if (d == core::adjust::Dropper::None) {
+        if (m_dropper_src != source) return;
+        m_dropper_src = 0;
+        const auto prev = m_dropper_prev_tool;
+        m_dropper_prev_tool.clear();
+        if (!prev.empty() && m_rail.tool() == "eyedropper") { m_rail.set_tool(prev); on_tool(prev); }
+        return;
+    }
+    if (m_dropper_src && m_dropper_src != source) {   // one armed at a time
+        if (m_dropper_src == 1) m_properties.drop_off();
+        else if (m_adjust_dialog) m_adjust_dialog->drop_off();
+    }
+    m_dropper_src = source;
+    if (m_rail.tool() != "eyedropper") {
+        if (m_dropper_prev_tool.empty()) m_dropper_prev_tool = m_rail.tool();
+        on_tool("eyedropper");
+        m_rail.set_tool("eyedropper");
+    }
+    const char* what = d == core::adjust::Dropper::Black ? "black" : d == core::adjust::Dropper::Grey ? "grey" : "white";
+    toast(std::string("Click the canvas where it should be ") + what);
+}
+
 void Shell::on_histogram(const core::Document::Id& id) {
     const auto im = m_doc.image();
     const auto all = m_doc.snapshot();
@@ -80,7 +106,9 @@ void Shell::on_adjust_apply(core::AdjustKind k) {
             queue_render();
             adjust_preview_soon();
         });
+        m_adjust_dialog->signal_dropper().connect([this](core::adjust::Dropper d) { on_dropper(2, d); });   // s064
         m_adjust_dialog->signal_closed().connect([this] {
+            if (m_dropper_src == 2) { m_adjust_dialog->drop_off(); on_dropper(2, core::adjust::Dropper::None); }   // s064
             adjust_preview_stop();
             m_adjust_preview.reset();
             queue_render();

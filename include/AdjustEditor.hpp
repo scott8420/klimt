@@ -20,6 +20,7 @@
 #include <gtkmm/label.h>
 #include <gtkmm/scale.h>
 #include <gtkmm/spinbutton.h>
+#include <gtkmm/togglebutton.h>
 
 #include <functional>
 #include <optional>
@@ -38,6 +39,13 @@ public:
 
     sigc::signal<void(const core::Adjust&)>& signal_changed() { return m_changed; }
     sigc::signal<void()>& signal_begin() { return m_begin; }
+    // s064: Levels / Curves' eyedroppers. Armed (black / grey / white) or not
+    // -- the owner sends the canvas's next picks to `dropped`. Rebuilding for
+    // another kind lets go (and says so).
+    sigc::signal<void(core::adjust::Dropper)>& signal_dropper() { return m_dropper_sig; }
+    core::adjust::Dropper dropper() const { return m_dropper; }
+    void dropped(const std::array<double, 3>& rgb);
+    void drop_off();                      // let go, no signal
     sigc::signal<void()>& signal_end() { return m_end; }
 
 private:
@@ -56,6 +64,7 @@ private:
                          std::function<int*(guint page, std::size_t i)> field_of);
     void repage();                        // the paged sliders bound to the page shown
     void begin_end_on(Gtk::Widget& w);    // a drag on w is a begin .. end
+    void dropper_row();                   // s064: the three eyedroppers
     int  channel() const;                 // Levels / Curves: 0 = RGB, 1..3
 
     // Levels.
@@ -76,6 +85,12 @@ private:
     void gradient_press(double x, double y);
     void gradient_drag(double x, double y);
     void gradient_release();
+    // s064: Hue/Saturation's range bar -- the hues before and after, the
+    // picked range's band and fall-off with four handles to drag.
+    void draw_huebar(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
+    void huebar_press(double x, double y);
+    void huebar_drag(double x);
+    int  hue_page() const;                // 0 Master, 1..6 Reds .. Magentas
     double grad_x(double at) const;       // a place on the gradient -> x in the strip
     double grad_t(double x) const;        // and back, 0..1
 
@@ -117,6 +132,14 @@ private:
     int  m_stop = 0;
     int  m_grad_drag = 0;                 // 0 nothing, 1 a stop, 2 a midpoint (of the segment ending at m_mid)
     int  m_mid = -1;
+    // s064: the range bar's handle being dragged (-1 none) and the hue at its middle while it is.
+    bool m_huesat_ranges = false;
+    Gtk::Button* m_auto = nullptr;        // s064: Levels / Curves' Auto (needs the histogram)
+    std::array<Gtk::ToggleButton*, 3> m_drop_btn{};
+    core::adjust::Dropper m_dropper = core::adjust::Dropper::None;
+    sigc::signal<void(core::adjust::Dropper)> m_dropper_sig;
+    int  m_band_handle = -1;
+    double m_band_centre = 0;
     bool m_stop_off = false;              // a stop dragged off the strip: removed on release
     void totals();
     Gtk::DrawingArea* m_graph = nullptr;

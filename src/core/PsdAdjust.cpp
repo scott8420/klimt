@@ -108,10 +108,7 @@ Bytes curves_block(const Adjust& a) {
 
 // ── Hue / Saturation ──────────────────────────────────────────────────────
 
-// Photoshop's six colour ranges (Reds .. Magentas): each a fall-off and an
-// inner band, in degrees.
-constexpr int kRanges[6][4] = {{315, 345, 15, 45},   {15, 45, 75, 105},   {75, 105, 135, 165},
-                               {135, 165, 195, 225}, {195, 225, 255, 285}, {255, 285, 315, 345}};
+// s064: the six colour ranges are core::kHueBands (Photoshop's), now per Adjust.
 
 Bytes huesat_block(const Adjust& a) {
     Bytes b;
@@ -125,9 +122,9 @@ Bytes huesat_block(const Adjust& a) {
         bes16(b, 0); bes16(b, 25); bes16(b, 0);
         bes16(b, a.hue); bes16(b, a.saturation); bes16(b, a.lightness);
     }
-    for (const auto& r : kRanges) {
-        for (const int v : r) bes16(b, v);
-        bes16(b, 0); bes16(b, 0); bes16(b, 0);
+    for (const auto& r : a.ranges) {   // s064: the ranges as they are
+        for (const int v : r.band) bes16(b, v);
+        bes16(b, r.hue); bes16(b, r.saturation); bes16(b, r.lightness);
     }
     return b;
 }
@@ -489,10 +486,10 @@ bool Reading::feed(std::string_view key, const std::uint8_t* d, std::size_t n) {
         c.u8();
         const int ch = c.s16(), cs = c.s16(), cl = c.s16();
         const int mh = c.s16(), ms = c.s16(), ml = c.s16();
-        for (int r = 0; r < 6 && !c.bad; ++r) {
-            c.skip(8);
-            const int h = c.s16(), s = c.s16(), l = c.s16();
-            if (!c.bad && (h || s || l)) m_ranges = true;
+        for (std::size_t r = 0; r < 6 && !c.bad; ++r) {   // s064: read, not lost
+            auto& rg = a.ranges[r];
+            for (int& v : rg.band) v = c.s16();
+            rg.hue = c.s16(); rg.saturation = c.s16(); rg.lightness = c.s16();
         }
         if (c.bad) return true;
         if (a.colorize) { a.hue = ch; a.saturation = cs; a.lightness = cl; }

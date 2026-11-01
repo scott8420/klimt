@@ -34,6 +34,8 @@ AdjustDialog::AdjustDialog(Gtk::Window& parent)
     set_child(*box);
 
     m_editor.signal_changed().connect([this](const core::Adjust&) { m_changed.emit(); });
+    // s064: modal -- except while an eyedropper is armed, so the canvas takes the click.
+    m_editor.signal_dropper().connect([this](core::adjust::Dropper d) { set_modal(d == core::adjust::Dropper::None); });
     m_preview.signal_toggled().connect([this] { m_changed.emit(); });
     m_cancel_button.signal_clicked().connect([this] { close(); });
     m_ok_button.signal_clicked().connect([this] {

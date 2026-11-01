@@ -22,6 +22,10 @@ public:
     void set_histogram(const core::adjust::Histogram& h) { m_editor.set_histogram(h); }
     bool preview() const { return m_preview.get_active(); }
     const core::Adjust& value() const { return m_editor.value(); }
+    // s064: the eyedroppers (Levels / Curves).
+    sigc::signal<void(core::adjust::Dropper)>& signal_dropper() { return m_editor.signal_dropper(); }
+    void dropped(const std::array<double, 3>& rgb) { m_editor.dropped(rgb); }
+    void drop_off() { m_editor.drop_off(); set_modal(true); }
 
     sigc::signal<void()>& signal_changed() { return m_changed; }    // the settings or Preview moved
     sigc::signal<void(const core::Adjust&)>& signal_ok() { return m_ok; }

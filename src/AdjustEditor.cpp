@@ -106,6 +106,7 @@ void AdjustEditor::set(const core::Adjust& a) {
 
 void AdjustEditor::set_histogram(const std::optional<core::adjust::Histogram>& h) {
     m_hist = h;
+    if (m_auto) m_auto->set_sensitive(h.has_value());   // s064
     if (m_graph) m_graph->queue_draw();
 }
 
@@ -241,6 +242,11 @@ void AdjustEditor::rebuild() {
     m_mono = nullptr;
     m_total = nullptr;
     m_relative = m_absolute = nullptr;
+    m_huesat_ranges = false;   // s064
+    m_auto = nullptr;
+    m_drop_btn = {};
+    if (m_dropper != A::Dropper::None) { m_dropper = A::Dropper::None; m_dropper_sig.emit(m_dropper); }
+    m_band_handle = -1;
     m_grad_preset = nullptr;
     m_stop_colour = nullptr;
     m_stop_at = nullptr;
@@ -271,6 +277,20 @@ void AdjustEditor::rebuild() {
             paint();
         });
         head->append(*m_channel);
+        // s064: Auto -- each channel stretched to black and white.
+        m_auto = Gtk::make_managed<Gtk::Button>("Auto");
+        m_auto->set_name("adjust.auto");
+        m_auto->add_css_class("flat");
+        m_auto->set_tooltip_text("Auto -- stretch each of red, green and blue so its darkest is black and its lightest white "
+                                 "(the extreme 0.1 % let go), as Photoshop's");
+        m_auto->signal_clicked().connect([this] {
+            if (!m_hist) return;
+            m_a = A::auto_tone(m_a, *m_hist);
+            m_point = -1;
+            emit();
+            paint();
+        });
+        head->append(*m_auto);
     }
     auto reset = Gtk::make_managed<Gtk::Button>();
     reset->set_icon_name("edit-undo-symbolic");
@@ -586,9 +606,34 @@ void AdjustEditor::rebuild() {
             break;
         }
         case AdjustKind::HueSat: {
+            // s064: Master or one of the six colour ranges.
+            m_huesat_ranges = true;
+            pager("adjust.hue-range", "Edit", {"Master", "Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"}, 0,
+                  [this](guint p, std::size_t i) -> int* {
+                      if (p == 0 || m_a.colorize) return i == 0 ? &m_a.hue : i == 1 ? &m_a.saturation : &m_a.lightness;
+                      auto& rg = m_a.ranges[std::min<guint>(p, 6) - 1];
+                      return i == 0 ? &rg.hue : i == 1 ? &rg.saturation : &rg.lightness;
+                  });
+            m_page->set_tooltip_text("Master changes every colour; a range only its own hues (the bar below shows which)");
+            m_paged.push_back(m_sliders.size());
             slider("adjust.hue", "Hue", -180, 180, &m_a.hue);
+            m_paged.push_back(m_sliders.size());
             slider("adjust.saturation", "Saturation", -100, 100, &m_a.saturation);
+            m_paged.push_back(m_sliders.size());
             slider("adjust.lightness", "Lightness", -100, 100, &m_a.lightness);
+            m_graph = Gtk::make_managed<Gtk::DrawingArea>();
+            m_graph->set_name("adjust.hue-bar");
+            m_graph->set_content_height(52);
+            m_graph->set_hexpand(true);
+            m_graph->set_tooltip_text("Above: the hues as they are; below: as they turn out. "
+                                      "For a range, drag its handles: the bars set where it is at full strength, the triangles where it fades out");
+            m_graph->set_draw_func(sigc::mem_fun(*this, &AdjustEditor::draw_huebar));
+            auto drag = Gtk::GestureDrag::create();
+            drag->signal_drag_begin().connect([this](double x, double y) { m_begin.emit(); m_press_x = x; huebar_press(x, y); });
+            drag->signal_drag_update().connect([this](double dx, double) { huebar_drag(m_press_x + dx); });
+            drag->signal_drag_end().connect([this](double, double) { m_band_handle = -1; m_end.emit(); });
+            m_graph->add_controller(drag);
+            m_body.append(*m_graph);
             m_colorize = Gtk::make_managed<Gtk::CheckButton>("Colorize");
             m_colorize->set_name("adjust.colorize");
             m_colorize->set_tooltip_text("One hue and saturation for everything; the lightness stays");
@@ -653,6 +698,7 @@ void AdjustEditor::rebuild() {
             grid->attach(*m_lv[3], 1, 1);
             grid->attach(*m_lv[4], 3, 1);
             m_body.append(*grid);
+            dropper_row();   // s064
             break;
         }
         case AdjustKind::Curves: {
@@ -695,6 +741,7 @@ void AdjustEditor::rebuild() {
             row->append(*lo);
             row->append(*m_cout);
             m_body.append(*row);
+            dropper_row();   // s064
             break;
         }
         case AdjustKind::None: break;
@@ -716,6 +763,11 @@ void AdjustEditor::paint() {
             }
         }
         m_page->set_sensitive(!m_a.monochrome);
+    }
+    if (m_auto) m_auto->set_sensitive(m_hist.has_value());   // s064
+    if (m_huesat_ranges && m_page) {   // s064: Colorize has no ranges -- Master only
+        if (m_a.colorize) m_page->set_selected(0);
+        m_page->set_sensitive(!m_a.colorize);
     }
     m_painting = false;
     repage();   // s063: an undo can switch Monochrome under the sliders
@@ -786,6 +838,165 @@ void AdjustEditor::emit() {
     if (m_graph) m_graph->queue_draw();
     totals();
     m_changed.emit(A::normalised(out));
+}
+
+// ── s064: the eyedroppers ──────────────────────────────────────────────────
+
+void AdjustEditor::dropper_row() {
+    auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 4);
+    auto l = Gtk::make_managed<Gtk::Label>("Pick");
+    l->set_xalign(0.0f);
+    l->set_size_request(76, -1);
+    l->add_css_class("dim-label");
+    row->append(*l);
+    const char* ids[3] = {"adjust.dropper-black", "adjust.dropper-grey", "adjust.dropper-white"};
+    const char* tips[3] = {"Black point -- click the canvas where it should be black (each channel's own)",
+                           "Grey point -- click something that should be neutral grey",
+                           "White point -- click the canvas where it should be white"};
+    for (int i = 0; i < 3; ++i) {
+        auto b = Gtk::make_managed<Gtk::ToggleButton>();
+        b->set_name(ids[i]);
+        b->set_tooltip_text(tips[i]);
+        b->add_css_class("flat");
+        auto glyph = Gtk::make_managed<Gtk::DrawingArea>();
+        glyph->set_content_width(16);
+        glyph->set_content_height(16);
+        const double shade = i == 0 ? 0.0 : i == 1 ? 0.5 : 1.0;
+        glyph->set_draw_func([glyph, shade](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+            const auto fg = fg_of(*glyph);
+            // A dropper: the bulb up right, the tip down left, filled with its point's shade.
+            cr->set_line_width(1.2);
+            cr->move_to(3, h - 3);
+            cr->line_to(w - 7.5, 7.5);
+            cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.9);
+            cr->stroke();
+            cr->arc(w - 5.5, 5.5, 4, 0, 2 * M_PI);
+            cr->set_source_rgb(shade, shade, shade);
+            cr->fill_preserve();
+            cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.9);
+            cr->stroke();
+        });
+        b->set_child(*glyph);
+        const auto which = static_cast<A::Dropper>(i + 1);
+        b->signal_toggled().connect([this, b, which] {
+            if (m_painting) return;
+            if (b->get_active()) {
+                m_dropper = which;
+                m_painting = true;
+                for (auto* o : m_drop_btn) if (o && o != b) o->set_active(false);
+                m_painting = false;
+            } else if (m_dropper == which) {
+                m_dropper = A::Dropper::None;
+            } else return;
+            m_dropper_sig.emit(m_dropper);
+        });
+        m_drop_btn[static_cast<std::size_t>(i)] = b;
+        row->append(*b);
+    }
+    m_body.append(*row);
+}
+
+void AdjustEditor::dropped(const std::array<double, 3>& rgb) {
+    if (m_dropper == A::Dropper::None) return;
+    m_a = A::dropped(m_a, m_dropper, rgb);
+    m_point = -1;
+    emit();
+    paint();
+}
+
+void AdjustEditor::drop_off() {
+    m_dropper = A::Dropper::None;
+    m_painting = true;
+    for (auto* b : m_drop_btn) if (b) b->set_active(false);
+    m_painting = false;
+}
+
+// ── s064: Hue/Saturation's range bar ───────────────────────────────────────
+
+namespace {
+constexpr double kHueMargin = 8, kHueTop = 2, kHueBand = 18, kHueBandH = 14, kHueLow = 34, kHueSpecH = 14;
+double wrap360(double v) { return std::fmod(std::fmod(v, 360.0) + 360.0, 360.0); }
+}  // namespace
+
+int AdjustEditor::hue_page() const {
+    return (m_huesat_ranges && m_page && !m_a.colorize) ? static_cast<int>(std::min<guint>(m_page->get_selected(), 6)) : 0;
+}
+
+void AdjustEditor::draw_huebar(const Cairo::RefPtr<Cairo::Context>& cr, int w, int) {
+    const auto fg = fg_of(*m_graph);
+    const int page = hue_page();
+    const auto* band = page > 0 ? &m_a.ranges[static_cast<std::size_t>(page - 1)].band : nullptr;
+    // The middle of the bar: the range's middle (Master: red at the ends, cyan in the middle).
+    double centre = 180;
+    if (band) centre = m_band_handle >= 0 ? m_band_centre : wrap360((*band)[0] + wrap360((*band)[3] - (*band)[0]) / 2);
+    const double x0 = kHueMargin, W = std::max(1.0, w - 2 * kHueMargin);
+    const auto hue_at = [&](double x) { return wrap360(centre - 180 + (x - x0) / W * 360); };
+    for (int x = static_cast<int>(x0); x < static_cast<int>(x0 + W); ++x) {
+        const double h = hue_at(x + 0.5);
+        double r, g, b;
+        A::from_hsl(h / 360, 1, 0.5, r, g, b);
+        cr->set_source_rgb(r, g, b);
+        cr->rectangle(x, kHueTop, 1.05, kHueSpecH);
+        cr->fill();
+        float R = static_cast<float>(r), G = static_cast<float>(g), B = static_cast<float>(b);
+        A::apply_rgb(m_a, R, G, B);
+        cr->set_source_rgb(R, G, B);
+        cr->rectangle(x, kHueLow, 1.05, kHueSpecH);
+        cr->fill();
+    }
+    cr->set_line_width(1);
+    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.3);
+    cr->rectangle(x0 - 0.5, kHueTop - 0.5, W + 1, kHueSpecH + 1);
+    cr->rectangle(x0 - 0.5, kHueLow - 0.5, W + 1, kHueSpecH + 1);
+    cr->stroke();
+    if (!band) return;
+    // The range: full strength between the bars, fading out to the triangles.
+    const auto x_of = [&](double hue) { return x0 + wrap360(hue - (centre - 180)) / 360 * W; };
+    const double p0 = x_of((*band)[0]), p1 = x_of((*band)[1]), p2 = x_of((*band)[2]), p3 = x_of((*band)[3]);
+    const double top = kHueBand, bot = kHueBand + kHueBandH;
+    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.25);
+    cr->move_to(p0, bot); cr->line_to(p1, top + 3); cr->line_to(p2, top + 3); cr->line_to(p3, bot);
+    cr->close_path();
+    cr->fill();
+    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.55);
+    cr->rectangle(p1, top + 3, p2 - p1, bot - top - 3);
+    cr->fill();
+    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.95);
+    for (const double px : {p1, p2}) { cr->rectangle(std::round(px) - 1.5, top, 3, bot - top); cr->fill(); }
+    for (const double px : {p0, p3}) { tri_up(cr, px, top + 3, 4.5); cr->fill(); }
+}
+
+void AdjustEditor::huebar_press(double x, double) {
+    m_band_handle = -1;
+    const int page = hue_page();
+    if (page == 0 || !m_graph) return;
+    const auto& band = m_a.ranges[static_cast<std::size_t>(page - 1)].band;
+    m_band_centre = wrap360(band[0] + wrap360(band[3] - band[0]) / 2);
+    const double x0 = kHueMargin, W = std::max(1.0, m_graph->get_width() - 2 * kHueMargin);
+    double best = 9;
+    for (int k = 0; k < 4; ++k) {
+        const double px = x0 + wrap360(band[static_cast<std::size_t>(k)] - (m_band_centre - 180)) / 360 * W;
+        const double d = std::abs(px - x);
+        if (d < best || (d == best && (k == 1 || k == 2))) { best = d; m_band_handle = k; }
+    }
+}
+
+void AdjustEditor::huebar_drag(double x) {
+    const int page = hue_page();
+    if (page == 0 || m_band_handle < 0 || !m_graph) return;
+    auto& band = m_a.ranges[static_cast<std::size_t>(page - 1)].band;
+    const double x0 = kHueMargin, W = std::max(1.0, m_graph->get_width() - 2 * kHueMargin);
+    // In the bar's own frame (0..360 left to right) the four are in order: keep them so.
+    double p[4];
+    for (int k = 0; k < 4; ++k) p[k] = wrap360(band[static_cast<std::size_t>(k)] - (m_band_centre - 180));
+    const int k = m_band_handle;
+    const double lo = k > 0 ? p[k - 1] : 0, hi = k < 3 ? p[k + 1] : 359;
+    p[k] = std::clamp(std::round((x - x0) / W * 360), lo, hi);
+    const int v = static_cast<int>(wrap360(p[k] + m_band_centre - 180)) % 360;
+    if (v == band[static_cast<std::size_t>(k)]) return;
+    band[static_cast<std::size_t>(k)] = v;
+    emit();
+    paint();
 }
 
 // ── s063: Gradient Map ─────────────────────────────────────────────────────

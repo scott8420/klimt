@@ -40,6 +40,12 @@ public:
     void set_histogram(const Id& id, const core::adjust::Histogram& h);
     // s056: the Levels / Curves layer whose histogram is showing ("" none).
     Id histogram_layer() const { return m_hist_id == m_adjust_id ? m_hist_id : Id{}; }
+    // s064: the adjustment layer's eyedroppers (Levels / Curves): armed or
+    // not; the canvas pick handed back; the layer they are for.
+    sigc::signal<void(core::adjust::Dropper)>& signal_dropper() { return m_adjust.signal_dropper(); }
+    void dropped(const std::array<double, 3>& rgb) { m_adjust.dropped(rgb); }
+    void drop_off() { m_adjust.drop_off(); }
+    const Id& adjust_layer() const { return m_adjust_id; }
     // s018: a live filter's settings wanted (double-click it): its layer, its place.
     sigc::signal<void(const Id&, std::size_t)>& signal_live_edit() { return m_live_edit; }
     // s018 m4: the layer whose FILTER MASK the brushes paint ("" none) -- the

@@ -54,6 +54,18 @@ struct CurvePt {
 // B. A channel's own setting applies first, then the composite's.
 inline constexpr int kAdjustChannels = 4;
 
+// s064: one of Hue/Saturation's six colour ranges (Reds .. Magentas): its
+// hues in degrees 0..359 -- where the fall-off starts, the band (full
+// strength) starts and ends, the fall-off ends, going round the wheel -- and
+// what it adds to the master's hue, saturation, lightness there.
+struct HueRange {
+    std::array<int, 4> band{};
+    int hue = 0, saturation = 0, lightness = 0;
+    bool operator==(const HueRange&) const = default;
+};
+inline constexpr std::array<std::array<int, 4>, 6> kHueBands{{   // Photoshop's
+    {315, 345, 15, 45}, {15, 45, 75, 105}, {75, 105, 135, 165}, {135, 165, 195, 225}, {195, 225, 255, 285}, {255, 285, 315, 345}}};
+
 // s063: one colour stop of a Gradient Map.
 struct GradStop {
     double at = 0;                  // where along the gradient, 0..1
@@ -73,6 +85,8 @@ struct Adjust {
     // saturation -100..100 (Colorize: 0..100), lightness -100..100.
     int  hue = 0, saturation = 0, lightness = 0;
     bool colorize = false;
+    // s064: the colour ranges (Colorize leaves them be).
+    std::array<HueRange, 6> ranges{{{kHueBands[0]}, {kHueBands[1]}, {kHueBands[2]}, {kHueBands[3]}, {kHueBands[4]}, {kHueBands[5]}}};
     // Brightness -150..150, contrast -50..100 (Photoshop's ranges; the
     // modern behaviour -- black and white stay put).
     int  brightness = 0, contrast = 0;
@@ -157,6 +171,8 @@ void from_hsl(double h, double s, double l, double& r, double& g, double& b);
 // s063: the gradient's colour at t (0..1), stops by `at`, each segment bent
 // so it is half and half at its midpoint.
 std::array<double, 3> gradient_at(const std::vector<GradStop>& stops, double t);
+// s064: how much of colour range `r` a hue (degrees) is, 0..1.
+double range_weight(const std::array<int, 4>& band, double hue);
 // The adjustment on one straight (not premultiplied) colour, in place.
 void apply_rgb(const Adjust& a, float& r, float& g, float& b);
 
@@ -185,6 +201,19 @@ std::optional<pixel::TileMap> applied(const pixel::TileMap& src, const Adjust& a
 // draws behind its sliders.
 using Histogram = std::array<std::array<std::uint32_t, 256>, 4>;
 Histogram histogram(const std::vector<std::uint32_t>& argb);
+// s064: Auto, Photoshop's default ("Enhance Per Channel Contrast"): each of
+// R, G, B stretched so its darkest and lightest -- past `clip` of the pixels
+// at each end -- become black and white. Levels: the channels' input points;
+// Curves: each channel a straight line through those two. The rest of `a`
+// (and the composite channel) kept. A channel with nothing in it is left.
+Adjust auto_tone(const Adjust& a, const Histogram& h, double clip = 0.001);
+// s064: Levels / Curves' eyedroppers -- `rgb` (0..1, picked on the canvas)
+// set as each channel's black point, white point, or (grey) made neutral
+// at the average of what its three channels map to now. Levels: the input
+// black / white points, or each channel's gamma; Curves: the end point, or a
+// point through it. The composite channel is left as it is.
+enum class Dropper : std::uint8_t { None, Black, Grey, White };
+Adjust dropped(const Adjust& a, Dropper d, const std::array<double, 3>& rgb);
 }  // namespace adjust
 
 }  // namespace klimt::core

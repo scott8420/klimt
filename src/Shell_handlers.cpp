@@ -1,3 +1,4 @@
+#include "AdjustDialog.hpp"   // s064: its eyedroppers let go
 #include "Shell.hpp"
 #include "AboutWindow.hpp"
 #include "ShortcutsDialog.hpp"
@@ -89,6 +90,12 @@ void Shell::on_job_cancel() {  // leaves nothing behind
 }
 
 void Shell::on_tool(const std::string& id) {  // view state: not a step
+    if (m_dropper_src && id != "eyedropper") {   // s064: another tool lets an armed Levels / Curves eyedropper go
+        if (m_dropper_src == 1) m_properties.drop_off();
+        else if (m_adjust_dialog) m_adjust_dialog->drop_off();
+        m_dropper_src = 0;
+        m_dropper_prev_tool.clear();
+    }
     if (id != "text") text_close();   // s046: another tool ends the editing
     if (m_xform.active) xform_commit();   // s011: another tool applies the transform (Photoshop asks; we apply)
     if (const auto* t = core::find_tool(id)) {

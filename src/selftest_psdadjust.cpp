@@ -236,8 +236,12 @@ void selftest_psd_adjust(const Check& check) {
         adj::Reading rd;
         rd.feed("hue2", d.data(), d.size());
         const auto l = rd.losses();
-        check("psd adjust: a colour range set in Photoshop -- the master kept, the range said",
-              rd.result() && *rd.result() == hs && l.size() == 1 && l[0] == "colour ranges", "");
+        auto want = hs; want.ranges[0].hue = 30;
+        check("psd adjust: a colour range set in Photoshop (s064) -- read, nothing lost",
+              rd.result() && *rd.result() == want && l.empty(), "");
+        auto hr = core::adjust::fresh(core::AdjustKind::HueSat);
+        hr.ranges[4] = {{190, 220, 260, 290}, -40, 55, -12};
+        check("psd adjust: Hue/Saturation's ranges come back -- bands and settings", round(hr) == hr, "");
     }
     {
         core::Adjust bc = core::adjust::fresh(core::AdjustKind::BrightCon);
