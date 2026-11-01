@@ -3,6 +3,7 @@
 #include "Log.hpp"
 #include "SizeDialog.hpp"
 #include "ProfileDialog.hpp"   // s068
+#include "ColourSettingsDialog.hpp"   // s070
 #include "core/Profile.hpp"
 #include "core/Canvas.hpp"
 
@@ -99,25 +100,149 @@ void Shell::on_profile_assign() {
     m_profile_assign->ask(m_doc.image());
 }
 
-void Shell::convert_to(const core::profile::IccPtr& icc) {
+void Shell::convert_to(const core::profile::IccPtr& icc, tint::Render r) {
     if (const auto why = core::profile::convert_refusal(m_doc.image(), icc); !why.empty()) { toast("Convert to Profile: " + why); return; }
-    run_canvas_job("Convert to Profile", [icc](const Cv::Before& b, core::Jobs::Token& t) {
-        return core::profile::convert_plan(b, icc, [&t] { return t.cancelled(); }, [&t](double p) { t.progress(p); });
+    run_canvas_job("Convert to Profile", [icc, r](const Cv::Before& b, core::Jobs::Token& t) {
+        return core::profile::convert_plan(b, icc, r, [&t] { return t.cancelled(); }, [&t](double p) { t.progress(p); });
     });
+}
+
+// s070: EDIT > COLOUR SETTINGS -- the working CMYK / Gray (what untagged
+// documents of those modes mean; Image > Mode's target) and the
+// conversions' intent. Prefs; tint holds the working spaces process-wide.
+namespace {
+tint::Render render_of(const std::string& key, bool bpc) {
+    tint::Render r;
+    tint::intent_from(key, r.intent);
+    r.bpc = bpc;
+    return r;
+}
+}  // namespace
+
+tint::Render Shell::conversion_render() const { return render_of(m_prefs.intent, m_prefs.bpc); }
+tint::Render Shell::proof_render() const { return render_of(m_prefs.proof_intent, m_prefs.proof_bpc); }
+
+void Shell::on_colour_settings() {
+    if (!m_colour_settings) {
+        m_colour_settings = std::make_unique<ColourSettingsDialog>(*this);
+        m_colour_settings->signal_ok().connect([this](ColourSettingsDialog::Answer a) {
+            m_prefs.working_cmyk = core::profile::remembered_as(a.cmyk);
+            m_prefs.working_gray = core::profile::remembered_as(a.gray);
+            m_prefs.intent = tint::intent_key(a.render.intent);
+            m_prefs.bpc = a.render.bpc;
+            core::save_prefs(m_prefs_file, m_prefs);
+            apply_colour_settings();
+            if (m_prefs.proof_profile.empty()) m_proof_choice.reset();   // the proof's default follows the working CMYK
+            if (m_proof || m_gamut) proof_profile();
+            if (has_image()) update_summary();
+            toast("Colour Settings: working CMYK " + a.cmyk.name + ", Gray " + a.gray.name);
+        });
+    }
+    const auto pick = [](const std::string& r, pixel::Mode m) {
+        if (auto c = core::profile::find(r); c && c->mode == m) return *c;
+        for (const auto& c : core::profile::catalog())
+            if (c.path.empty() && c.mode == m && (c.name == "Plain CMYK (no dot gain)" || c.name == "Gray (sRGB curve)")) return c;
+        return core::profile::catalog().front();
+    };
+    m_colour_settings->ask(pick(m_prefs.working_cmyk, pixel::Mode::CMYK), pick(m_prefs.working_gray, pixel::Mode::Gray), conversion_render());
+}
+
+void Shell::apply_colour_settings() {
+    const auto get = [](const std::string& r) -> core::profile::IccPtr {
+        const auto c = core::profile::find(r);
+        return c ? c->icc : nullptr;
+    };
+    auto cmyk = get(m_prefs.working_cmyk), gray = get(m_prefs.working_gray);
+    // Klimt's plain profiles ARE the plain conversion: kept as none, so the
+    // numbers don't take a trip through a table for nothing.
+    if (cmyk && *cmyk == *core::profile::builtin(pixel::Mode::CMYK)) cmyk = nullptr;
+    if (gray && tint::inspect(*gray).name == "Gray (sRGB curve)") gray = nullptr;
+    tint::set_working(tint::Space::CMYK, cmyk);
+    tint::set_working(tint::Space::Gray, gray);
+    m_dirty = {};   // untagged Gray / CMYK may look different now
+    m_shown = {};
+    if (has_image()) { update_summary(); queue_render(); }
 }
 
 void Shell::on_profile_convert() {
     if (!has_image()) { toast("Convert to Profile: no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     if (!m_profile_convert) {
         m_profile_convert = std::make_unique<ProfileDialog>(*this, ProfileDialog::Kind::Convert);
-        m_profile_convert->signal_ok().connect([this](core::profile::IccPtr icc) { convert_to(icc); });
+        m_profile_convert->signal_ok().connect([this](core::profile::IccPtr icc) { convert_to(icc, m_profile_convert->render()); });
     }
-    m_profile_convert->ask(m_doc.image());
+    m_profile_convert->ask(m_doc.image(), conversion_render());   // s070: Colour Settings' intent to start
 }
 
 void Shell::on_mode(pixel::Mode m) {
     if (!has_image() || m_doc.image().format.mode == m) return;
-    convert_to(core::profile::builtin(m));
+    convert_to(core::profile::mode_profile(m), conversion_render());   // s070: the working space, Colour Settings' intent
+}
+
+// s069 (WEAKNESSES 14): VIEW > PROOF COLORS / GAMUT WARNING -- view state,
+// per tab: the tiles shown through the press of View > Proof Setup (the
+// prefs keep it), the document untouched. Not a step.
+const core::profile::Choice& Shell::proof_profile() {
+    if (!m_proof_choice) m_proof_choice = core::profile::proof_choice(m_prefs.proof_profile);
+    return *m_proof_choice;
+}
+
+core::Proofing Shell::proofing() const {
+    core::Proofing p;
+    if (!has_image() || (!m_proof && !m_gamut) || !m_proof_choice) return p;
+    p.press = m_proof_choice->icc;
+    p.colours = m_proof;
+    p.paper = m_proof && m_prefs.proof_paper;
+    p.gamut = m_gamut;
+    p.render = proof_render();   // s070
+    return p;
+}
+
+// The menu's check marks, this tab's.
+void Shell::sync_proof() {
+    if (m_proof_act) m_proof_act->change_state(Glib::Variant<bool>::create(m_proof));
+    if (m_gamut_act) m_gamut_act->change_state(Glib::Variant<bool>::create(m_gamut));
+}
+
+void Shell::on_proof_setup() {
+    if (!has_image()) { toast("Proof Setup: no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
+    if (!m_proof_setup) {
+        m_proof_setup = std::make_unique<ProfileDialog>(*this, ProfileDialog::Kind::Proof);
+        m_proof_setup->signal_proof().connect([this](core::profile::Choice c, bool paper) {
+            m_prefs.proof_profile = core::profile::remembered_as(c);
+            m_prefs.proof_paper = paper;
+            const auto r = m_proof_setup->render();   // s070
+            m_prefs.proof_intent = tint::intent_key(r.intent);
+            m_prefs.proof_bpc = r.bpc;
+            core::save_prefs(m_prefs_file, m_prefs);
+            m_proof_choice = std::move(c);
+            m_proof = true;   // as Photoshop: setting the proof up shows it
+            update_summary();
+            sync_proof();
+            queue_render();
+        });
+    }
+    m_proof_setup->ask_proof(m_doc.image(), proof_profile(), m_prefs.proof_paper, proof_render());
+}
+
+void Shell::on_proof_colours() {
+    if (!has_image()) return;
+    proof_profile();
+    m_proof = !m_proof;
+    update_summary();
+    sync_proof();
+    queue_render();
+    toast(m_proof ? "Proof Colors: shown as " + m_proof_choice->name + " would print it -- View > Proof Setup to change"
+                  : "Proof Colors off");
+}
+
+void Shell::on_gamut_warning() {
+    if (!has_image()) return;
+    proof_profile();
+    m_gamut = !m_gamut;
+    update_summary();
+    sync_proof();
+    queue_render();
+    if (m_gamut) toast("Gamut Warning: grey marks what " + m_proof_choice->name + " can't print");
 }
 
 void Shell::on_canvas_size() {

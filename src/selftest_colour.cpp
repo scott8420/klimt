@@ -224,4 +224,135 @@ void selftest_colour(const Check& check) {
               T::inspect(*Pr::builtin(P::Mode::Lab)).name == "Lab D50", "");
         fs::remove_all(dir);
     }
+
+    std::cout << "\n-- colour management: Proof Colors / Gamut Warning (s069) --\n";
+    {
+        namespace Pr = klimt::core::profile;
+        // A "press" with a small gamut: an RGB of pale primaries (any space can be proofed to).
+        const auto small = std::make_shared<const T::Icc>(T::rgb(std::array<double, 6>{0.45, 0.33, 0.32, 0.45, 0.25, 0.22}.data(), 2.2, "Small Test Press"));
+        const auto ch = [](std::uint32_t v, int s) { return static_cast<int>(v >> s & 0xff); };
+        const auto run = [](const std::shared_ptr<const T::Display>& d, std::vector<std::uint32_t> px) { if (d) d->run(px.data(), px.size()); return px; };
+        check("proof: nothing asked, no press, or a junk press -- no transform",
+              !T::proof(nullptr, small, false, false, false) && !T::proof(nullptr, nullptr, true, false, true) &&
+              !T::proof(nullptr, std::make_shared<const T::Icc>(T::Icc{1, 2, 3}), true, false, true) &&
+              T::proof(nullptr, small, true, false, false) && T::proof(nullptr, small, false, false, true), "");
+        check("proof: made once, shared (the same press and flags)", T::proof(nullptr, small, true, false, false) == T::proof(nullptr, small, true, false, false) &&
+              T::proof(nullptr, small, true, false, false) != T::proof(nullptr, small, true, false, true), "");
+        const std::vector<std::uint32_t> in{0xff808080u, 0xffff0000u, 0xff806050u, 0x00000000u, 0x80800000u};
+        const auto pc = run(T::proof(nullptr, small, true, false, false), in);
+        check("Proof Colors: grey stays grey; sRGB's red shown as the small press prints it -- duller (green / blue rise)",
+              std::abs(ch(pc[0], 16) - ch(pc[0], 8)) <= 2 && std::abs(ch(pc[0], 8) - ch(pc[0], 0)) <= 2 &&
+              ch(pc[1], 8) > 40 && ch(pc[1], 0) > 40, std::to_string(ch(pc[1], 16)) + "," + std::to_string(ch(pc[1], 8)) + "," + std::to_string(ch(pc[1], 0)));
+        check("Proof Colors: transparent stays transparent; half-covered keeps its alpha", pc[3] == 0 && (pc[4] >> 24) == 0x80, "");
+        const auto gw = run(T::proof(nullptr, small, false, false, true), in);
+        const std::uint32_t grey = 0xff000000u | (T::kGamutGrey << 16) | (T::kGamutGrey << 8) | T::kGamutGrey;
+        check("Gamut Warning: sRGB's red (out of the small press) marked grey; a soft brown inside it shown as itself",
+              gw[1] == grey && std::abs(ch(gw[2], 16) - 0x80) <= 2 && std::abs(ch(gw[2], 8) - 0x60) <= 2 && std::abs(ch(gw[2], 0) - 0x50) <= 2,
+              std::to_string(gw[1]) + " / " + std::to_string(ch(gw[2], 16)));
+        {
+            std::vector<std::uint32_t> greys;
+            for (std::uint32_t i = 0; i < 256; ++i) greys.push_back(0xff000000u | i << 16 | i << 8 | i);
+            const auto gs = run(T::proof(nullptr, small, false, false, true), greys), gc = run(T::proof(nullptr, cmyk, false, false, true), greys);
+            check("Gamut Warning: no grey, black to white, marked (black point compensated, as the proof does)", gs == greys && gc == greys, "");
+        }
+        const auto both = run(T::proof(nullptr, small, true, false, true), in);
+        check("both: red grey, the brown proofed", both[1] == grey && both[2] == pc[2], "");
+        // An Adobe RGB document's greens are past CMYK; its browns are not.
+        const auto ag = run(T::proof(adobe, cmyk, false, false, true), {0xff00ff00u, 0xff806050u});
+        check("Gamut Warning: Adobe RGB's pure green past Plain CMYK -- grey; its brown printable", ag[0] == grey && ag[1] != grey, std::to_string(ag[1]));
+        check("Simulate Paper Colour: a transform (absolute back to the screen)", T::proof(nullptr, cmyk, true, true, false) != nullptr, "");
+        // core: the document's tiles through it.
+        const auto sd = doc(P::Mode::RGB, P::rgba(1, 0, 0), nullptr);
+        std::vector<std::uint32_t> a{0xffff0000u}, b{0xffff0000u};
+        core::shown_argb(sd.image, a, core::Proofing{});
+        core::shown_argb(sd.image, b, core::Proofing{small, true, false, false});
+        check("core: proofing off -- the tiles as before; on -- through the press", a[0] == 0xffff0000u && b[0] == pc[1], std::to_string(b[0]));
+        std::vector<std::uint32_t> c{0xffff0000u};
+        core::shown_argb(sd.image, c, core::Proofing{small, false, false, true});
+        check("core: Gamut Warning on an untagged RGB document (taken as sRGB)", c[0] == grey, "");
+        const auto cd = doc(P::Mode::CMYK, ink(0, 1, 1, 0), cmyk);
+        std::vector<std::uint32_t> d{0xffee1c24u}, e{0xffee1c24u};
+        core::shown_argb(cd.image, d, core::Proofing{cmyk, true, false, true});
+        core::shown_argb(cd.image, e);
+        check("core: a CMYK document proofed to its own profile -- shown as itself, nothing marked", d == e, "");
+        const auto ad = doc(P::Mode::RGB, P::rgba(0, 1, 0), adobe);
+        std::vector<std::uint32_t> f{0xff00ff00u};
+        core::shown_argb(ad.image, f, core::Proofing{cmyk, false, false, true});
+        check("core: an Adobe RGB document's green proofed from Adobe RGB (not sRGB) -- marked", f[0] == grey, std::to_string(f[0]));
+        // Proof Setup's press, remembered.
+        const auto none = std::vector<std::string>{"/nonexistent-klimt-icc"};
+        const auto def = Pr::proof_choice("", none);
+        check("Proof Setup: no system SWOP -- Plain CMYK the default", def.mode == P::Mode::CMYK && def.name == "Plain CMYK (no dot gain)" && def.path.empty(), def.name);
+        const auto lab = Pr::proof_choice("Lab D50", none);
+        check("Proof Setup: one of Klimt's own remembered by name; a gone file falls back to the default",
+              lab.name == "Lab D50" && Pr::remembered_as(lab) == "Lab D50" && Pr::proof_choice("/gone/press.icc", none).name == def.name, lab.name);
+        namespace fs = std::filesystem;
+        const auto file = fs::temp_directory_path() / "klimt_selftest_press.icc";
+        { std::ofstream o(file, std::ios::binary); o.write(reinterpret_cast<const char*>(small->data()), static_cast<std::streamsize>(small->size())); }
+        const auto loaded = Pr::proof_choice(file.string(), none);
+        check("Proof Setup: a loaded file remembered by its path", loaded.name == "Small Test Press" && Pr::remembered_as(loaded) == file.string(), loaded.name);
+        fs::remove(file);
+    }
+
+    std::cout << "\n-- colour management: Colour Settings -- intents, working spaces (s070) --\n";
+    {
+        namespace Pr = klimt::core::profile;
+        T::Intent i{};
+        bool keys = true;
+        for (const auto k : {T::Intent::Perceptual, T::Intent::Relative, T::Intent::Saturation, T::Intent::Absolute})
+            keys = keys && T::intent_from(T::intent_key(k), i) && i == k && std::string(T::intent_label(k)).size() > 5;
+        check("intents: the four keys round trip; junk refused", keys && !T::intent_from("vivid", i), "");
+        const float green[3] = {0.f, 1.f, 0.f};
+        bool all = true;
+        float rel[4] = {}, def[4] = {};
+        for (const auto k : {T::Intent::Perceptual, T::Intent::Relative, T::Intent::Saturation, T::Intent::Absolute}) {
+            const auto l = T::link(*adobe, T::Space::RGB, *cmyk, T::Space::CMYK, T::Render{k, true});
+            all = all && l;
+            if (l && k == T::Intent::Relative) l->run(green, rel, 1);
+        }
+        if (const auto l = T::link(*adobe, T::Space::RGB, *cmyk, T::Space::CMYK)) l->run(green, def, 1);
+        check("intents: a link for each (Adobe RGB -> CMYK); the default is Relative + BPC", all && near(rel[0], def[0], 1e-6) && near(rel[3], def[3], 1e-6), "");
+        check("intents: proofs differ by intent (cached apart)",
+              T::proof(nullptr, cmyk, true, false, false, T::Render{T::Intent::Perceptual, true}) != T::proof(nullptr, cmyk, true, false, false), "");
+
+        // Working spaces: an untagged Gray picture read as Gray Gamma 1.8.
+        const auto gd = doc(P::Mode::Gray, [] { P::Px p; p.c = {0.5f, 1}; return p; }(), nullptr);
+        const auto before = core::sample_composite(gd.image, gd.layers, 3, 3);
+        check("working: none set -- untagged Gray / CMYK unmanaged, unnamed; Image > Mode's targets Klimt's",
+              !core::managed(gd.image) && core::profile_name(gd.image).empty() && !T::working(T::Space::CMYK) &&
+              Pr::mode_profile(P::Mode::CMYK) == Pr::builtin(P::Mode::CMYK), "");
+        T::set_working(T::Space::Gray, g18);
+        T::set_working(T::Space::CMYK, cmyk);
+        const auto after = core::sample_composite(gd.image, gd.layers, 3, 3);
+        check("working Gray Gamma 1.8: the untagged grey read through it (shown lighter than on sRGB's curve), named \"(working)\"",
+              core::managed(gd.image) && after.r > before.r + 0.01 && core::profile_name(gd.image) == "Gray Gamma 1.8 (working)",
+              num(before.r) + " -> " + num(after.r) + " " + core::profile_name(gd.image));
+        check("working: a picture with its own profile keeps it; RGB and Lab untouched",
+              core::profile_name(doc(P::Mode::Gray, [] { P::Px p; p.c = {0.5f, 1}; return p; }(), std::make_shared<const T::Icc>(T::gray(2.2))).image).find("(working)") == std::string::npos &&
+              !T::working(T::Space::RGB) && core::profile_name(doc(P::Mode::RGB, P::rgba(1, 0, 0), nullptr).image).empty(), "");
+        check("working: Image > Mode's Gray / CMYK targets are the working spaces", Pr::mode_profile(P::Mode::Gray) == g18 && Pr::mode_profile(P::Mode::CMYK) == cmyk &&
+              Pr::mode_profile(P::Mode::RGB) == Pr::builtin(P::Mode::RGB), "");
+        {   // Convert: the untagged grey taken as the working space's -- its look kept.
+            auto d = std::make_unique<core::Document>();
+            auto j = std::make_unique<core::DocJournal>(*d);
+            d->set_door([jp = j.get()] { return jp->open(); });
+            core::layers::load_fixture(*d);
+            const bool to_g = Pr::convert(*j, *d, std::make_shared<const T::Icc>(T::gray(2.2))) && Pr::assign(*j, *d, nullptr) &&
+                              d->image().format.mode == P::Mode::Gray && !d->image().icc;
+            const auto s1 = core::sample_composite(d->image(), d->snapshot(), 150, 150);
+            const bool ok = Pr::convert(*j, *d, Pr::builtin(P::Mode::RGB));
+            const auto s2 = core::sample_composite(d->image(), d->snapshot(), 150, 150);
+            check("working: Convert reads an untagged grey as Gray Gamma 1.8 (the look it showed stays)",
+                  to_g && ok && d->image().format.mode == P::Mode::RGB && near(s2.r, s1.r, 0.01), num(s1.r) + " -> " + num(s2.r));
+        }
+        const auto proof_default = Pr::proof_choice("", {"/nonexistent-klimt-icc"});
+        check("Proof Setup's default follows the working CMYK", proof_default.icc && *proof_default.icc == *cmyk, proof_default.name);
+        T::set_working(T::Space::Gray, nullptr);
+        T::set_working(T::Space::CMYK, nullptr);
+        check("working: cleared -- back to the plain conversion", !core::managed(gd.image) && near(core::sample_composite(gd.image, gd.layers, 3, 3).r, before.r, 1e-6), "");
+        std::string why;
+        check("find: Klimt's own by name, a file by path; \"\" and a gone file nothing",
+              Pr::find("Plain CMYK (no dot gain)").has_value() && !Pr::find("").has_value() && !Pr::find("/gone/x.icc").has_value() &&
+              !Pr::find("No Such Profile").has_value(), "");
+    }
 }

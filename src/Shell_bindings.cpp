@@ -203,6 +203,13 @@ void Shell::bind_actions() {  // bindings
     // s031: the rulers -- View > Rulers; the unit (right-click a ruler); the
     // zero point (drag from the corner; double-click it to reset).
     add_action("view-rulers", [this] { show_rulers(!m_prefs.rulers); });
+    add_action("colour-settings", sigc::mem_fun(*this, &Shell::on_colour_settings));   // s070: no image needed
+    // s069: soft proofing -- view state, per tab; the check marks follow it.
+    m_layer_acts["proof-setup"] = add_action("proof-setup", sigc::mem_fun(*this, &Shell::on_proof_setup));
+    m_proof_act = add_action_bool("view-proof", sigc::mem_fun(*this, &Shell::on_proof_colours), false);
+    m_gamut_act = add_action_bool("view-gamut", sigc::mem_fun(*this, &Shell::on_gamut_warning), false);
+    m_layer_acts["view-proof"] = m_proof_act;
+    m_layer_acts["view-gamut"] = m_gamut_act;
     m_canvas.set_on_view([this] { update_rulers(); });
     m_canvas.set_on_pointer([this](double x, double y) {
         if (!m_hruler) return;

@@ -291,6 +291,28 @@ void selftest_filter(const Check& check) {
         p.dock_split = 512;
         check("prefs: saved (making the folder)", core::save_prefs(file, p), "");
         check("prefs: round trip", core::load_prefs(file) == p, "");
+        {   // s069: Proof Setup's press and paper
+            auto q = p;
+            q.proof_profile = "/usr/share/color/icc/press.icc";
+            q.proof_paper = true;
+            core::save_prefs(file, q);
+            check("prefs: Proof Setup's press and Simulate Paper Colour kept (s069)", core::load_prefs(file) == q, "");
+            q.working_cmyk = "/usr/share/color/icc/swop.icc";   // s070
+            q.working_gray = "Gray Gamma 2.2";
+            q.intent = "perceptual";
+            q.bpc = false;
+            q.proof_intent = "absolute";
+            q.proof_bpc = false;
+            core::save_prefs(file, q);
+            check("prefs: Colour Settings and Proof Setup's intent kept (s070)", core::load_prefs(file) == q, "");
+            {
+                std::ofstream o(file);
+                o << R"({"intent": "vivid", "proof_intent": 3})";
+            }
+            const auto r = core::load_prefs(file);
+            check("prefs: an unknown intent falls back to Relative", r.intent == "relative" && r.proof_intent == "relative", r.intent);
+            core::save_prefs(file, p);
+        }
         {   // s051: the format last exported comes back; a word that isn't one is ignored
             core::Prefs e = p;
             e.export_format = "pdf";

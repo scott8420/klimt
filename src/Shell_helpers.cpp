@@ -116,7 +116,7 @@ void Shell::update_layer_actions() {
     for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save", "select-range", "refine-edges",
                           "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
                           "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate",
-                          "profile-assign", "profile-convert"})   // s068
+                          "profile-assign", "profile-convert", "proof-setup", "view-proof", "view-gamut"})   // s068, s069
         on(a, img);
     // s068: Image > Mode -- the document's own mode greys.
     on("mode-rgb", img && m_doc.image().format.mode != pixel::Mode::RGB);
@@ -207,7 +207,12 @@ void Shell::update_summary() {   // s012: says when the mask is what's painted
     const char* depth = im.format.depth == pixel::Depth::U8 ? "8-bit" : im.format.depth == pixel::Depth::U16 ? "16-bit"
                       : "32-bit float";
     // s067: the colour profile, when the document has one.
-    const std::string prof = core::profile_name(im);
+    std::string prof = core::profile_name(im);
+    // s069: proofing -- the press it's shown as (Photoshop's title "RGB/8/CMYK").
+    if (m_proof || m_gamut)
+        if (const auto pf = proofing(); pf.on())
+            prof += std::string(prof.empty() ? "" : "  ·  ") + (m_proof ? "Proof: " : "Gamut: ") + m_proof_choice->name +
+                    (m_proof && m_gamut ? " + gamut" : "");
     m_status.set_summary(std::to_string(im.width) + " × " + std::to_string(im.height) + " px  ·  " + mode + " " +
                          depth + (prof.empty() ? std::string{} : "  ·  " + prof) + "  ·  " + s + (n ? "  ·  " + std::to_string(n) + " selected" : std::string{}) +
                          (m_layers.mask_target().empty() ? std::string{} : "  ·  painting the MASK (white shows, black hides)"));
@@ -320,6 +325,9 @@ void Shell::queue_render() {
         const bool ref_ov = refine_overlay();
         const bool qm_flag = m_quick_mask || m_range_preview || ref_ov;
         const auto qm = m_range_preview ? m_range_preview : (m_quick_mask || ref_ov) ? m_doc.selection_ptr() : nullptr;
+        const core::Proofing pf = proofing();   // s069: on / off / another press redraws all
+        if (!(pf == m_shown_proof)) m_dirty.add_all();
+        m_shown_proof = pf;
         if (qm_flag != m_shown_qm_on) m_dirty.add_all();
         else if (qm_flag && qm != m_shown_qm) {
             if (!qm || !m_shown_qm) m_dirty.add_all();
@@ -363,13 +371,13 @@ void Shell::queue_render() {
             if (k >= 2 && m_mask_view.empty() && m_channel_view < 0 && !qm_flag && owed.size() >= 16 && owed.size() * 2 >= total) {
                 if (!m_reduce) m_reduce = std::make_shared<core::ReduceCache>();
                 m_reduce->prune(*shared);
-                m_renders.push_back(m_jobs.submit("Preview", [this, im, shared, k, cache = m_reduce](core::Jobs::Token& t) -> core::Jobs::Landing {
+                m_renders.push_back(m_jobs.submit("Preview", [this, im, shared, k, cache = m_reduce, pf](core::Jobs::Token& t) -> core::Jobs::Landing {
                     const auto stop = [&t] { return t.cancelled(); };
                     const auto r = core::reduced(im, *shared, k, cache.get(), stop);
                     if (!r) return [] {};
                     auto px = std::make_shared<std::vector<std::uint32_t>>();
                     if (!core::composite_reduced_argb(*r, *px, stop)) return [] {};
-                    core::shown_argb(im, *px);   // s067: the profile to the screen
+                    core::shown_argb(im, *px, pf);   // s067: the profile to the screen; s069: proofed
                     return [this, px, k, w = r->image.width, h = r->image.height] {
                         std::vector<std::pair<int, int>> still;   // only where the tile itself hasn't landed
                         for (int row = 0; row < m_dirty.rows; ++row)
@@ -385,7 +393,7 @@ void Shell::queue_render() {
         for (std::size_t i = 0; i < owed.size(); i += kBatch) {
             std::vector<std::pair<int, int>> batch;
             for (std::size_t k = i; k < std::min(owed.size(), i + kBatch); ++k) batch.emplace_back(owed[k].col, owed[k].row);
-            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch, view = m_mask_view, qm, qm_on = qm_flag, chan = m_channel_view](core::Jobs::Token& t) -> core::Jobs::Landing {
+            m_renders.push_back(m_jobs.submit("Composite", [this, im, shared, batch, view = m_mask_view, qm, qm_on = qm_flag, chan = m_channel_view, pf](core::Jobs::Token& t) -> core::Jobs::Landing {
                 auto out = std::make_shared<std::vector<CanvasView::Tile>>();
                 for (const auto& [col, row] : batch) {
                     if (t.cancelled()) return [] {};
@@ -397,7 +405,7 @@ void Shell::queue_render() {
                         core::mask_tile_argb(*shared->at(view).mask, col, row, *px, tile.w, tile.h);
                     else {
                         core::composite_tile_argb(im, *shared, col, row, *px, tile.w, tile.h);
-                        if (chan < 0) core::shown_argb(im, *px);   // s067: the profile to the screen (a channel alone: its own numbers)
+                        if (chan < 0) core::shown_argb(im, *px, pf);   // s067: the profile to the screen (a channel alone: its own numbers); s069: proofed
                     }
                     // s026: one colour channel alone, as grey.
                     if (chan >= 0 && view.empty())

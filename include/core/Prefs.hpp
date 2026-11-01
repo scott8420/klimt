@@ -22,6 +22,16 @@ struct Prefs {
     double path_tolerance = 2.0;   // s035: Make Work Path's tolerance, 0.5 .. 10 px
     formats::WriteOptions export_options;   // s050: the Export dialog's last choice, per format
     std::string           export_format = "png";   // s051: the format last exported (formats::export_format key)
+    std::string proof_profile;      // s069: View > Proof Setup -- a path, or Klimt's own by name ("": the default)
+    bool        proof_paper = false;   // s069: Simulate Paper Colour
+    std::string proof_intent = "relative";   // s070: Proof Setup's intent (tint::intent_key) and BPC
+    bool        proof_bpc = true;
+    // s070: Edit > Colour Settings -- the working CMYK / Gray (a path, or
+    // Klimt's own by name; "": none -- the plain conversion), and the
+    // conversions' intent (Image > Mode; Convert to Profile starts on it).
+    std::string working_cmyk, working_gray;
+    std::string intent = "relative";
+    bool        bpc = true;
     bool operator==(const Prefs&) const = default;
 };
 

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <mutex>
 
@@ -151,6 +152,16 @@ private:
 };
 
 std::map<const Icc*, std::pair<IccRef, std::shared_ptr<const Display>>> g_displays;
+// s069: proofs, by (source, press, flags); the refs keep the profiles alive.
+struct ProofKey {
+    const Icc* source; const Icc* press; int flags;
+    bool operator<(const ProofKey& o) const {
+        return source != o.source ? std::less<const Icc*>()(source, o.source)
+             : press != o.press   ? std::less<const Icc*>()(press, o.press) : flags < o.flags;
+    }
+};
+struct ProofEntry { IccRef source, press; std::shared_ptr<const Display> d; };
+std::map<ProofKey, ProofEntry> g_proofs;
 std::map<const Icc*, std::pair<IccRef, bool>> g_srgb;
 
 Icc save(cmsHPROFILE h) {
@@ -175,6 +186,57 @@ void describe(cmsHPROFILE h, const std::string& name) {
 }  // namespace
 
 int channels(Space s) { return s == Space::Gray ? 1 : s == Space::CMYK ? 4 : 3; }
+
+namespace {
+cmsUInt32Number lcms_intent(Intent i) {
+    switch (i) {
+        case Intent::Perceptual: return INTENT_PERCEPTUAL;
+        case Intent::Relative:   return INTENT_RELATIVE_COLORIMETRIC;
+        case Intent::Saturation: return INTENT_SATURATION;
+        case Intent::Absolute:   return INTENT_ABSOLUTE_COLORIMETRIC;
+    }
+    return INTENT_RELATIVE_COLORIMETRIC;
+}
+// BPC has no meaning for Absolute (lcms ignores it there too).
+cmsUInt32Number bpc_flag(const Render& r) { return r.bpc && r.intent != Intent::Absolute ? cmsFLAGS_BLACKPOINTCOMPENSATION : 0; }
+std::mutex g_work_mu;
+IccRef g_work_gray, g_work_cmyk;
+}  // namespace
+
+const char* intent_key(Intent i) {
+    switch (i) {
+        case Intent::Perceptual: return "perceptual";
+        case Intent::Relative:   return "relative";
+        case Intent::Saturation: return "saturation";
+        case Intent::Absolute:   return "absolute";
+    }
+    return "relative";
+}
+const char* intent_label(Intent i) {
+    switch (i) {
+        case Intent::Perceptual: return "Perceptual";
+        case Intent::Relative:   return "Relative Colorimetric";
+        case Intent::Saturation: return "Saturation";
+        case Intent::Absolute:   return "Absolute Colorimetric";
+    }
+    return "Relative Colorimetric";
+}
+bool intent_from(const std::string& key, Intent& out) {
+    for (const auto i : {Intent::Perceptual, Intent::Relative, Intent::Saturation, Intent::Absolute})
+        if (key == intent_key(i)) { out = i; return true; }
+    return false;
+}
+
+void set_working(Space s, IccRef icc) {
+    if (icc && icc->empty()) icc = nullptr;
+    std::lock_guard lk(g_work_mu);
+    if (s == Space::Gray) g_work_gray = std::move(icc);
+    else if (s == Space::CMYK) g_work_cmyk = std::move(icc);
+}
+IccRef working(Space s) {
+    std::lock_guard lk(g_work_mu);
+    return s == Space::Gray ? g_work_gray : s == Space::CMYK ? g_work_cmyk : nullptr;
+}
 
 Info inspect(const Icc& icc) {
     Info i;
@@ -247,12 +309,146 @@ std::shared_ptr<const Display> display(const IccRef& icc) {
     return d;
 }
 
-std::shared_ptr<const Link> link(const Icc& from, Space fs, const Icc& to, Space ts) {
+namespace {
+// s069: GAMUT WARNING. lcms' own gamut check leaves black point compensation
+// out, so a press's black (lighter than the screen's) marks every deep
+// shadow. Here: a 33^3 table over the source's RGB of how far each colour
+// lands from where it should (CIEDE2000) after a trip through the press --
+// "should" being the colour with the press's black point compensated, as the
+// proof itself does it -- read per pixel by interpolation.
+constexpr int kGrid = 33;
+constexpr double kOutOfGamut = 3.0;   // CIEDE2000 past which it's marked
+
+class GamutDisplay final : public Display {
+public:
+    GamutDisplay(std::vector<float> de, std::shared_ptr<const Display> base) : m_de(std::move(de)), m_base(std::move(base)) {}
+    void run(std::uint32_t* p, std::size_t n) const override {
+        thread_local std::vector<std::uint8_t> out;
+        out.assign(n, 0);
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::uint32_t v = p[i], a = v >> 24;
+            if (a == 0) continue;
+            const auto un = [a](std::uint32_t c) { return a == 255 ? static_cast<float>(c) : std::min(255.f, c * 255.f / static_cast<float>(a)); };
+            out[i] = lookup(un(v >> 16 & 0xff), un(v >> 8 & 0xff), un(v & 0xff)) > kOutOfGamut;
+        }
+        if (m_base) m_base->run(p, n);
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!out[i]) continue;
+            const std::uint32_t a = p[i] >> 24, g = (kGamutGrey * a + 127) / 255;
+            p[i] = (a << 24) | (g << 16) | (g << 8) | g;
+        }
+    }
+private:
+    float lookup(float r, float g, float b) const {   // 0..255 each; trilinear
+        const float s = (kGrid - 1) / 255.f;
+        const float fr = r * s, fg = g * s, fb = b * s;
+        const int r0 = std::min(kGrid - 2, static_cast<int>(fr)), g0 = std::min(kGrid - 2, static_cast<int>(fg)), b0 = std::min(kGrid - 2, static_cast<int>(fb));
+        const float tr = fr - r0, tg = fg - g0, tb = fb - b0;
+        const auto at = [this](int i, int j, int k) { return m_de[(static_cast<std::size_t>(i) * kGrid + static_cast<std::size_t>(j)) * kGrid + static_cast<std::size_t>(k)]; };
+        float acc = 0;
+        for (int di = 0; di < 2; ++di)
+            for (int dj = 0; dj < 2; ++dj)
+                for (int dk = 0; dk < 2; ++dk)
+                    acc += at(r0 + di, g0 + dj, b0 + dk) * (di ? tr : 1 - tr) * (dj ? tg : 1 - tg) * (dk ? tb : 1 - tb);
+        return acc;
+    }
+    std::vector<float> m_de;
+    std::shared_ptr<const Display> m_base;
+};
+
+// The table: source RGB -> how far out of the press it is.
+std::vector<float> gamut_table(cmsHPROFILE in, cmsHPROFILE press, Space ps) {
+    Profile lab(cmsCreateLab4Profile(nullptr));
+    cmsCIEXYZ bs{}, bd{};
+    cmsDetectBlackPoint(&bs, in, INTENT_RELATIVE_COLORIMETRIC, 0);
+    cmsDetectBlackPoint(&bd, press, INTENT_RELATIVE_COLORIMETRIC, 0);
+    Profile xyz(cmsCreateXYZProfile());
+    cmsHTRANSFORM to_xyz = cmsCreateTransform(in, TYPE_RGB_16, xyz.h, TYPE_XYZ_DBL, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOCACHE);
+    cmsHTRANSFORM to_press = cmsCreateTransform(in, TYPE_RGB_16, press, type_of(ps), INTENT_RELATIVE_COLORIMETRIC,
+                                                cmsFLAGS_NOCACHE | cmsFLAGS_BLACKPOINTCOMPENSATION);
+    cmsHTRANSFORM back = cmsCreateTransform(press, type_of(ps), lab.h, TYPE_Lab_DBL, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOCACHE);
+    std::vector<float> de;
+    if (to_xyz && to_press && back) {
+        const std::size_t n = static_cast<std::size_t>(kGrid) * kGrid * kGrid;
+        std::vector<std::uint16_t> rgb(n * 3), dev(n * 4);
+        for (int i = 0; i < kGrid; ++i)
+            for (int j = 0; j < kGrid; ++j)
+                for (int k = 0; k < kGrid; ++k) {
+                    const std::size_t at = ((static_cast<std::size_t>(i) * kGrid + static_cast<std::size_t>(j)) * kGrid + static_cast<std::size_t>(k)) * 3;
+                    rgb[at] = static_cast<std::uint16_t>(i * 65535 / (kGrid - 1));
+                    rgb[at + 1] = static_cast<std::uint16_t>(j * 65535 / (kGrid - 1));
+                    rgb[at + 2] = static_cast<std::uint16_t>(k * 65535 / (kGrid - 1));
+                }
+        std::vector<cmsCIEXYZ> x(n);
+        std::vector<cmsCIELab> rt(n);
+        cmsDoTransform(to_xyz, rgb.data(), x.data(), static_cast<cmsUInt32Number>(n));
+        cmsDoTransform(to_press, rgb.data(), dev.data(), static_cast<cmsUInt32Number>(n));
+        cmsDoTransform(back, dev.data(), rt.data(), static_cast<cmsUInt32Number>(n));
+        const cmsCIEXYZ* w = cmsD50_XYZ();
+        de.resize(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            // Black point compensation as lcms does it: a linear scaling in
+            // XYZ taking the source's black to the press's, white kept.
+            const auto bpc = [](double v, double s, double d, double wh) { return wh - s > 1e-9 ? d + (v - s) * (wh - d) / (wh - s) : v; };
+            const cmsCIEXYZ e{bpc(x[i].X, bs.X, bd.X, w->X), bpc(x[i].Y, bs.Y, bd.Y, w->Y), bpc(x[i].Z, bs.Z, bd.Z, w->Z)};
+            cmsCIELab want;
+            cmsXYZ2Lab(nullptr, &want, &e);
+            de[i] = static_cast<float>(cmsCIE2000DeltaE(&want, &rt[i], 1, 1, 1));
+        }
+    }
+    for (auto t : {to_xyz, to_press, back}) if (t) cmsDeleteTransform(t);
+    return de;
+}
+}  // namespace
+
+std::shared_ptr<const Display> proof(const IccRef& source, const IccRef& press, bool colours, bool paper, bool gamut, Render r) {
+    if ((!colours && !gamut) || !press || press->empty()) return nullptr;
+    if (!colours) paper = false;   // the paper is the proof's, not the warning's
+    const ProofKey key{source.get(), press.get(), (colours ? 1 : 0) | (paper ? 2 : 0) | (gamut ? 4 : 0) |
+                                                  (r.bpc ? 8 : 0) | (static_cast<int>(r.intent) << 4)};
+    {
+        std::lock_guard lk(g_mu);
+        if (auto it = g_proofs.find(key); it != g_proofs.end()) return it->second.d;
+    }
+    std::shared_ptr<const Display> d;
+    Profile in(source && !source->empty() ? cmsOpenProfileFromMem(source->data(), static_cast<cmsUInt32Number>(source->size()))
+                                          : cmsCreate_sRGBProfile());
+    Profile pr = open(*press);
+    Profile web(cmsCreate_sRGBProfile());
+    Space si = Space::Gray, sp = Space::Gray;
+    if (in.h && pr.h && web.h && space_of(in.h, si) && si == Space::RGB && space_of(pr.h, sp)) {
+        // The colours: through the press (Proof Colors), or just to the screen.
+        std::shared_ptr<const Display> base;
+        bool ok = true;
+        if (colours) {
+            const bool little = std::endian::native == std::endian::little;
+            const cmsUInt32Number fmt = little ? TYPE_BGRA_8 : TYPE_ARGB_8;
+            cmsHTRANSFORM t = cmsCreateProofingTransform(in.h, fmt, web.h, fmt, pr.h, lcms_intent(r.intent),
+                                                         paper ? INTENT_ABSOLUTE_COLORIMETRIC : INTENT_RELATIVE_COLORIMETRIC,
+                                                         cmsFLAGS_NOCACHE | cmsFLAGS_COPY_ALPHA | bpc_flag(r) | cmsFLAGS_SOFTPROOFING);
+            if (t) base = std::make_shared<LcmsDisplay>(t);
+            else ok = false;
+        } else if (source) {
+            base = display(source);   // nullptr: sRGB already
+        }
+        if (ok && gamut) {
+            auto de = gamut_table(in.h, pr.h, sp);
+            if (!de.empty()) d = std::make_shared<GamutDisplay>(std::move(de), base);
+        } else if (ok) {
+            d = base;
+        }
+    }
+    std::lock_guard lk(g_mu);
+    if (g_proofs.size() > 32) g_proofs.clear();
+    g_proofs[key] = {source, press, d};
+    return d;
+}
+
+std::shared_ptr<const Link> link(const Icc& from, Space fs, const Icc& to, Space ts, Render r) {
     Profile a = open(from), b = open(to);
     Space sa, sb;
     if (!a.h || !b.h || !space_of(a.h, sa) || !space_of(b.h, sb) || sa != fs || sb != ts) return nullptr;
-    cmsHTRANSFORM t = cmsCreateTransform(a.h, type_of(fs), b.h, type_of(ts), INTENT_RELATIVE_COLORIMETRIC,
-                                         cmsFLAGS_BLACKPOINTCOMPENSATION | cmsFLAGS_NOCACHE);
+    cmsHTRANSFORM t = cmsCreateTransform(a.h, type_of(fs), b.h, type_of(ts), lcms_intent(r.intent), bpc_flag(r) | cmsFLAGS_NOCACHE);
     if (!t) return nullptr;
     auto l = std::make_shared<LcmsLink>(t);
     l->in = channels(fs);

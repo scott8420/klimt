@@ -15,6 +15,7 @@
 //     new mode (canvas::land). One step; the plan runs on a worker, on the
 //     cores.
 #include "core/Canvas.hpp"
+#include "tint/Tint.hpp"   // s070: Render
 
 #include <functional>
 #include <memory>
@@ -34,10 +35,12 @@ bool assign(DocJournal& j, Document& d, const IccPtr& icc);
 // "" when `to` is a profile Klimt can convert into (readable; RGB, Gray,
 // CMYK or Lab), else why not.
 std::string convert_refusal(const Image& im, const IccPtr& to);
-std::optional<canvas::Reshape> convert_plan(const canvas::Before& b, const IccPtr& to,
+// s070: `r` -- the rendering intent and BPC. An untagged document's numbers
+// are taken as the working space's (tint::working), else tint::implicit.
+std::optional<canvas::Reshape> convert_plan(const canvas::Before& b, const IccPtr& to, tint::Render r = {},
                                             const std::function<bool()>& cancelled = {},
                                             const std::function<void(double)>& progress = {});
-bool convert(DocJournal& j, Document& d, const IccPtr& to);   // plan + land, for the tests
+bool convert(DocJournal& j, Document& d, const IccPtr& to, tint::Render r = {});   // plan + land, for the tests
 
 // The pixel mode a profile's colour space gives (nullopt: not one of ours).
 std::optional<pixel::Mode> mode_of(const std::vector<std::uint8_t>& icc);
@@ -46,7 +49,8 @@ std::optional<pixel::Mode> mode_of(const std::vector<std::uint8_t>& icc);
 // Gray Gamma 2.2, Gray (sRGB curve), Plain CMYK, Lab) and every readable
 // .icc / .icm in the system's colour folders (/usr/share/color/icc,
 // ~/.local/share/icc, ~/.color/icc -- or `dirs`), by mode, then name. Read
-// once (the folders: on first ask).
+// once (the folders: on first ask). s069: Ghostscript's folder too
+// (/usr/share/ghostscript -- its SWOP CMYK, a gray, Adobe-RGB-alike).
 struct Choice {
     std::string name;
     IccPtr      icc;
@@ -58,5 +62,21 @@ std::vector<Choice> catalog(const std::vector<std::string>& dirs = {});
 IccPtr builtin(pixel::Mode m);
 // A profile file the user picked. nullopt and `why` when it isn't one.
 std::optional<Choice> load(const std::string& path, std::string& why);
+
+// s069: VIEW > PROOF SETUP's profile, from what the prefs remember: a file's
+// path, or one of Klimt's own by name. "" (or one gone): the default -- a
+// SWOP press from the system's folders when there is one (Ghostscript ships
+// "Artifex CMYK SWOP Profile", near Photoshop's U.S. Web Coated (SWOP)),
+// else Plain CMYK. `remembered_as` is what to keep for a choice.
+// s070: the default is the working CMYK when one is set (Photoshop's
+// "Working CMYK" proof).
+Choice proof_choice(const std::string& remembered, const std::vector<std::string>& dirs = {});
+std::string remembered_as(const Choice& c);
+// s070: a remembered profile found again (catalog, or the file); nullopt:
+// "" or gone.
+std::optional<Choice> find(const std::string& remembered, const std::vector<std::string>& dirs = {});
+// s070: Image > Mode's profile -- the working space for Gray / CMYK when set,
+// else builtin().
+IccPtr mode_profile(pixel::Mode m);
 
 }  // namespace klimt::core::profile

@@ -10,6 +10,7 @@
 // colour management. s012: layer masks; s013: adjustment layers (applied
 // to what is below them, in their group). Layer styles come later.
 #include "core/Document.hpp"
+#include "tint/Tint.hpp"   // s070: Proofing's Render
 
 #include <cstdint>
 #include <functional>
@@ -54,6 +55,23 @@ std::string profile_name(const Image& im);
 // pair (`shown`). The way in is from_srgb(Image, ...) above.
 bool display_managed(const Image& im);
 void shown_argb(const Image& im, std::vector<std::uint32_t>& argb);
+// s069: VIEW > PROOF COLORS / GAMUT WARNING -- the same tiles shown as
+// `press` would print them, and / or what it can't reach marked grey. View
+// state only: the document's numbers never change. The colours handed in are
+// the composite's -- the document's RGB space, or sRGB for a Gray / CMYK /
+// Lab one (pixels_of turned them already). A document whose own profile IS
+// `press` is shown as itself (it is that press's numbers: nothing to proof,
+// nothing out of gamut). Off, or `press` unusable: shown_argb above.
+struct Proofing {
+    std::shared_ptr<const std::vector<std::uint8_t>> press;
+    bool colours = false;   // Proof Colors
+    bool paper = false;     // Simulate Paper Colour (with colours)
+    bool gamut = false;     // Gamut Warning
+    tint::Render render;    // s070: Proof Setup's intent / BPC into the press
+    bool on() const { return press && (colours || gamut); }
+    bool operator==(const Proofing&) const = default;
+};
+void shown_argb(const Image& im, std::vector<std::uint32_t>& argb, const Proofing& p);
 
 // s060 (WEAKNESSES 33): IMAGE > ADJUSTMENTS' PREVIEW as the render shows it,
 // put into `layers`. `exact` -- the target's own pixels through

@@ -110,7 +110,7 @@ std::string convert_refusal(const Image& im, const IccPtr& to) {
     return {};
 }
 
-std::optional<canvas::Reshape> convert_plan(const canvas::Before& b, const IccPtr& to,
+std::optional<canvas::Reshape> convert_plan(const canvas::Before& b, const IccPtr& to, tint::Render render,
                                             const std::function<bool()>& cancelled,
                                             const std::function<void(double)>& progress) {
     if (!b.image || !convert_refusal(*b.image, to).empty()) return std::nullopt;
@@ -119,8 +119,10 @@ std::optional<canvas::Reshape> convert_plan(const canvas::Before& b, const IccPt
     const tint::Space ts = tint::inspect(*to).space;
     // The document's profile -- unusable or of another space: its mode's plain meaning.
     tint::Icc from = im.icc ? *im.icc : tint::Icc{};
+    if (from.empty() && !im.icc)   // s070: untagged -- the working space's meaning, when set
+        if (const auto w = tint::working(fs)) from = *w;
     if (from.empty() || !tint::inspect(from).ok || tint::inspect(from).space != fs) from = tint::implicit(fs);
-    const auto link = tint::link(from, fs, *to, ts);
+    const auto link = tint::link(from, fs, *to, ts, render);
     if (!link) return std::nullopt;
     const pixel::Format nf{im.format.depth, mode_of_space(ts), im.format.alpha};
     // Every tile of every pixel layer, grid and outside, an item for the cores.
@@ -203,7 +205,7 @@ std::vector<Choice> catalog(const std::vector<std::string>& dirs_in) {
     static std::map<std::vector<std::string>, std::vector<Choice>> made;
     std::vector<std::string> dirs = dirs_in;
     if (dirs.empty()) {
-        dirs = {"/usr/share/color/icc", "/usr/local/share/color/icc"};
+        dirs = {"/usr/share/color/icc", "/usr/local/share/color/icc", "/usr/share/ghostscript"};   // s069: + Ghostscript's
         if (const char* h = std::getenv("HOME")) {
             dirs.push_back(std::string(h) + "/.local/share/icc");
             dirs.push_back(std::string(h) + "/.color/icc");
@@ -238,6 +240,40 @@ std::vector<Choice> catalog(const std::vector<std::string>& dirs_in) {
     return all;
 }
 
+std::optional<Choice> find(const std::string& remembered, const std::vector<std::string>& dirs) {
+    if (remembered.empty()) return std::nullopt;
+    std::string why;
+    if (remembered.front() == '/') return load(remembered, why);   // a file: read it (no folder scan at startup)
+    for (const auto& c : builtins())
+        if (c.name == remembered) return c;
+    (void)dirs;
+    return std::nullopt;
+}
+
+IccPtr mode_profile(pixel::Mode m) {
+    if (m == pixel::Mode::Gray || m == pixel::Mode::CMYK)
+        if (auto w = tint::working(m == pixel::Mode::Gray ? tint::Space::Gray : tint::Space::CMYK)) return w;
+    return builtin(m);
+}
+
+Choice proof_choice(const std::string& remembered, const std::vector<std::string>& dirs) {
+    const auto all = catalog(dirs);
+    if (auto c = find(remembered, dirs)) return *c;
+    if (const auto w = tint::working(tint::Space::CMYK)) {   // s070: the working CMYK
+        for (const auto& c : all)
+            if (c.icc && *c.icc == *w) return c;
+        const auto i = tint::inspect(*w);
+        return {i.name, w, pixel::Mode::CMYK, {}};
+    }
+    for (const auto& c : all)
+        if (!c.path.empty() && c.mode == pixel::Mode::CMYK && c.name.find("SWOP") != std::string::npos) return c;
+    for (const auto& c : all)
+        if (c.path.empty() && c.mode == pixel::Mode::CMYK) return c;
+    return all.front();
+}
+
+std::string remembered_as(const Choice& c) { return c.path.empty() ? c.name : c.path; }
+
 IccPtr builtin(pixel::Mode m) {
     const auto& b = builtins();
     switch (m) {
@@ -249,9 +285,9 @@ IccPtr builtin(pixel::Mode m) {
     return b[0].icc;
 }
 
-bool convert(DocJournal& j, Document& d, const IccPtr& to) {
+bool convert(DocJournal& j, Document& d, const IccPtr& to, tint::Render r) {
     const auto b = canvas::before(d);
-    const auto p = convert_plan(b, to);
+    const auto p = convert_plan(b, to, r);
     return p && canvas::land(j, d, b, *p, "Convert to Profile “" + tint::inspect(*to).name + "”");
 }
 

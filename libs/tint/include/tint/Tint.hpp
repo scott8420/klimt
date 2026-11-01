@@ -22,6 +22,19 @@ namespace klimt::tint {
 enum class Space : std::uint8_t { Gray, RGB, CMYK, Lab };
 using Icc = std::vector<std::uint8_t>;
 
+// s070: HOW a conversion maps one gamut into another -- ICC's four rendering
+// intents, and black point compensation. Klimt's default (and Photoshop's):
+// Relative Colorimetric with BPC.
+enum class Intent : std::uint8_t { Perceptual, Relative, Saturation, Absolute };
+struct Render {
+    Intent intent = Intent::Relative;
+    bool   bpc = true;
+    bool operator==(const Render&) const = default;
+};
+const char* intent_key(Intent i);     // "perceptual", "relative", "saturation", "absolute"
+const char* intent_label(Intent i);   // "Perceptual", "Relative Colorimetric", ...
+bool intent_from(const std::string& key, Intent& out);
+
 int channels(Space s);
 
 // What a profile is: readable, its colour space, its description.
@@ -67,6 +80,27 @@ public:
 // nullptr when there's nothing to do: no profile, sRGB, not RGB, unreadable.
 std::shared_ptr<const Display> display(const IccRef& icc);
 
+// s069: SOFT PROOF -- the screen's colours as `press` would print them
+// (View > Proof Colors), and / or what it can't reach marked (View > Gamut
+// Warning: those pixels painted `kGamutGrey`). `source` is the RGB profile of
+// the colours handed in (nullptr: sRGB); `press` any profile of any space (a
+// press / printer CMYK, most often). Relative colorimetric + BPC into the
+// press; `paper` (Simulate Paper Colour): back to the screen absolute
+// colorimetric -- the paper's white and the ink's black shown as they are.
+// nullptr: neither `colours` nor `gamut`, or a profile unusable. Cached by
+// the profiles' pointers and the flags; thread safe.
+inline constexpr std::uint32_t kGamutGrey = 0x80;   // 50% grey (Photoshop's default)
+// s070: `r` -- the intent / BPC into the press (Proof Setup's).
+std::shared_ptr<const Display> proof(const IccRef& source, const IccRef& press, bool colours, bool paper, bool gamut,
+                                     Render r = {});
+
+// s070: WORKING SPACES (Edit > Colour Settings) -- what an UNTAGGED Gray or
+// CMYK document's numbers are taken to mean. nullptr (the default): the
+// plain conversion of s007. Process-wide, thread safe; set from the UI
+// thread, read by the workers.
+void   set_working(Space s, IccRef icc);   // Gray or CMYK; others ignored
+IccRef working(Space s);
+
 // Profiles made here, for new documents and the tests: sRGB; a grey with a
 // pure gamma; an RGB of the given primaries (xy), D65 white and gamma (Adobe
 // RGB (1998): 0.64 0.33, 0.21 0.71, 0.15 0.06, gamma 2.2); and a plain CMYK
@@ -74,7 +108,8 @@ std::shared_ptr<const Display> display(const IccRef& icc);
 // s068: profile to profile, directly (no stop in sRGB -- a CMYK or wide RGB
 // gamut isn't clipped on the way). nullptr: either one unusable or not of
 // its stated space. Not cached: one per Convert.
-std::shared_ptr<const Link> link(const Icc& from, Space fs, const Icc& to, Space ts);
+// s070: `r` the intent and BPC (Convert to Profile's).
+std::shared_ptr<const Link> link(const Icc& from, Space fs, const Icc& to, Space ts, Render r = {});
 // s068: what a document's numbers are taken to mean when it carries no
 // profile -- the plain conversions s007 shows: sRGB; a grey on sRGB's curve;
 // plain CMYK; Lab D50.

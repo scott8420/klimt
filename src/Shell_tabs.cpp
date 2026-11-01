@@ -196,6 +196,8 @@ void Shell::remember_tab() {
     tv.selection = m_layers.selection();
     tv.mask_view = m_mask_view;
     tv.quick_mask = m_quick_mask;
+    tv.proof = m_proof;   // s069
+    tv.gamut = m_gamut;
     tv.clone = m_clone;
     tv.refine = m_refine;   // s040: the Refine session stays with its tab (53)
     tv.known = true;
@@ -255,6 +257,10 @@ void Shell::after_switch() {
     m_mask_view = tv.mask_view;
     m_layers.set_mask_viewing(m_mask_view);
     m_quick_mask = tv.quick_mask && has_image();
+    m_proof = tv.proof && has_image();   // s069: the tab's own proofing
+    m_gamut = tv.gamut && has_image();
+    m_shown_proof = {};
+    sync_proof();
     m_clone = tv.clone;
     m_refine = tv.refine;   // s040: the tab's own Refine session (none: a fresh one)
     show_clone_marker();

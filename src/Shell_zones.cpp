@@ -266,6 +266,7 @@ Gtk::Widget& Shell::build_dock() {  // zone
     // s014 m4: where Scott left it last time (360 the first time).
     m_prefs_file = Glib::build_filename(Glib::get_user_config_dir(), "klimt", "prefs.json");
     m_prefs = core::load_prefs(m_prefs_file);
+    apply_colour_settings();   // s070: the working CMYK / Gray
     if (m_hruler) {   // s031: the rulers as left last time
         const auto u = core::rulers::from_key(m_prefs.ruler_unit);
         m_hruler->set_unit(u);
@@ -325,6 +326,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     // s011: transforms -- the selection's pixels, or the whole layer.
     edit->append("Free Transform", "win.free-transform");
     edit->append("Define Pattern", "win.define-pattern");   // s033
+    edit->append("Colour Settings…", "win.colour-settings");   // s070
     auto tr = Gio::Menu::create();
     tr->append("Flip Horizontal", "win.flip-h");
     tr->append("Flip Vertical", "win.flip-v");
@@ -471,6 +473,13 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     view->append("Actual Size (100%)", "win.zoom-actual");
     view->append("Hide / Show Panels", "win.toggle-panels");
     view->append("Rulers", "win.view-rulers");   // s031
+    {   // s069: soft proofing
+        auto pr = Gio::Menu::create();
+        pr->append("Proof Setup…", "win.proof-setup");
+        pr->append("Proof Colors", "win.view-proof");
+        pr->append("Gamut Warning", "win.view-gamut");
+        view->append_section(pr);
+    }
     auto guides = Gio::Menu::create();   // s032
     guides->append("Show / Hide Guides", "win.view-guides");
     guides->append("Lock / Unlock Guides", "win.guides-lock");

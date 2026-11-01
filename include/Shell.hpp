@@ -4,6 +4,7 @@
 #include "core/Jobs.hpp"       // the worker pool, pumped by a Dispatcher
 #include "core/File.hpp"       // s007: documents in and out of files
 #include "core/Composite.hpp"  // s007: dirty tiles
+#include "core/Profile.hpp"    // s069: the proof's press
 #include "core/Paint.hpp"      // s008: the brush
 #include "core/Move.hpp"       // s009: the Move tool
 #include "core/Canvas.hpp"     // s009: Crop, Image / Canvas Size
@@ -106,6 +107,7 @@ class ColourRangeDialog;
 class ShortcutsDialog;
 class SizeDialog;
 class ProfileDialog;   // s068
+class ColourSettingsDialog;   // s070
 
 class Shell : public Gtk::ApplicationWindow {
 public:
@@ -219,7 +221,17 @@ private:
     void on_profile_assign();                    // category: canvas: Image > Assign Profile (s068)
     void on_profile_convert();                   // category: canvas: Image > Convert to Profile (s068)
     void on_mode(pixel::Mode m);                 // category: canvas: Image > Mode -- a Convert to Klimt's profile for it (s068)
-    void convert_to(const std::shared_ptr<const std::vector<std::uint8_t>>& icc);
+    void convert_to(const std::shared_ptr<const std::vector<std::uint8_t>>& icc, tint::Render r);
+    void on_proof_setup();                       // category: view: View > Proof Setup… (s069)
+    void on_proof_colours();                     // category: view: View > Proof Colors on / off (s069)
+    void on_gamut_warning();                     // category: view: View > Gamut Warning on / off (s069)
+    core::Proofing proofing() const;             // s069: what the tiles are shown through now
+    const core::profile::Choice& proof_profile();   // s069: the press (from the prefs, once)
+    void sync_proof();                           // s069: the View menu's check marks
+    void apply_colour_settings();                // s070: the prefs' working spaces into tint; every tile again
+    tint::Render conversion_render() const;      // s070: Colour Settings' intent / BPC
+    tint::Render proof_render() const;           // s070: Proof Setup's
+    void on_colour_settings();                   // category: canvas: Edit > Colour Settings… (s070)
     void on_canvas_size();                       // category: canvas: Image > Canvas Size (the dialog)
 
     // ── transform (s011 m2) ────────────────────────────────────────────────
@@ -378,6 +390,9 @@ private:
     std::unique_ptr<ExportDialog>    m_export_dialog;               // s050: after Export's file name
     std::unique_ptr<SizeDialog>      m_image_size, m_canvas_size;   // s009
     std::unique_ptr<ProfileDialog>   m_profile_assign, m_profile_convert;   // s068
+    std::unique_ptr<ProfileDialog>   m_proof_setup;                          // s069
+    std::unique_ptr<ColourSettingsDialog> m_colour_settings;                 // s070
+    Glib::RefPtr<Gio::SimpleAction>  m_proof_act, m_gamut_act;              // s069: stateful (checked)
     std::unique_ptr<NumberDialog>    m_rotate_dialog;               // s011
     std::map<int, std::unique_ptr<NumberDialog>> m_modify_dialogs;  // s011 m4: one per Modify kind
     std::unique_ptr<AdjustDialog>    m_adjust_dialog;               // s013: Image > Adjustments
@@ -487,6 +502,9 @@ private:
     bool               m_quick_mask = false;
     std::shared_ptr<const pixel::TileMap> m_shown_qm;   // the selection the red was drawn from
     bool               m_shown_qm_on = false;
+    core::Proofing     m_shown_proof;       // s069: what the tiles on screen were proofed through
+    bool               m_proof = false, m_gamut = false;   // s069: this tab's Proof Colors / Gamut Warning
+    std::optional<core::profile::Choice> m_proof_choice;   // s069: View > Proof Setup's press (read once)
     bool refine_overlay() const;   // s039 m3: the Refine brush's overlay is showing
     core::select::Pt   m_stroke_last;              // Shift-click draws from here
     core::Document::Id m_stroke_last_id;
@@ -576,6 +594,7 @@ private:
         std::vector<core::Document::Id> selection;
         std::string      mask_view;
         bool             quick_mask = false;
+        bool             proof = false, gamut = false;   // s069: View > Proof Colors / Gamut Warning
         core::paint::CloneSource clone;
         core::refine::Session refine;           // s040: the Refine brush's session (53)
         bool             known = false;

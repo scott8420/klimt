@@ -30,9 +30,13 @@ tint::Space space_of(pixel::Mode m) {
     }
     return tint::Space::RGB;
 }
+// s070: an UNTAGGED Gray / CMYK document through the working space (Edit >
+// Colour Settings), when one is set; none set: the plain conversion.
 std::shared_ptr<const tint::Link> mode_link(const Image& im, bool to) {
-    if (!im.icc || im.format.mode == pixel::Mode::RGB) return nullptr;
-    return to ? tint::to_srgb(im.icc, space_of(im.format.mode)) : tint::from_srgb(im.icc, space_of(im.format.mode));
+    if (im.format.mode == pixel::Mode::RGB) return nullptr;
+    const auto icc = im.icc ? im.icc : tint::working(space_of(im.format.mode));
+    if (!icc) return nullptr;
+    return to ? tint::to_srgb(icc, space_of(im.format.mode)) : tint::from_srgb(icc, space_of(im.format.mode));
 }
 // s067 m2: an RGB document's profile, when it isn't sRGB.
 std::shared_ptr<const tint::Link> rgb_link(const Image& im, bool to) {
@@ -408,6 +412,16 @@ void shown_argb(const Image& im, std::vector<std::uint32_t>& argb) {
     if (const auto d = tint::display(im.icc)) d->run(argb.data(), argb.size());
 }
 
+void shown_argb(const Image& im, std::vector<std::uint32_t>& argb, const Proofing& p) {
+    if (!p.on() || argb.empty() || (im.icc && *im.icc == *p.press)) { shown_argb(im, argb); return; }
+    // The composite's colours: an RGB document's own space (none: sRGB);
+    // Gray / CMYK / Lab were turned to sRGB layer by layer. An RGB profile
+    // lcms can't use is shown as sRGB, so proofed from sRGB.
+    const auto source = im.format.mode == pixel::Mode::RGB && tint::to_srgb(im.icc, tint::Space::RGB) ? im.icc : nullptr;
+    if (const auto d = tint::proof(source, p.press, p.colours, p.paper, p.gamut, p.render)) d->run(argb.data(), argb.size());
+    else shown_argb(im, argb);
+}
+
 Sampled shown(const Image& im, const Sampled& s) {
     const auto link = rgb_link(im, true);
     if (!link) return s;
@@ -418,7 +432,13 @@ Sampled shown(const Image& im, const Sampled& s) {
 }
 
 std::string profile_name(const Image& im) {
-    if (!im.icc || im.icc->empty()) return {};
+    if (!im.icc || im.icc->empty()) {   // s070: untagged, read through the working space
+        if (im.format.mode != pixel::Mode::Gray && im.format.mode != pixel::Mode::CMYK) return {};
+        const auto w = tint::working(space_of(im.format.mode));
+        if (!w) return {};
+        const auto i = tint::inspect(*w);
+        return (i.name.empty() ? std::string("(unnamed profile)") : i.name) + " (working)";
+    }
     static std::mutex mu;
     static std::map<const std::vector<std::uint8_t>*, std::pair<std::shared_ptr<const std::vector<std::uint8_t>>, std::string>> names;
     std::lock_guard lk(mu);

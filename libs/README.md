@@ -5,7 +5,7 @@ and tests, the way Composix carries `libs/plate`. The app is a thin shell over
 them. Long jobs run on worker threads, never on the UI thread
 (docs/REQUIREMENTS.md, "Threading").
 
-Built: `pixel` (s006), `formats` (s007), `text` (s046: type on Pango + Cairo; s047: Composix's leading, runs, real faces; s048: Composix's hyphenation -- patterns in `klimt/third_party/hyphen`), `tint` (s067: colour management on lcms2 -- docs/colour.md). Planned, each added only when a milestone needs it:
+Built: `pixel` (s006), `formats` (s007), `text` (s046: type on Pango + Cairo; s047: Composix's leading, runs, real faces; s048: Composix's hyphenation -- patterns in `klimt/third_party/hyphen`), `tint` (s067: colour management on lcms2; s069: soft proofing and the gamut table -- docs/colour.md). Planned, each added only when a milestone needs it:
 
 | Library | Holds | Shared with |
 |---|---|---|

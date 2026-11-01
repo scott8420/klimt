@@ -129,6 +129,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Edit", "", {}, "Ctrl+Backspace", "Fill with the background colour"},
         {"Edit", "", {}, "Delete  /  Backspace  (on the canvas)", "Delete the selected pixels"},
         {"Edit", "win.fade", {"<Ctrl><Shift>f"}, "", "Fade the last filter / stroke / fill -- opacity and mode"},
+        {"Edit", "win.colour-settings", {"<Ctrl><Shift>k"}, "Ctrl+Shift+K", "Colour Settings: the working CMYK / Gray, the conversions' intent"},   // s070
 
         // ── File (s007) ───────────────────────────────────────────────────────
         {"File", "win.new",     {"<Ctrl>n"}, "", "New image"},
@@ -227,6 +228,8 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
     reg.push_back({"View", "win.zoom-fit",    {"<Ctrl>0", "<Ctrl>KP_0"}, "Ctrl+0", "Fit the image in the window"});
     reg.push_back({"View", "win.zoom-actual", {"<Ctrl>1"}, "Ctrl+1", "Actual size (100%)"});
     reg.push_back({"View", "win.view-rulers", {"<Ctrl>r"}, "Ctrl+R", "Show / hide the rulers"});   // s031
+    reg.push_back({"View", "win.view-proof", {"<Ctrl><Alt>y"}, "Ctrl+Alt+Y", "Proof Colors: shown as the press would print it"});   // s069
+    reg.push_back({"View", "win.view-gamut", {"<Ctrl><Shift>y"}, "Ctrl+Shift+Y", "Gamut Warning: what the press can't print, grey"});
     reg.push_back({"View", "win.view-guides", {"<Ctrl>semicolon"}, "Ctrl+;", "Show / hide the guides"});   // s032
     reg.push_back({"View", "win.guides-lock", {"<Ctrl><Alt>semicolon"}, "Ctrl+Alt+;", "Lock / unlock the guides"});
     reg.push_back({"View", "win.guides-snap", {"<Ctrl><Shift>semicolon"}, "Ctrl+Shift+;", "Snap on / off (guides, the picture's edges and centre)"});

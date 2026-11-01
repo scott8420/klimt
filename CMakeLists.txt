@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s068")
+set(KLIMT_BUILD "s070")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -241,6 +241,7 @@ add_executable(klimt
     src/Shell_text.cpp     # s046: the Text tool -- visits, the keys, the strip
     src/SizeDialog.cpp
     src/ProfileDialog.cpp      # s068: Assign / Convert to Profile
+    src/ColourSettingsDialog.cpp   # s070: Edit > Colour Settings
     src/NewDialog.cpp
     src/NumberDialog.cpp
     src/ExportDialog.cpp   # s050: the format's own settings

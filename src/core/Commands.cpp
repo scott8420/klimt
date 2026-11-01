@@ -257,6 +257,10 @@ const std::vector<Command>& commands() {
             {"Delete", "Layer", "win.layer-delete", "", "remove trash erase", "Delete"},
             {"Hide / Show Panels", "View", "win.toggle-panels", "", "focus fullscreen distraction", "Tab"},
             {"Rulers", "View", "win.view-rulers", "", "ruler units measure inches cm zero origin", "Ctrl+R"},
+            {"Colour Settings…", "Edit", "win.colour-settings", "", "colour color settings working space cmyk gray intent perceptual relative bpc", "Ctrl+Shift+K"},   // s070
+            {"Proof Setup…", "View", "win.proof-setup", "", "proof soft press print cmyk simulate paper swop profile", ""},   // s069
+            {"Proof Colors", "View", "win.view-proof", "", "proof soft press print cmyk simulate preview", "Ctrl+Alt+Y"},
+            {"Gamut Warning", "View", "win.view-gamut", "", "gamut out of range print cmyk press warning", "Ctrl+Shift+Y"},
             {"Define Pattern", "Edit", "win.define-pattern", "", "pattern texture tile save selection library", ""},
             {"Show / Hide Guides", "View", "win.view-guides", "", "guides lines grid align", "Ctrl+;"},
             {"Lock Guides", "View", "win.guides-lock", "", "guides lock fix", "Ctrl+Alt+;"},
