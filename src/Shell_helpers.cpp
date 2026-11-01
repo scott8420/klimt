@@ -115,8 +115,14 @@ void Shell::update_layer_actions() {
     on("guides-clear", img && !m_doc.image().guides.empty());   // s032
     for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save", "select-range", "refine-edges",
                           "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
-                          "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate"})
+                          "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate",
+                          "profile-assign", "profile-convert"})   // s068
         on(a, img);
+    // s068: Image > Mode -- the document's own mode greys.
+    on("mode-rgb", img && m_doc.image().format.mode != pixel::Mode::RGB);
+    on("mode-gray", img && m_doc.image().format.mode != pixel::Mode::Gray);
+    on("mode-cmyk", img && m_doc.image().format.mode != pixel::Mode::CMYK && m_doc.image().format.depth != pixel::Depth::F32);
+    on("mode-lab", img && m_doc.image().format.mode != pixel::Mode::Lab && m_doc.image().format.depth != pixel::Depth::F32);
     // s012: the mask verbs follow the primary layer's mask.
     {
         const auto pl = m_doc.get(m_layers.primary());

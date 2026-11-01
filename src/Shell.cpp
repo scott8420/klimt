@@ -1,5 +1,6 @@
 #include "Shell.hpp"
 #include "SizeDialog.hpp"       // s009: complete for ~unique_ptr<SizeDialog>
+#include "ProfileDialog.hpp"    // s068: complete for ~unique_ptr<ProfileDialog>
 #include "AboutWindow.hpp"      // complete type for ~unique_ptr<AboutWindow> in ~Shell()
 #include "ShortcutsDialog.hpp"  // ditto
 #include "CommandPalette.hpp"   // ditto

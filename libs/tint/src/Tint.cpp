@@ -247,7 +247,45 @@ std::shared_ptr<const Display> display(const IccRef& icc) {
     return d;
 }
 
-Icc srgb() { return save(cmsCreate_sRGBProfile()); }
+std::shared_ptr<const Link> link(const Icc& from, Space fs, const Icc& to, Space ts) {
+    Profile a = open(from), b = open(to);
+    Space sa, sb;
+    if (!a.h || !b.h || !space_of(a.h, sa) || !space_of(b.h, sb) || sa != fs || sb != ts) return nullptr;
+    cmsHTRANSFORM t = cmsCreateTransform(a.h, type_of(fs), b.h, type_of(ts), INTENT_RELATIVE_COLORIMETRIC,
+                                         cmsFLAGS_BLACKPOINTCOMPENSATION | cmsFLAGS_NOCACHE);
+    if (!t) return nullptr;
+    auto l = std::make_shared<LcmsLink>(t);
+    l->in = channels(fs);
+    l->out = channels(ts);
+    return l;
+}
+
+Icc implicit(Space s) {
+    switch (s) {
+        case Space::RGB: return srgb();
+        case Space::Gray: {
+            const cmsFloat64Number p[5] = {2.4, 1 / 1.055, 0.055 / 1.055, 1 / 12.92, 0.04045};   // sRGB's curve
+            cmsToneCurve* c = cmsBuildParametricToneCurve(nullptr, 4, p);
+            cmsHPROFILE h = cmsCreateGrayProfile(cmsD50_xyY(), c);
+            cmsFreeToneCurve(c);
+            if (h) describe(h, "Gray (sRGB curve)");
+            return save(h);
+        }
+        case Space::CMYK: return plain_cmyk();
+        case Space::Lab: {
+            cmsHPROFILE h = cmsCreateLab4Profile(nullptr);
+            if (h) describe(h, "Lab D50");
+            return save(h);
+        }
+    }
+    return srgb();
+}
+
+Icc srgb() {
+    cmsHPROFILE h = cmsCreate_sRGBProfile();
+    if (h) describe(h, "sRGB IEC61966-2.1");
+    return save(h);
+}
 
 Icc gray(double gamma) {
     cmsToneCurve* c = cmsBuildGamma(nullptr, gamma);
@@ -271,7 +309,7 @@ Icc rgb(const double p[6], double gamma, const std::string& name) {
 
 Icc adobe_rgb() {
     const double p[6] = {0.64, 0.33, 0.21, 0.71, 0.15, 0.06};
-    return rgb(p, 563.0 / 256.0, "Adobe RGB (1998) -- Klimt's");
+    return rgb(p, 563.0 / 256.0, "Adobe RGB (1998) compatible");
 }
 
 Icc plain_cmyk() {
@@ -283,7 +321,7 @@ Icc plain_cmyk() {
     cmsSetDeviceClass(h, cmsSigOutputClass);
     cmsSetColorSpace(h, cmsSigCmykData);
     cmsSetPCS(h, cmsSigLabData);
-    describe(h, "Plain CMYK (no dot gain) -- Klimt's");
+    describe(h, "Plain CMYK (no dot gain)");
     cmsWriteTag(h, cmsSigMediaWhitePointTag, const_cast<cmsCIEXYZ*>(cmsD50_XYZ()));
     Profile web(cmsCreate_sRGBProfile());
     Profile lab(cmsCreateLab4Profile(nullptr));
@@ -311,7 +349,7 @@ Icc plain_cmyk() {
     cmsWriteTag(h, cmsSigAToB1Tag, a2b);
     // BToA: Lab -> CMYK, through sRGB, all the black taken into K.
     cmsPipeline* b2a = cmsPipelineAlloc(nullptr, 3, 4);
-    cmsStage* clut_b = cmsStageAllocCLut16bit(nullptr, 21, 3, 4, nullptr);
+    cmsStage* clut_b = cmsStageAllocCLut16bit(nullptr, 33, 3, 4, nullptr);
     cmsStageSampleCLut16bit(clut_b, [](const cmsUInt16Number in[], cmsUInt16Number out[], void* cargo) -> cmsInt32Number {
         auto* c = static_cast<Ctx*>(cargo);
         cmsCIELab L;

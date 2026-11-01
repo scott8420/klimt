@@ -426,6 +426,15 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     image->append("Canvas Size…", "win.canvas-size");
     image->append("Crop to Selection", "win.crop-selection");
     image->append("Reveal All", "win.reveal-all");
+    // s068: the colour -- Image > Mode, Assign / Convert to Profile.
+    auto mode = Gio::Menu::create();
+    mode->append("RGB Colour", "win.mode-rgb");
+    mode->append("Grayscale", "win.mode-gray");
+    mode->append("CMYK Colour", "win.mode-cmyk");
+    mode->append("Lab Colour", "win.mode-lab");
+    image->append_submenu("Mode", mode);
+    image->append("Assign Profile…", "win.profile-assign");
+    image->append("Convert to Profile…", "win.profile-convert");
     // s011 m3: the whole canvas turned.
     auto turn = Gio::Menu::create();
     turn->append("180°", "win.canvas-180");

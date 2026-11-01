@@ -553,7 +553,7 @@ void add_related(TileSet& t, const Layers& ls, const Document::Id& id) {
 TileSet changed_tiles(const Image& before_im, const Layers& before, const Image& after_im, const Layers& after) {
     TileSet t = tiles_of(after_im);
     if (before_im.width != after_im.width || before_im.height != after_im.height ||
-        !(before_im.format == after_im.format)) {
+        !(before_im.format == after_im.format) || before_im.icc != after_im.icc) {   // s068: Assign Profile -- every tile looks different
         t.add_all();
         return t;
     }

@@ -231,6 +231,12 @@ const std::vector<Command>& commands() {
             {"Canvas Size", "Image", "win.canvas-size", "", "extend border expand trim anchor", ""},
             {"Crop to Selection", "Image", "win.crop-selection", "", "trim cut bounds", ""},
             {"Reveal All", "Image", "win.reveal-all", "", "show hidden outside beyond canvas expand", ""},
+            {"Assign Profile…", "Image", "win.profile-assign", "", "colour color profile icc assign tag srgb adobe rgb p3 manage", ""},   // s068
+            {"Convert to Profile…", "Image", "win.profile-convert", "", "colour color profile icc convert cmyk press srgb adobe rgb gamut", ""},
+            {"Mode: RGB Colour", "Image", "win.mode-rgb", "", "mode colour color rgb convert", ""},
+            {"Mode: Grayscale", "Image", "win.mode-gray", "", "mode grey gray greyscale grayscale convert black white", ""},
+            {"Mode: CMYK Colour", "Image", "win.mode-cmyk", "", "mode colour color cmyk print press convert", ""},
+            {"Mode: Lab Colour", "Image", "win.mode-lab", "", "mode colour color lab cielab convert", ""},
             {"Rotate Canvas 180°", "Image", "win.canvas-180", "", "image rotation turn upside down", ""},
             {"Rotate Canvas 90° Clockwise", "Image", "win.canvas-cw", "", "image rotation turn right portrait landscape", ""},
             {"Rotate Canvas 90° Counter Clockwise", "Image", "win.canvas-ccw", "", "image rotation turn left portrait landscape", ""},

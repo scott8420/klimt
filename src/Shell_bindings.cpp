@@ -176,6 +176,13 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["canvas-size"] = add_action("canvas-size", sigc::mem_fun(*this, &Shell::on_canvas_size));
     m_layer_acts["reveal-all"] = add_action("reveal-all", sigc::mem_fun(*this, &Shell::on_reveal_all));
     m_layer_acts["crop-selection"] = add_action("crop-selection", sigc::mem_fun(*this, &Shell::on_crop_selection));
+    // s068: colour profiles and Image > Mode (Shell_canvas.cpp).
+    m_layer_acts["profile-assign"] = add_action("profile-assign", sigc::mem_fun(*this, &Shell::on_profile_assign));
+    m_layer_acts["profile-convert"] = add_action("profile-convert", sigc::mem_fun(*this, &Shell::on_profile_convert));
+    m_layer_acts["mode-rgb"]  = add_action("mode-rgb",  [this] { on_mode(pixel::Mode::RGB); });
+    m_layer_acts["mode-gray"] = add_action("mode-gray", [this] { on_mode(pixel::Mode::Gray); });
+    m_layer_acts["mode-cmyk"] = add_action("mode-cmyk", [this] { on_mode(pixel::Mode::CMYK); });
+    m_layer_acts["mode-lab"]  = add_action("mode-lab",  [this] { on_mode(pixel::Mode::Lab); });
     m_strip.signal_brush_changed().connect([this] {
         const auto o = m_strip.brush(m_rail.tool());
         m_canvas.set_brush_size(o.size);

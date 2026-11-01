@@ -2,6 +2,8 @@
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "SizeDialog.hpp"
+#include "ProfileDialog.hpp"   // s068
+#include "core/Profile.hpp"
 #include "core/Canvas.hpp"
 
 #include <cmath>
@@ -79,6 +81,43 @@ void Shell::on_image_size() {
     }
     const auto& im = m_doc.image();
     m_image_size->ask(im.width, im.height, im.dpi);
+}
+
+// s068 (WEAKNESSES 14): Image > Assign Profile -- one step, at once (the
+// numbers stay); Convert to Profile and Image > Mode -- a canvas job.
+void Shell::on_profile_assign() {
+    if (!has_image()) { toast("Assign Profile: no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
+    if (!m_profile_assign) {
+        m_profile_assign = std::make_unique<ProfileDialog>(*this, ProfileDialog::Kind::Assign);
+        m_profile_assign->signal_ok().connect([this](core::profile::IccPtr icc) {
+            if (const auto why = core::profile::assign_refusal(m_doc.image(), icc); !why.empty()) { toast("Assign Profile: " + why); return; }
+            if (!core::profile::assign(m_journal, m_doc, icc)) { toast("Assign Profile: that is the profile already"); return; }
+            update_summary();
+            queue_render();
+        });
+    }
+    m_profile_assign->ask(m_doc.image());
+}
+
+void Shell::convert_to(const core::profile::IccPtr& icc) {
+    if (const auto why = core::profile::convert_refusal(m_doc.image(), icc); !why.empty()) { toast("Convert to Profile: " + why); return; }
+    run_canvas_job("Convert to Profile", [icc](const Cv::Before& b, core::Jobs::Token& t) {
+        return core::profile::convert_plan(b, icc, [&t] { return t.cancelled(); }, [&t](double p) { t.progress(p); });
+    });
+}
+
+void Shell::on_profile_convert() {
+    if (!has_image()) { toast("Convert to Profile: no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
+    if (!m_profile_convert) {
+        m_profile_convert = std::make_unique<ProfileDialog>(*this, ProfileDialog::Kind::Convert);
+        m_profile_convert->signal_ok().connect([this](core::profile::IccPtr icc) { convert_to(icc); });
+    }
+    m_profile_convert->ask(m_doc.image());
+}
+
+void Shell::on_mode(pixel::Mode m) {
+    if (!has_image() || m_doc.image().format.mode == m) return;
+    convert_to(core::profile::builtin(m));
 }
 
 void Shell::on_canvas_size() {

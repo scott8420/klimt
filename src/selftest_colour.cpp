@@ -2,9 +2,15 @@
 // document shown and painted through its profile. docs/colour.md.
 #include "core/Composite.hpp"
 #include "core/File.hpp"
+#include "core/Document.hpp"
+#include "core/Profile.hpp"
+#include "core/Text.hpp"
 #include "tint/Tint.hpp"
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <array>
 #include <cstdint>
 #include <vector>
 #include <functional>
@@ -129,5 +135,93 @@ void selftest_colour(const Check& check) {
               num(seen.r) + "," + num(seen.g) + " / " + num(in.c[0]));
         const auto keep = core::from_srgb(sr.image, 0.2f, 0.6f, 0.4f);
         check("sRGB document: a picked colour goes in as it is", near(keep.c[0], 0.2, 1e-6) && near(keep.c[1], 0.6, 1e-6), "");
+    }
+
+    std::cout << "\n-- colour management: Assign / Convert to Profile (s068) --\n";
+    {
+        namespace Pr = klimt::core::profile;
+        const auto fresh = [] {
+            auto d = std::make_unique<core::Document>();
+            auto j = std::make_unique<core::DocJournal>(*d);
+            d->set_door([jp = j.get()] { return jp->open(); });
+            core::layers::load_fixture(*d);   // white; a red square at (100, 100) 200 x 150
+            return std::make_pair(std::move(d), std::move(j));
+        };
+        const auto seen = [](const core::Document& d, int x, int y) { return core::shown(d.image(), core::sample_composite(d.image(), d.snapshot(), x, y)); };
+        {
+            auto [d, j] = fresh();
+            const auto before = d->snapshot().begin()->second.pixels;
+            check("assign: a CMYK profile on an RGB picture refused; junk refused; Adobe RGB fits",
+                  !Pr::assign_refusal(d->image(), cmyk).empty() && !Pr::assign_refusal(d->image(), std::make_shared<const T::Icc>(T::Icc{1, 2})).empty() &&
+                  Pr::assign_refusal(d->image(), adobe).empty() && !Pr::assign(*j, *d, cmyk), "");
+            const auto n = j->size();
+            const bool ok = Pr::assign(*j, *d, adobe);
+            const auto red = core::sample_composite(d->image(), d->snapshot(), 150, 150);
+            const auto look = seen(*d, 150, 150);
+            check("assign: Adobe RGB -- one step; the numbers kept (red 1, 0, 0); the look changes (red past sRGB's: clipped red, a little green gone)",
+                  ok && j->size() == n + 1 && d->image().icc == adobe && near(red.r, 1, 1e-6) && near(red.g, 0, 1e-6) &&
+                  near(look.r, 1, 0.01) && near(look.g, 0, 0.01) && core::display_managed(d->image()), num(look.r));
+            j->undo();
+            check("assign: undone -- no profile again", !d->image().icc, "");
+        }
+        {
+            auto [d, j] = fresh();
+            const auto look0 = seen(*d, 150, 150), white0 = seen(*d, 20, 20);
+            const bool ok = Pr::convert(*j, *d, adobe);
+            const auto raw = core::sample_composite(d->image(), d->snapshot(), 150, 150);
+            const auto look = seen(*d, 150, 150), white = seen(*d, 20, 20);
+            check("convert to Adobe RGB: the numbers change (sRGB red is less than full Adobe red), the look stays",
+                  ok && d->image().icc == adobe && d->image().format.mode == P::Mode::RGB && raw.r < 0.9f && raw.r > 0.8f &&
+                  near(look.r, look0.r, 0.01) && near(look.g, look0.g, 0.01) && near(white.r, white0.r, 0.005), num(raw.r) + " -> " + num(look.r));
+            j->undo();
+            check("convert: undone -- the numbers and no profile back", !d->image().icc && near(core::sample_composite(d->image(), d->snapshot(), 150, 150).r, 1, 1e-6), "");
+        }
+        {
+            auto [d, j] = fresh();
+            klimt::text::Spec ts;
+            ts.text = "Klimt";
+            ts.colour = {0, 0, 1, 1};
+            const auto tid = core::layers::add_text(*j, *d, ts);
+            const bool ok = Pr::convert(*j, *d, cmyk);
+            const auto& im = d->image();
+            const auto ink = core::sample_composite(im, d->snapshot(), 150, 150);   // shown: through the profile
+            bool formats = true;
+            for (const auto& [id, l] : d->snapshot()) if (l.pixels && !(l.pixels->format() == im.format)) formats = false;
+            check("convert to CMYK: Image > Mode -- the document CMYK, every layer (the text set again) in CMYK, the red square still red",
+                  ok && im.format.mode == P::Mode::CMYK && formats && !tid.empty() && near(ink.r, 1, 0.03) && near(ink.g, 0, 0.03) && near(ink.b, 0, 0.03),
+                  num(ink.r) + "," + num(ink.g));
+            const auto gray = std::make_shared<const T::Icc>(T::gray(2.2));
+            check("convert again, CMYK to Gray Gamma 2.2: Gray; the red square a mid-dark grey",
+                  Pr::convert(*j, *d, gray) && d->image().format.mode == P::Mode::Gray &&
+                  [&] { const auto g = core::sample_composite(d->image(), d->snapshot(), 150, 150); return g.r > 0.3 && g.r < 0.65 && near(g.r, g.b, 0.004); }(), "");
+            j->undo(); j->undo();
+            check("convert: both undone -- RGB, no profile", d->image().format.mode == P::Mode::RGB && !d->image().icc, "");
+        }
+    }
+
+    std::cout << "\n-- colour management: the profile lists (s068 m2) --\n";
+    {
+        namespace Pr = klimt::core::profile;
+        namespace fs = std::filesystem;
+        const auto dir = fs::temp_directory_path() / "klimt_selftest_icc";
+        fs::remove_all(dir);
+        fs::create_directories(dir / "sub");
+        { std::ofstream f(dir / "sub" / "wide.ICM", std::ios::binary); const auto b = T::rgb(std::array<double, 6>{0.7347, 0.2653, 0.1596, 0.8404, 0.0366, 0.0001}.data(), 1.8, "Wide Test RGB"); f.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size())); }
+        { std::ofstream f(dir / "junk.icc"); f << "not a profile"; }
+        { std::ofstream f(dir / "notes.txt"); f << "x"; }
+        const auto cat = Pr::catalog({dir.string()});
+        bool wide = false;
+        for (const auto& c : cat) wide = wide || (c.name == "Wide Test RGB" && c.mode == P::Mode::RGB && !c.path.empty());
+        check("catalog: Klimt's six first (sRGB, Adobe RGB, two greys, Plain CMYK, Lab), then the folder's -- .icm found in a sub-folder, junk and other files left out",
+              cat.size() == 7 && cat[0].name == "sRGB IEC61966-2.1" && cat[4].mode == P::Mode::CMYK && cat[5].mode == P::Mode::Lab && wide,
+              std::to_string(cat.size()) + " " + cat[0].name);
+        std::string why;
+        check("load: junk refused with the reason; a real one read with its name and mode",
+              !Pr::load((dir / "junk.icc").string(), why) && !why.empty() && Pr::load((dir / "sub" / "wide.ICM").string(), why).has_value(), why);
+        check("Image > Mode's profiles: sRGB, Gray Gamma 2.2, Plain CMYK, Lab D50 -- each of its mode",
+              Pr::mode_of(*Pr::builtin(P::Mode::RGB)) == P::Mode::RGB && Pr::mode_of(*Pr::builtin(P::Mode::Gray)) == P::Mode::Gray &&
+              Pr::mode_of(*Pr::builtin(P::Mode::CMYK)) == P::Mode::CMYK && Pr::mode_of(*Pr::builtin(P::Mode::Lab)) == P::Mode::Lab &&
+              T::inspect(*Pr::builtin(P::Mode::Lab)).name == "Lab D50", "");
+        fs::remove_all(dir);
     }
 }

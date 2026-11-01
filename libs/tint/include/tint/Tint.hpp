@@ -71,6 +71,15 @@ std::shared_ptr<const Display> display(const IccRef& icc);
 // pure gamma; an RGB of the given primaries (xy), D65 white and gamma (Adobe
 // RGB (1998): 0.64 0.33, 0.21 0.71, 0.15 0.06, gamma 2.2); and a plain CMYK
 // -- the textbook conversion (1-c)(1-k) as ICC, no dot gain.
+// s068: profile to profile, directly (no stop in sRGB -- a CMYK or wide RGB
+// gamut isn't clipped on the way). nullptr: either one unusable or not of
+// its stated space. Not cached: one per Convert.
+std::shared_ptr<const Link> link(const Icc& from, Space fs, const Icc& to, Space ts);
+// s068: what a document's numbers are taken to mean when it carries no
+// profile -- the plain conversions s007 shows: sRGB; a grey on sRGB's curve;
+// plain CMYK; Lab D50.
+Icc implicit(Space s);
+
 Icc srgb();
 Icc gray(double gamma);
 Icc rgb(const double primaries[6], double gamma, const std::string& name);

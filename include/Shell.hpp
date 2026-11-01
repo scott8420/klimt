@@ -105,6 +105,7 @@ class FadeDialog;
 class ColourRangeDialog;
 class ShortcutsDialog;
 class SizeDialog;
+class ProfileDialog;   // s068
 
 class Shell : public Gtk::ApplicationWindow {
 public:
@@ -215,6 +216,10 @@ private:
     void on_crop_selection();                    // category: canvas: Image > Crop to Selection
     void on_reveal_all();                        // category: canvas: Image > Reveal All (s010)
     void on_image_size();                        // category: canvas: Image > Image Size (the dialog)
+    void on_profile_assign();                    // category: canvas: Image > Assign Profile (s068)
+    void on_profile_convert();                   // category: canvas: Image > Convert to Profile (s068)
+    void on_mode(pixel::Mode m);                 // category: canvas: Image > Mode -- a Convert to Klimt's profile for it (s068)
+    void convert_to(const std::shared_ptr<const std::vector<std::uint8_t>>& icc);
     void on_canvas_size();                       // category: canvas: Image > Canvas Size (the dialog)
 
     // ── transform (s011 m2) ────────────────────────────────────────────────
@@ -372,6 +377,7 @@ private:
     std::unique_ptr<NumberDialog>    m_feather;   // s008
     std::unique_ptr<ExportDialog>    m_export_dialog;               // s050: after Export's file name
     std::unique_ptr<SizeDialog>      m_image_size, m_canvas_size;   // s009
+    std::unique_ptr<ProfileDialog>   m_profile_assign, m_profile_convert;   // s068
     std::unique_ptr<NumberDialog>    m_rotate_dialog;               // s011
     std::map<int, std::unique_ptr<NumberDialog>> m_modify_dialogs;  // s011 m4: one per Modify kind
     std::unique_ptr<AdjustDialog>    m_adjust_dialog;               // s013: Image > Adjustments
