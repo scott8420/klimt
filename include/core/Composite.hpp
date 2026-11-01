@@ -38,6 +38,19 @@ bool composite_argb(const Image& im, const Layers& layers, std::vector<std::uint
 // luminance; CMYK = naive with full black generation; Lab via D50). Alpha 1.
 pixel::Px from_srgb(const pixel::Format& f, float r, float g, float b);
 
+// s060 (WEAKNESSES 33): IMAGE > ADJUSTMENTS' PREVIEW as the render shows it,
+// put into `layers`. `exact` -- the target's own pixels through
+// adjust::applied (made on a worker, for `a`): shown in place of its pixels,
+// its mask, live filters and styles kept, so the preview IS the result.
+// nullptr -- the instant stand-in until that lands: `a` as an adjustment
+// layer clipped to the target, just above it, hidden by `hide` (the selection
+// inverted; nullptr: hides nothing). The stand-in is right on an opaque Normal
+// layer, a little off where the layer is half-transparent or blends.
+inline constexpr const char* kAdjustPreview = "@adjust-preview";
+void preview_adjust(Layers& layers, const Document::Id& target, const Adjust& a,
+                    std::shared_ptr<const pixel::TileMap> exact,
+                    std::shared_ptr<const pixel::TileMap> hide);
+
 // s008 m3: the colour the eye sees at (x, y) -- the composite, unpremultiplied,
 // as encoded sRGB 0..1 (what the Eyedropper picks). Outside / transparent:
 // alpha 0. `radius` 1 = 3 x 3, 2 = 5 x 5 (an average, premultiplied).

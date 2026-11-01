@@ -271,6 +271,27 @@ std::uint32_t argb(const float* p) {
 }
 }  // namespace
 
+void preview_adjust(Layers& layers, const Document::Id& target, const Adjust& a,
+                    std::shared_ptr<const pixel::TileMap> exact,
+                    std::shared_ptr<const pixel::TileMap> hide) {
+    const auto it = layers.find(target);
+    if (it == layers.end() || adjust::identity(a)) return;
+    if (exact) { it->second.pixels = std::move(exact); return; }
+    const auto& t = it->second;
+    double next = t.pos + 1;
+    for (const auto& [oid, o] : layers)
+        if (o.parent == t.parent && o.pos > t.pos) next = std::min(next, o.pos);
+    Layer p;
+    p.kind = Kind::Adjustment;
+    p.name = "Preview";
+    p.parent = t.parent;
+    p.pos = (t.pos + next) / 2;
+    p.clipped = true;
+    p.adjust = a;
+    p.mask = std::move(hide);
+    layers[kAdjustPreview] = std::move(p);
+}
+
 void composite_tile(const Image& im, const Layers& layers, int col, int row, std::vector<float>& out) {
     out.assign(kPx * 4, 0.f);
     // s018: layers with live filters are drawn as they LOOK (core/Live.hpp).

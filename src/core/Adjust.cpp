@@ -16,6 +16,10 @@ constexpr Info kInfo[] = {
     {AdjustKind::Curves,    "curves",              "Curves"},
     {AdjustKind::HueSat,    "hue-saturation",      "Hue/Saturation"},
     {AdjustKind::BrightCon, "brightness-contrast", "Brightness/Contrast"},
+    {AdjustKind::Exposure,  "exposure",            "Exposure"},
+    {AdjustKind::Invert,    "invert",              "Invert"},
+    {AdjustKind::Posterize, "posterize",           "Posterize"},
+    {AdjustKind::Threshold, "threshold",           "Threshold"},
 };
 
 double clamp01(double v) { return std::clamp(v, 0.0, 1.0); }
@@ -33,6 +37,22 @@ double bright_con(int brightness, int contrast, double v) {
     v = std::pow(clamp01(v), std::pow(2.0, -brightness / 75.0));
     const double k = contrast >= 0 ? 1.0 / (1.0 - contrast / 200.0) : 1.0 + contrast / 100.0;
     return clamp01(0.5 + (v - 0.5) * k);
+}
+
+// s061: Exposure, in linear light (Photoshop: "calculations in a linear
+// colour space, gamma 1.0") -- the sRGB curve off, then on again.
+double srgb_to_linear(double v) { return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4); }
+double linear_to_srgb(double v) { return v <= 0.0031308 ? v * 12.92 : 1.055 * std::pow(v, 1 / 2.4) - 0.055; }
+double exposure(const Adjust& a, double v) {
+    double l = srgb_to_linear(clamp01(v)) * std::pow(2.0, a.exposure) + a.offset;
+    l = std::pow(std::max(0.0, l), 1.0 / std::max(0.01, a.exp_gamma));
+    return linear_to_srgb(clamp01(l));
+}
+// s061: Posterize -- n even steps, black and white kept.
+double posterize(int n, double v) {
+    n = std::clamp(n, 2, 255);
+    const int i = std::min(n - 1, static_cast<int>(clamp01(v) * n));
+    return static_cast<double>(i) / (n - 1);
 }
 
 // RGB <-> HSL, all 0..1 (hue in turns).
@@ -97,6 +117,9 @@ double lut_kind(const Adjust& a, const std::vector<double>* tables, int c, doubl
             return at(tables[0], at(tables[c + 1], v));
         }
         case AdjustKind::BrightCon: return bright_con(a.brightness, a.contrast, v);
+        case AdjustKind::Invert:    return 1 - v;
+        case AdjustKind::Posterize: return posterize(a.posterize, v);
+        case AdjustKind::Exposure:  return exposure(a, v);
         default: return v;
     }
 }
@@ -115,7 +138,8 @@ std::optional<AdjustKind> from_key(std::string_view k) {
     return std::nullopt;
 }
 const std::vector<AdjustKind>& kinds() {
-    static const std::vector<AdjustKind> v{AdjustKind::BrightCon, AdjustKind::Levels, AdjustKind::Curves, AdjustKind::HueSat};
+    static const std::vector<AdjustKind> v{AdjustKind::BrightCon, AdjustKind::Levels, AdjustKind::Curves, AdjustKind::Exposure,
+                                           AdjustKind::HueSat, AdjustKind::Invert, AdjustKind::Posterize, AdjustKind::Threshold};
     return v;
 }
 
@@ -152,6 +176,11 @@ Adjust normalised(Adjust a) {
     a.lightness = std::clamp(a.lightness, -100, 100);
     a.brightness = std::clamp(a.brightness, -150, 150);
     a.contrast = std::clamp(a.contrast, -50, 100);
+    a.posterize = std::clamp(a.posterize, 2, 255);
+    a.threshold = std::clamp(a.threshold, 1, 255);
+    a.exposure = std::clamp(a.exposure, -20.0, 20.0);
+    a.offset = std::clamp(a.offset, -0.5, 0.5);
+    a.exp_gamma = std::clamp(a.exp_gamma, 0.01, 9.99);
     return a;
 }
 
@@ -167,9 +196,15 @@ bool identity(const Adjust& a) {
             return true;
         case AdjustKind::HueSat: return !a.colorize && a.hue == 0 && a.saturation == 0 && a.lightness == 0;
         case AdjustKind::BrightCon: return a.brightness == 0 && a.contrast == 0;
+        case AdjustKind::Exposure:  return a.exposure == 0 && a.offset == 0 && a.exp_gamma == 1;
+        case AdjustKind::Invert:
+        case AdjustKind::Posterize:
+        case AdjustKind::Threshold: return false;   // their own effect
     }
     return true;
 }
+
+bool settingless(AdjustKind k) { return k == AdjustKind::Invert; }
 
 std::string refusal(const Adjust& a) {
     if (a.kind == AdjustKind::None) return "no adjustment";
@@ -239,7 +274,7 @@ std::shared_ptr<const Compiled> compile(const Adjust& a) {
     auto c = std::make_shared<Compiled>();
     c->kind = a.kind;
     c->a = a;
-    if (a.kind == AdjustKind::Levels || a.kind == AdjustKind::Curves || a.kind == AdjustKind::BrightCon) {
+    if (a.kind != AdjustKind::None && a.kind != AdjustKind::HueSat && a.kind != AdjustKind::Threshold) {
         std::vector<double> tables[kAdjustChannels];
         if (a.kind == AdjustKind::Curves)
             for (int i = 0; i < kAdjustChannels; ++i) tables[i] = curve_table(a.curves[static_cast<std::size_t>(i)], kLut);
@@ -262,6 +297,11 @@ void run_rgb(const Compiled& c, float& r, float& g, float& b) {
             double R = std::clamp(r, 0.f, 1.f), G = std::clamp(g, 0.f, 1.f), B = std::clamp(b, 0.f, 1.f);
             hue_sat(c.a, R, G, B);
             r = static_cast<float>(clamp01(R)); g = static_cast<float>(clamp01(G)); b = static_cast<float>(clamp01(B));
+            return;
+        }
+        case AdjustKind::Threshold: {   // s061: Photoshop's luminance weights, in levels
+            const double lum = 0.299 * std::clamp(r, 0.f, 1.f) + 0.587 * std::clamp(g, 0.f, 1.f) + 0.114 * std::clamp(b, 0.f, 1.f);
+            r = g = b = lum * 255 + 1e-6 >= c.a.threshold ? 1.f : 0.f;
             return;
         }
         default:

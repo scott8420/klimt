@@ -159,6 +159,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Image", "win.adjust-apply-levels", {"<Ctrl>l"}, "", "Levels -- on the layer's pixels"},
         {"Image", "win.adjust-apply-curves", {"<Ctrl>m"}, "", "Curves -- on the layer's pixels"},
         {"Image", "win.adjust-apply-hue-saturation", {"<Ctrl>u"}, "", "Hue/Saturation -- on the layer's pixels"},
+        {"Image", "win.adjust-apply-invert", {"<Ctrl>i"}, "", "Invert -- the layer's pixels, at once"},   // s061
         {"Image", "", {}, "Crop tool: Enter  /  double-click", "Crop to the box"},
         {"Image", "", {}, "Crop tool: Escape", "Drop the box"},
         {"Layer", "win.layer-new",       {"<Ctrl><Shift>n"}, "", "New layer above the selection"},

@@ -43,6 +43,8 @@ private:
     void emit();                          // m_a changed by a control
     void reset();
     Gtk::Scale* slider(const char* name, const char* label, double lo, double hi, int* field);
+    // s061: a double setting (Exposure's), `digits` after the point.
+    Gtk::Scale* dslider(const char* name, const char* label, double lo, double hi, double step, int digits, double* field);
     void begin_end_on(Gtk::Widget& w);    // a drag on w is a begin .. end
     int  channel() const;                 // Levels / Curves: 0 = RGB, 1..3
 
@@ -63,7 +65,7 @@ private:
     std::optional<core::adjust::Histogram> m_hist;
 
     Gtk::Box  m_body{Gtk::Orientation::VERTICAL, 8};
-    struct Bound { Gtk::Scale* s; int* field; };
+    struct Bound { Gtk::Scale* s; int* field; double* dfield = nullptr; };
     std::vector<Bound> m_sliders;
     Gtk::CheckButton* m_colorize = nullptr;
     Gtk::DropDown*    m_channel = nullptr;

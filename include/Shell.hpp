@@ -515,6 +515,19 @@ private:
     // layer it will change (a stand-in adjustment layer clipped to it).
     core::Document::Id m_adjust_target;
     std::optional<core::Adjust> m_adjust_preview;
+    // s060 (WEAKNESSES 33): the exact preview -- the target's pixels through
+    // adjust::applied, made on a worker for settings `a`, from pixels `was`,
+    // through selection `sel`; shown while all three still hold. OK lands it.
+    struct AdjustExact {
+        core::Adjust a;
+        std::shared_ptr<const pixel::TileMap> was, sel, px;
+    };
+    AdjustExact        m_adjust_exact;
+    sigc::connection   m_adjust_soon;
+    core::Jobs::Id     m_adjust_job = 0;
+    void adjust_run(const core::Adjust& a);   // OK, or Invert at once: the target's pixels, one step
+    void adjust_preview_soon();
+    void adjust_preview_stop();
     // s014: the Filter menu -- its layer, the last one run (Ctrl+F), the
     // preview's pending timer and job.
     core::Document::Id          m_filter_target;

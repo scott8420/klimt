@@ -107,6 +107,36 @@ Gtk::Scale* AdjustEditor::slider(const char* name, const char* label, double lo,
     return s;
 }
 
+Gtk::Scale* AdjustEditor::dslider(const char* name, const char* label, double lo, double hi, double step, int digits, double* field) {
+    auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    auto l = Gtk::make_managed<Gtk::Label>(label);
+    l->set_xalign(0.0f);
+    l->set_size_request(76, -1);
+    l->add_css_class("dim-label");
+    row->append(*l);
+    auto s = Gtk::make_managed<Gtk::Scale>(Gtk::Orientation::HORIZONTAL);
+    s->set_name(name);
+    s->set_range(lo, hi);
+    s->set_increments(step, step * 10);
+    s->set_digits(digits);
+    s->set_round_digits(digits);
+    s->set_draw_value(true);
+    s->set_value_pos(Gtk::PositionType::RIGHT);
+    s->set_hexpand(true);
+    if (lo < 0 && hi > 0) s->add_mark(0, Gtk::PositionType::BOTTOM, "");
+    s->signal_value_changed().connect([this, s, field, digits] {
+        if (m_painting) return;
+        const double k = std::pow(10.0, digits);
+        *field = std::round(s->get_value() * k) / k;
+        emit();
+    });
+    begin_end_on(*s);
+    row->append(*s);
+    m_body.append(*row);
+    m_sliders.push_back({s, nullptr, field});
+    return s;
+}
+
 void AdjustEditor::rebuild() {
     while (auto* c = m_body.get_first_child()) m_body.remove(*c);
     m_sliders.clear();
@@ -149,6 +179,27 @@ void AdjustEditor::rebuild() {
             slider("adjust.brightness", "Brightness", -150, 150, &m_a.brightness);
             slider("adjust.contrast", "Contrast", -50, 100, &m_a.contrast);
             break;
+        // s061 (WEAKNESSES 34).
+        case AdjustKind::Exposure: {
+            dslider("adjust.exposure", "Exposure", -20, 20, 0.01, 2, &m_a.exposure)->set_tooltip_text("Stops of light: +1 doubles it (worked in linear light)");
+            dslider("adjust.offset", "Offset", -0.5, 0.5, 0.0001, 4, &m_a.offset)->set_tooltip_text("Added to every pixel's light: lifts or sinks the shadows most");
+            dslider("adjust.exp-gamma", "Gamma", 0.01, 9.99, 0.01, 2, &m_a.exp_gamma)->set_tooltip_text("Bends the middle: over 1 lightens, under 1 darkens");
+            break;
+        }
+        case AdjustKind::Posterize:
+            slider("adjust.posterize", "Levels", 2, 255, &m_a.posterize)->set_tooltip_text("Tones per colour channel");
+            break;
+        case AdjustKind::Threshold:
+            slider("adjust.threshold", "Level", 1, 255, &m_a.threshold)->set_tooltip_text("Lighter than this turns white, darker black");
+            break;
+        case AdjustKind::Invert: {
+            auto l = Gtk::make_managed<Gtk::Label>("No settings -- every colour turns to its opposite.");
+            l->set_xalign(0.0f);
+            l->set_wrap(true);
+            l->add_css_class("dim-label");
+            m_body.append(*l);
+            break;
+        }
         case AdjustKind::HueSat: {
             slider("adjust.hue", "Hue", -180, 180, &m_a.hue);
             slider("adjust.saturation", "Saturation", -100, 100, &m_a.saturation);
@@ -270,7 +321,7 @@ void AdjustEditor::paint() {
     for (const auto& b : m_sliders) {
         if (b.field == &m_a.hue) b.s->set_range(m_a.colorize ? 0 : -180, m_a.colorize ? 360 : 180);
         if (b.field == &m_a.saturation) b.s->set_range(m_a.colorize ? 0 : -100, 100);
-        b.s->set_value(*b.field);
+        b.s->set_value(b.dfield ? *b.dfield : *b.field);
     }
     if (m_colorize) m_colorize->set_active(m_a.colorize);
     if (m_lv[0]) {

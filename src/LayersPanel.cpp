@@ -172,7 +172,7 @@ LayersPanel::LayersPanel(core::Document& doc, core::DocJournal& journal)
         adj->set_name("layers.adjust");
         adj->set_icon_name("klimt-adjustment-symbolic");
         adj->set_menu_model(model);
-        adj->set_tooltip_text("New adjustment layer -- Levels, Curves, Hue/Saturation, Brightness/Contrast");
+        adj->set_tooltip_text("New adjustment layer -- Levels, Curves, Exposure, Hue/Saturation, Invert, Posterize, Threshold...");
         adj->add_css_class("flat");
         bar->append(*adj);
     }

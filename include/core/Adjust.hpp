@@ -30,7 +30,9 @@
 
 namespace klimt::core {
 
-enum class AdjustKind : std::uint8_t { None, Levels, Curves, HueSat, BrightCon };
+// s061 (WEAKNESSES 34): Invert, Posterize, Threshold, Exposure -- appended,
+// so the numbers already in use keep their meaning.
+enum class AdjustKind : std::uint8_t { None, Levels, Curves, HueSat, BrightCon, Invert, Posterize, Threshold, Exposure };
 
 // Levels on one channel: input black / white points and gamma (the middle
 // slider, 0.1 .. 9.99, 1 = none), output black / white. All 0..1.
@@ -60,6 +62,14 @@ struct Adjust {
     // Brightness -150..150, contrast -50..100 (Photoshop's ranges; the
     // modern behaviour -- black and white stay put).
     int  brightness = 0, contrast = 0;
+    // s061: Posterize -- levels per channel, 2..255 (Photoshop's 4 to start).
+    int  posterize = 4;
+    // s061: Threshold -- the level, 1..255: luminance at or above it is
+    // white, below it black (Photoshop's 128 to start).
+    int  threshold = 128;
+    // s061: Exposure, Photoshop's, worked in linear light (sRGB decoded):
+    // exposure -20..20 stops, offset -0.5..0.5, then gamma 0.01..9.99.
+    double exposure = 0, offset = 0, exp_gamma = 1;
     bool operator==(const Adjust&) const = default;
 };
 
@@ -69,12 +79,16 @@ std::string_view key(AdjustKind k);     // "hue-saturation" (files, scripts)
 std::optional<AdjustKind> from_key(std::string_view key);
 const std::vector<AdjustKind>& kinds(); // menu order
 
-// What a new one starts as: does nothing (Curves: the diagonal).
+// What a new one starts as: does nothing (Curves: the diagonal) -- except
+// the kinds that are their own effect (Invert; Posterize at 4 levels;
+// Threshold at 128), as Photoshop's start.
 Adjust fresh(AdjustKind k);
 // Every value inside its range, curve points sorted and inside 0..1.
 Adjust normalised(Adjust a);
 // Does it change nothing at all?
 bool identity(const Adjust& a);
+// s061: no settings at all (Invert): Image > Adjustments runs it at once.
+bool settingless(AdjustKind k);
 // "" when `a` is well formed (a file is trusted only after this).
 std::string refusal(const Adjust& a);
 
@@ -89,7 +103,7 @@ void apply_rgb(const Adjust& a, float& r, float& g, float& b);
 // The compiled form: lookup tables made once, then run over many pixels.
 struct Compiled {
     AdjustKind kind = AdjustKind::None;
-    std::array<std::vector<float>, 3> lut;   // Levels, Curves, Brightness / Contrast
+    std::array<std::vector<float>, 3> lut;   // Levels, Curves, Brightness / Contrast; s061: Invert, Posterize, Exposure
     Adjust a;                                // Hue / Saturation runs per pixel
 };
 // Cached: the compositor asks for the same few per tile.

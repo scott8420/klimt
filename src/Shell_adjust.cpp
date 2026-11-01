@@ -78,32 +78,27 @@ void Shell::on_adjust_apply(core::AdjustKind k) {
         m_adjust_dialog->signal_changed().connect([this] {
             m_adjust_preview = m_adjust_dialog->preview() ? std::optional<core::Adjust>(m_adjust_dialog->value()) : std::nullopt;
             queue_render();
+            adjust_preview_soon();
         });
         m_adjust_dialog->signal_closed().connect([this] {
+            adjust_preview_stop();
             m_adjust_preview.reset();
             queue_render();
         });
-        m_adjust_dialog->signal_ok().connect([this](const core::Adjust& a) {
-            const auto target = m_adjust_target;
-            const auto cur = m_doc.get(target);
-            if (!cur || !cur->pixels || core::adjust::identity(a)) return;
-            const auto before = cur->pixels;
-            const auto sel = m_doc.selection_ptr();
-            const std::string label(core::adjust::label(a.kind));
-            start_job(label, [this, target, before, sel, a, label](core::Jobs::Token& t) -> core::Jobs::Landing {
-                auto out = core::adjust::applied(*before, a, sel.get(), [&t] { return t.cancelled(); });
-                if (!out || t.cancelled()) return [] {};
-                auto res = std::make_shared<pixel::TileMap>(std::move(*out));
-                return [this, target, before, sel, res, label] {
-                    if (m_doc.selection_ptr() != sel || !L::set_pixels_if(m_journal, m_doc, target, before, std::move(*res), label))
-                        toast(label + ": the layer changed meanwhile -- nothing done");
-                };
-            });
-        });
+        m_adjust_dialog->signal_ok().connect(sigc::mem_fun(*this, &Shell::adjust_run));
     }
+    adjust_preview_stop();
     m_adjust_target = id;
+    // s061: Invert has no settings -- it runs at once, one step (Photoshop's Ctrl+I).
+    if (core::adjust::settingless(k)) {
+        m_adjust_preview.reset();
+        queue_render();
+        adjust_run(core::adjust::fresh(k));
+        return;
+    }
     m_adjust_preview = core::adjust::fresh(k);
     m_adjust_dialog->ask(k, l->name);
+    adjust_preview_soon();   // s061: Posterize / Threshold start as their own effect
     // Levels / Curves: the layer's own histogram, behind the controls.
     if (k == core::AdjustKind::Levels || k == core::AdjustKind::Curves) {
         core::Layer alone = *l;
@@ -121,6 +116,72 @@ void Shell::on_adjust_apply(core::AdjustKind k) {
         });
     }
     queue_render();
+}
+
+
+// OK (and s061: Invert at once): m_adjust_target's pixels through `a`, one step.
+void Shell::adjust_run(const core::Adjust& a) {
+    const auto target = m_adjust_target;
+    const auto cur = m_doc.get(target);
+    if (!cur || !cur->pixels || core::adjust::identity(a)) return;
+    const auto before = cur->pixels;
+    const auto sel = m_doc.selection_ptr();
+    const std::string label(core::adjust::label(a.kind));
+    // s060: the preview already made these pixels -- they are the step.
+    if (m_adjust_exact.px && m_adjust_exact.a == a && m_adjust_exact.was == before && m_adjust_exact.sel == sel) {
+        auto px = m_adjust_exact.px;
+        m_adjust_exact = {};
+        if (!L::set_pixels_if(m_journal, m_doc, target, before, pixel::TileMap(*px), label))
+            toast(label + ": the layer changed meanwhile -- nothing done");
+        return;
+    }
+    start_job(label, [this, target, before, sel, a, label](core::Jobs::Token& t) -> core::Jobs::Landing {
+        auto out = core::adjust::applied(*before, a, sel.get(), [&t] { return t.cancelled(); });
+        if (!out || t.cancelled()) return [] {};
+        auto res = std::make_shared<pixel::TileMap>(std::move(*out));
+        return [this, target, before, sel, res, label] {
+            if (m_doc.selection_ptr() != sel || !L::set_pixels_if(m_journal, m_doc, target, before, std::move(*res), label))
+                toast(label + ": the layer changed meanwhile -- nothing done");
+        };
+    });
+}
+
+// s060 (WEAKNESSES 33): the exact preview. A moment after the last change
+// (a slider drag doesn't start a job a pixel), the target's own pixels go
+// through adjust::applied -- OK's maths -- on a worker; the stand-in shows
+// until they land. A newer change cancels the job.
+void Shell::adjust_preview_stop() {
+    if (m_adjust_soon.connected()) m_adjust_soon.disconnect();
+    if (m_adjust_job) { m_jobs.cancel(m_adjust_job); m_adjust_job = 0; }
+    m_adjust_exact = {};
+}
+
+void Shell::adjust_preview_soon() {
+    if (m_adjust_soon.connected()) m_adjust_soon.disconnect();
+    if (m_adjust_job) { m_jobs.cancel(m_adjust_job); m_adjust_job = 0; }
+    if (!m_adjust_preview || core::adjust::identity(*m_adjust_preview)) return;
+    m_adjust_soon = Glib::signal_timeout().connect([this] {
+        const auto l = m_doc.get(m_adjust_target);
+        if (!l || !l->pixels || !m_adjust_preview) return false;
+        const core::Adjust a = *m_adjust_preview;
+        if (m_adjust_exact.px && m_adjust_exact.a == a && m_adjust_exact.was == l->pixels && m_adjust_exact.sel == m_doc.selection_ptr())
+            return false;   // already made
+        const auto was = l->pixels;
+        const auto sel = m_doc.selection_ptr();
+        m_adjust_job = start_job("Preview", [this, a, was, sel](core::Jobs::Token& t) -> core::Jobs::Landing {
+            auto out = core::adjust::applied(*was, a, sel.get(), [&t] { return t.cancelled(); });
+            if (!out || t.cancelled()) return [] {};
+            auto px = std::make_shared<const pixel::TileMap>(std::move(*out));
+            return [this, a, was, sel, px] {
+                m_adjust_job = 0;
+                if (!m_adjust_preview || !(*m_adjust_preview == a)) return;   // moved on
+                m_adjust_exact = {a, was, sel, px};
+                queue_render();
+                if (auto lg = log::get(log::Area::Shell)) lg->info("adjust: exact preview landed");
+            };
+        });
+        return false;
+    }, 80);
 }
 
 }  // namespace klimt

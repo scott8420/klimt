@@ -67,6 +67,31 @@ double v255(int v) { return v / 255.0; }
 }  // namespace
 
 void selftest_psd_adjust(const Check& check) {
+    // ── s061: Invert, Posterize, Threshold, Exposure ───────────────────────
+    {
+        using K = core::AdjustKind;
+        const auto inv = adj::blocks(core::adjust::fresh(K::Invert));
+        check("psd adjust: Invert is an empty nvrt block", inv.size() == 1 && inv[0].key == "nvrt" && inv[0].data.empty(), "");
+        check("psd adjust: Invert comes back", round(core::adjust::fresh(K::Invert)) == core::adjust::fresh(K::Invert), "");
+        auto po = core::adjust::fresh(K::Posterize); po.posterize = 9;
+        const auto pb = adj::blocks(po);
+        check("psd adjust: Posterize is post -- 9, then 2 bytes padding", pb.size() == 1 && pb[0].key == "post" && pb[0].data == Bytes{0, 9, 0, 0}, "");
+        check("psd adjust: Posterize comes back", round(po) == po, "");
+        auto th = core::adjust::fresh(K::Threshold); th.threshold = 200;
+        const auto tb = adj::blocks(th);
+        check("psd adjust: Threshold is thrs -- 200, then padding", tb.size() == 1 && tb[0].key == "thrs" && tb[0].data == Bytes{0, 200, 0, 0}, "");
+        check("psd adjust: Threshold comes back", round(th) == th, "");
+        auto ex = core::adjust::fresh(K::Exposure); ex.exposure = 1.5; ex.offset = -0.0312; ex.exp_gamma = 0.85;
+        const auto eb = adj::blocks(ex);
+        check("psd adjust: Exposure is expA -- version 1, three floats (14 bytes)",
+              eb.size() == 1 && eb[0].key == "expA" && eb[0].data.size() == 14 && eb[0].data[0] == 0 && eb[0].data[1] == 1, "");
+        const auto er = round(ex);
+        check("psd adjust: Exposure comes back, to four decimals", er && *er == ex, er ? std::to_string(er->offset) : "none");
+        Bytes junk; be16(junk, 1); be32(junk, 0x7fc00000u); be32(junk, 0); be32(junk, 0x3f800000u);   // a NaN exposure
+        adj::Reading r;
+        r.feed("expA", junk.data(), junk.size());
+        check("psd adjust: an Exposure with a NaN is not read", !r.result(), "");
+    }
     // ── the blocks, kind by kind ───────────────────────────────────────────
     {
         core::Adjust lv = core::adjust::fresh(core::AdjustKind::Levels);

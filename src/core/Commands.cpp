@@ -72,10 +72,18 @@ const std::vector<Command>& commands() {
             {"New Adjustment Layer: Levels", "Layer", "win.adjust-new-levels", "", "adjustment layer histogram black white point gamma", ""},
             {"New Adjustment Layer: Curves", "Layer", "win.adjust-new-curves", "", "adjustment layer tone contrast", ""},
             {"New Adjustment Layer: Hue/Saturation", "Layer", "win.adjust-new-hue-saturation", "", "adjustment layer colour colorize tint", ""},
+            {"New Adjustment Layer: Exposure", "Layer", "win.adjust-new-exposure", "", "adjustment layer stops light offset gamma", ""},   // s061
+            {"New Adjustment Layer: Invert", "Layer", "win.adjust-new-invert", "", "adjustment layer negative", ""},
+            {"New Adjustment Layer: Posterize", "Layer", "win.adjust-new-posterize", "", "adjustment layer levels tones flat", ""},
+            {"New Adjustment Layer: Threshold", "Layer", "win.adjust-new-threshold", "", "adjustment layer black white", ""},
             {"Brightness/Contrast", "Image", "win.adjust-apply-brightness-contrast", "", "adjustments light dark pixels", ""},
             {"Levels", "Image", "win.adjust-apply-levels", "", "adjustments histogram black white point gamma pixels", ""},
             {"Curves", "Image", "win.adjust-apply-curves", "", "adjustments tone contrast pixels", ""},
             {"Hue/Saturation", "Image", "win.adjust-apply-hue-saturation", "", "adjustments colour colorize tint pixels", ""},
+            {"Exposure", "Image", "win.adjust-apply-exposure", "", "adjustments stops light offset gamma pixels", ""},   // s061
+            {"Invert", "Image", "win.adjust-apply-invert", "", "adjustments negative pixels", ""},
+            {"Posterize", "Image", "win.adjust-apply-posterize", "", "adjustments levels tones flat pixels", ""},
+            {"Threshold", "Image", "win.adjust-apply-threshold", "", "adjustments black white pixels", ""},
             // s014: the Filter menu.
             {"Gaussian Blur", "Filter", "win.filter-gaussian-blur", "", "filter blur soften smooth", ""},
             {"Unsharp Mask", "Filter", "win.filter-unsharp-mask", "", "filter sharpen crisp detail", ""},

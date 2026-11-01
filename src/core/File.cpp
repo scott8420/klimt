@@ -120,6 +120,12 @@ json adjust_json(const Adjust& a) {
         case AdjustKind::BrightCon:
             j["brightness"] = a.brightness; j["contrast"] = a.contrast;
             break;
+        case AdjustKind::Posterize: j["steps"] = a.posterize; break;    // s061
+        case AdjustKind::Threshold: j["level"] = a.threshold; break;
+        case AdjustKind::Exposure:
+            j["exposure"] = a.exposure; j["offset"] = a.offset; j["gamma"] = a.exp_gamma;
+            break;
+        case AdjustKind::Invert:
         case AdjustKind::None: break;
     }
     return j;
@@ -576,6 +582,11 @@ std::optional<Adjust> adjust_from(const json& j) {
     a.colorize = j.value("colorize", false);
     a.brightness = j.value("brightness", 0);
     a.contrast = j.value("contrast", 0);
+    a.posterize = j.value("steps", 4);   // s061
+    a.threshold = j.value("level", 128);
+    a.exposure = j.value("exposure", 0.0);
+    a.offset = j.value("offset", 0.0);
+    a.exp_gamma = j.value("gamma", 1.0);
     return a;
 }
 

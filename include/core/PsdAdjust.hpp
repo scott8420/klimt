@@ -2,7 +2,7 @@
 // core::psd::adj -- ADJUSTMENT LAYERS in Photoshop's own blocks, both ways
 // (s053; WEAKNESSES 58). docs/file-format.md "Photoshop adjustment layers".
 //
-// Klimt's four adjustments and the tagged blocks Photoshop keeps them in:
+// Klimt's adjustments and the tagged blocks Photoshop keeps them in:
 //
 //   Levels               levl  v2: 29 records (in floor, in ceiling, out
 //                              floor, out ceiling, gamma x 100); 0 = RGB, 1..3 = R G B
@@ -13,6 +13,10 @@
 //                              hue / sat / light, six colour ranges
 //   Brightness/Contrast  CgEd  a descriptor: Brgh, Cntr, useLegacy false (the
 //                              modern maths, Klimt's); plus "brit" for old readers
+//   Invert               nvrt  no data                       (s061)
+//   Posterize            post  levels (2 bytes), 2 bytes padding
+//   Threshold            thrs  level (2 bytes), 2 bytes padding
+//   Exposure             expA  version 1; exposure, offset, gamma (floats)
 //
 // Pure: no files, no GTK. The reader feeds a layer's blocks one by one and
 // asks what they made; the writer asks for the blocks of one Adjust.
@@ -41,7 +45,8 @@ std::vector<Block> blocks(const Adjust& a);
 class Reading {
 public:
     // Hand over every tagged block of the record; true when it was one of the
-    // adjustment blocks read here (levl, curv, hue2, brit, CgEd).
+    // adjustment blocks read here (levl, curv, hue2, brit, CgEd; s061: nvrt,
+    // post, thrs, expA).
     bool feed(std::string_view key, const std::uint8_t* d, std::size_t n);
     // What the blocks made: nullopt when they hold nothing Klimt can (or are
     // damaged). The result is normalised -- a Document takes it as it is.

@@ -437,7 +437,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     // s013: Image > Adjustments -- on the pixels, for good.
     auto adj = Gio::Menu::create();
     for (const auto k : core::adjust::kinds())
-        adj->append(std::string(core::adjust::label(k)) + "…", "win.adjust-apply-" + std::string(core::adjust::key(k)));
+        adj->append(std::string(core::adjust::label(k)) + (core::adjust::settingless(k) ? "" : "…"), "win.adjust-apply-" + std::string(core::adjust::key(k)));
     image->append_submenu("Adjustments", adj);
     // s014: the Filter menu -- on the pixels, for good (Photoshop's submenus).
     auto filt = Gio::Menu::create();

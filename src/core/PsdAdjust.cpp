@@ -206,6 +206,31 @@ Desc read_desc(Cur& c) {
     return out;
 }
 
+// ── s061: Invert, Posterize, Threshold, Exposure ──────────────────────────
+// nvrt: no data. post / thrs: the level (2 bytes) and 2 bytes of padding.
+// expA: version 1, then exposure, offset, gamma as 4-byte floats.
+Bytes level_block(int v) { Bytes b; be16(b, static_cast<unsigned>(v)); be16(b, 0); return b; }
+void bef32(Bytes& b, double v) {
+    const float f = static_cast<float>(v);
+    std::uint32_t u;
+    std::memcpy(&u, &f, 4);
+    be32(b, u);
+}
+Bytes expa_block(const Adjust& a) {
+    Bytes b;
+    be16(b, 1);
+    bef32(b, a.exposure);
+    bef32(b, a.offset);
+    bef32(b, a.exp_gamma);
+    return b;
+}
+float f32(Cur& c) {
+    const std::uint32_t u = c.u32();
+    float f;
+    std::memcpy(&f, &u, 4);
+    return f;
+}
+
 }  // namespace
 
 std::vector<Block> blocks(const Adjust& a) {
@@ -214,6 +239,10 @@ std::vector<Block> blocks(const Adjust& a) {
         case AdjustKind::Curves:    return {{"curv", curves_block(a)}};
         case AdjustKind::HueSat:    return {{"hue2", huesat_block(a)}};
         case AdjustKind::BrightCon: return {{"brit", brit_block(a)}, {"CgEd", cged_block(a)}};
+        case AdjustKind::Invert:    return {{"nvrt", {}}};
+        case AdjustKind::Posterize: return {{"post", level_block(a.posterize)}};
+        case AdjustKind::Threshold: return {{"thrs", level_block(a.threshold)}};
+        case AdjustKind::Exposure:  return {{"expA", expa_block(a)}};
         case AdjustKind::None:      break;
     }
     return {};
@@ -301,6 +330,29 @@ bool Reading::feed(std::string_view key, const std::uint8_t* d, std::size_t n) {
         if (c.bad) return true;
         if (a.colorize) { a.hue = ch; a.saturation = cs; a.lightness = cl; }
         else            { a.hue = mh; a.saturation = ms; a.lightness = ml; }
+        m_a = adjust::normalised(a);
+        return true;
+    }
+    // s061
+    if (key == "nvrt") { m_a = adjust::fresh(AdjustKind::Invert); return true; }
+    if (key == "post" || key == "thrs") {
+        const int v = static_cast<int>(c.u16());
+        if (c.bad) return true;
+        Adjust a = adjust::fresh(key == "post" ? AdjustKind::Posterize : AdjustKind::Threshold);
+        (key == "post" ? a.posterize : a.threshold) = v;
+        m_a = adjust::normalised(a);
+        return true;
+    }
+    if (key == "expA") {
+        c.u16();   // version
+        Adjust a = adjust::fresh(AdjustKind::Exposure);
+        a.exposure = f32(c);
+        a.offset = f32(c);
+        a.exp_gamma = f32(c);
+        if (c.bad || !std::isfinite(a.exposure) || !std::isfinite(a.offset) || !std::isfinite(a.exp_gamma)) return true;
+        // Four decimals at most, as Photoshop shows them (the floats' dust off).
+        const auto round4 = [](double v) { return std::round(v * 10000) / 10000; };
+        a.exposure = round4(a.exposure); a.offset = round4(a.offset); a.exp_gamma = round4(a.exp_gamma);
         m_a = adjust::normalised(a);
         return true;
     }

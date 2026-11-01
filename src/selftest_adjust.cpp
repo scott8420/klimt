@@ -6,6 +6,7 @@
 #include "core/File.hpp"
 #include "core/Selection.hpp"
 
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -112,7 +113,7 @@ void selftest_adjust(const Check& check) {
         const auto n = A::normalised(c);
         check("adjust: curve points sorted", n.curves[0].size() == 3 && n.curves[0][1].x == 0.5 && n.curves[0][0].x == 0, "");
         check("adjust: keys round trip", A::from_key(A::key(AdjustKind::HueSat)) == AdjustKind::HueSat &&
-                                         !A::from_key("posterize"), "");
+                                         !A::from_key("selective-colour"), "");
     }
 
     std::cout << "\n-- adjustments: adjustment layers (s013) --\n";
@@ -329,5 +330,157 @@ void selftest_adjust(const Check& check) {
         check("histogram: s056 -- painting the layer below: counted again", !(core::histogram_key(c, "L2") == key), "");
         check("histogram: s056 -- hiding the layer below: counted again", !(core::histogram_key(d, "L2") == key), "");
         check("histogram: s056 -- a layer moved under it: counted again", !(core::histogram_key(e, "L2") == key), "");
+    }
+
+    std::cout << "\n-- adjustments: the preview IS the result (s060, WEAKNESSES 33) --\n";
+    {
+        namespace Px = klimt::pixel;
+        const Px::Format f{Px::Depth::U8, Px::Mode::RGB, true};
+        core::Image im;
+        im.width = 300; im.height = 200; im.format = f;
+        const auto fill = [&](Px::Px c) { return std::make_shared<const Px::TileMap>(Px::TileMap(f, 300, 200).fill({0, 0, 300, 200}, c)); };
+        // White background; over it "Top", red at HALF alpha (Normal).
+        core::Layers ls;
+        core::Layer bg; bg.name = "Bg"; bg.pos = 1; bg.pixels = fill(Px::rgba(1, 1, 1)); ls["L1"] = bg;
+        core::Layer top; top.name = "Top"; top.pos = 2; top.pixels = fill(Px::rgba(1, 0, 0, 0.5f)); ls["L2"] = top;
+        const auto a = hue120();
+        const auto res = [&](const core::Layers& from, const core::Adjust& adj) {   // what OK leaves
+            auto r = from;
+            r["L2"].pixels = std::make_shared<const Px::TileMap>(*A::applied(*from.at("L2").pixels, adj, nullptr));
+            return core::sample_composite(im, r, 150, 100, 0);
+        };
+        const auto same = [](core::Sampled x, core::Sampled y) { return near(x.r, y.r) && near(x.g, y.g) && near(x.b, y.b) && near(x.a, y.a); };
+        const auto txt = [](core::Sampled x) { return num(x.r) + "," + num(x.g) + "," + num(x.b); };
+        const auto want = res(ls, a);
+        auto standin = ls;
+        core::preview_adjust(standin, "L2", a, nullptr, nullptr);
+        const auto sv = core::sample_composite(im, standin, 150, 100, 0);
+        check("adjust preview: the stand-in is a clipped adjustment just above the layer",
+              standin.count(core::kAdjustPreview) && standin.at(core::kAdjustPreview).clipped &&
+              standin.at(core::kAdjustPreview).pos > 2 && standin.at(core::kAdjustPreview).kind == core::Kind::Adjustment, "");
+        check("adjust preview: half-transparent -- the stand-in is off (why it's replaced)", !same(sv, want),
+              txt(sv) + " vs " + txt(want));
+        const auto exact = std::make_shared<const Px::TileMap>(*A::applied(*ls.at("L2").pixels, a, nullptr));
+        auto ex = ls;
+        core::preview_adjust(ex, "L2", a, exact, nullptr);
+        const auto ev = core::sample_composite(im, ex, 150, 100, 0);
+        check("adjust preview: half-transparent -- the exact one IS the result", same(ev, want), txt(ev) + " vs " + txt(want));
+        check("adjust preview: the exact one adds no layer", ex.size() == ls.size() && !ex.count(core::kAdjustPreview), "");
+
+        // A Screen layer, opaque: the stand-in adjusts the screened colour, the
+        // result screens the adjusted layer.
+        auto sc = ls;
+        sc["L1"].pixels = fill(Px::rgba(0.6f, 0.6f, 0.6f));
+        sc["L2"].pixels = fill(Px::rgba(1, 1, 1));
+        sc["L2"].blend = core::Blend::Screen;
+        auto lv = A::fresh(core::AdjustKind::Levels);
+        lv.levels[0].out_white = 0.5;
+        const auto want2 = res(sc, lv);
+        auto s2 = sc;
+        core::preview_adjust(s2, "L2", lv, nullptr, nullptr);
+        auto e2 = sc;
+        core::preview_adjust(e2, "L2", lv, std::make_shared<const Px::TileMap>(*A::applied(*sc.at("L2").pixels, lv, nullptr)), nullptr);
+        check("adjust preview: a Screen layer -- the stand-in is off",
+              !same(core::sample_composite(im, s2, 150, 100, 0), want2), txt(core::sample_composite(im, s2, 150, 100, 0)));
+        check("adjust preview: a Screen layer -- the exact one IS the result (0.8)",
+              same(core::sample_composite(im, e2, 150, 100, 0), want2) && near(want2.r, 0.8), txt(want2));
+
+        // The layer's mask still hides: the left half hidden shows the background.
+        auto mk = ls;
+        P::TileMap m(P::Format{P::Depth::U8, P::Mode::Gray, false}, 300, 200);
+        mk["L2"].mask = std::make_shared<const P::TileMap>(m.fill({0, 0, 150, 200}, P::Px{{1, 0, 0, 0}}));
+        auto e3 = mk;
+        core::preview_adjust(e3, "L2", a, exact, nullptr);
+        const auto hidden = core::sample_composite(im, e3, 20, 100, 0);
+        check("adjust preview: the exact one keeps the layer's mask", near(hidden.r, 1) && near(hidden.g, 1) && near(hidden.b, 1), txt(hidden));
+        check("adjust preview: ...and shows where the mask reveals", same(core::sample_composite(im, e3, 250, 100, 0), want), "");
+
+        auto id = ls;
+        core::preview_adjust(id, "L2", A::fresh(core::AdjustKind::Curves), exact, nullptr);
+        check("adjust preview: settings that change nothing -- nothing shown", id.at("L2").pixels == ls.at("L2").pixels && id.size() == ls.size(), "");
+    }
+
+    std::cout << "\n-- adjustments: Invert, Posterize, Threshold, Exposure (s061, WEAKNESSES 34) --\n";
+    {
+        using K = core::AdjustKind;
+        const auto rgb = [](const core::Adjust& a, float r, float g, float b) { A::apply_rgb(a, r, g, b); return std::array<float, 3>{r, g, b}; };
+        check("s061: eight kinds, keys round trip", A::kinds().size() == 8 && A::from_key("invert") == K::Invert &&
+              A::from_key("posterize") == K::Posterize && A::from_key("threshold") == K::Threshold && A::from_key("exposure") == K::Exposure, "");
+        const auto iv = rgb(A::fresh(K::Invert), 0.2f, 0.5f, 1.f);
+        check("invert: each channel turned over", near(iv[0], 0.8) && near(iv[1], 0.5) && near(iv[2], 0), num(iv[0]));
+        check("invert: never the identity; settingless", !A::identity(A::fresh(K::Invert)) && A::settingless(K::Invert) && !A::settingless(K::Posterize), "");
+        auto po = A::fresh(K::Posterize);
+        check("posterize: starts at 4 levels, Photoshop's", po.posterize == 4 && !A::identity(po), "");
+        const auto p1 = rgb(po, 0.f, 0.3f, 1.f), p2 = rgb(po, 0.6f, 0.74f, 0.99f);
+        check("posterize 4: black / white kept, steps of a third", near(p1[0], 0) && near(p1[1], 1.0 / 3) && near(p1[2], 1) &&
+              near(p2[0], 2.0 / 3) && near(p2[1], 2.0 / 3) && near(p2[2], 1), num(p1[1]) + "," + num(p2[0]));
+        po.posterize = 2;
+        const auto p3 = rgb(po, 0.49f, 0.51f, 0.1f);
+        check("posterize 2: black or white per channel", near(p3[0], 0) && near(p3[1], 1) && near(p3[2], 0), "");
+        auto th = A::fresh(K::Threshold);
+        const auto t1 = rgb(th, 0.6f, 0.6f, 0.6f), t2 = rgb(th, 0.4f, 0.4f, 0.4f), t3 = rgb(th, 1.f, 0.f, 0.f);
+        check("threshold 128: lighter -> white, darker -> black, by luminance (pure red is dark)",
+              near(t1[0], 1) && near(t1[2], 1) && near(t2[0], 0) && near(t3[0], 0) && near(t3[1], 0), "");
+        th.threshold = 50;
+        check("threshold 50: pure red (lum 76) turns white", near(rgb(th, 1.f, 0.f, 0.f)[1], 1), "");
+        auto ex = A::fresh(K::Exposure);
+        check("exposure: a fresh one changes nothing", A::identity(ex) && near(rgb(ex, 0.3f, 0.3f, 0.3f)[0], 0.3, 0.003), "");
+        ex.exposure = 1;
+        const float lin = std::pow((0.5f + 0.055f) / 1.055f, 2.4f) * 2;   // mid grey's light, doubled
+        const float want = 1.055f * std::pow(lin, 1 / 2.4f) - 0.055f;
+        check("exposure +1: the light doubled, in linear light", near(rgb(ex, 0.5f, 0.5f, 0.5f)[0], want, 0.003) &&
+              near(rgb(ex, 0.f, 0.f, 0.f)[0], 0), num(rgb(ex, 0.5f, 0.5f, 0.5f)[0]) + " vs " + num(want));
+        ex = A::fresh(K::Exposure); ex.offset = 0.1;
+        check("exposure offset +0.1: black lifts", rgb(ex, 0.f, 0.f, 0.f)[0] > 0.3f, num(rgb(ex, 0.f, 0.f, 0.f)[0]));
+        ex = A::fresh(K::Exposure); ex.exp_gamma = 2;
+        check("exposure gamma 2: the middle lightens, ends stay", rgb(ex, 0.5f, 0.5f, 0.5f)[0] > 0.6f &&
+              near(rgb(ex, 1.f, 1.f, 1.f)[0], 1) && near(rgb(ex, 0.f, 0.f, 0.f)[0], 0), "");
+        auto bad = A::fresh(K::Exposure); bad.exposure = 30; bad.offset = -1; bad.exp_gamma = 0;
+        auto bp = A::fresh(K::Posterize); bp.posterize = 1;
+        auto bt = A::fresh(K::Threshold); bt.threshold = 300;
+        check("s061: out of range refused, normalised into range", !A::refusal(bad).empty() && !A::refusal(bp).empty() && !A::refusal(bt).empty() &&
+              A::normalised(bad).exposure == 20 && A::normalised(bad).offset == -0.5 && A::normalised(bad).exp_gamma == 0.01 &&
+              A::normalised(bp).posterize == 2 && A::normalised(bt).threshold == 255, "");
+
+        // As layers: Invert over the red square shows cyan; white shows black.
+        Fix t;
+        const auto id = t.adj(K::Invert);
+        check("invert layer: made, one step", !id.empty() && t.j.size() == 1, "");
+        check("invert layer: red -> cyan, white -> black", near(t.seen(150, 150).r, 0) && near(t.seen(150, 150).g, 1) && near(t.seen(150, 150).b, 1) &&
+              near(t.seen(20, 20).r, 0), "");
+        const auto th2 = t.adj(K::Threshold);   // over the cyan (lum 179) and the black
+        check("threshold layer over it: cyan -> white, black stays", near(t.seen(150, 150).r, 1) && near(t.seen(20, 20).g, 0), "");
+        t.j.undo(); t.j.undo();
+        check("undo: both gone, red again", !t.d.get(id) && !t.d.get(th2) && near(t.seen(150, 150).r, 1) && near(t.seen(150, 150).g, 0), "");
+
+        // On pixels: Invert, one step; twice is back where it was.
+        Fix u;
+        const auto before = u.d.get("L4")->pixels;
+        check("invert on pixels: one step", L::apply_adjust(u.j, u.d, "L4", A::fresh(K::Invert)) && u.j.size() == 1 &&
+              near(u.seen(150, 150).g, 1) && near(u.seen(150, 150).r, 0), "");
+        L::apply_adjust(u.j, u.d, "L4", A::fresh(K::Invert));
+        const auto px = u.d.get("L4")->pixels->get(150, 150), was = before->get(150, 150);
+        check("invert twice: the pixels back", near(px.c[0], was.c[0], 1e-3) && near(px.c[1], was.c[1], 1e-3) && near(px.c[3], was.c[3], 1e-3), "");
+
+        // The .klimt keeps them all.
+        Fix f;
+        auto pz = A::fresh(K::Posterize); pz.posterize = 7;
+        auto tz = A::fresh(K::Threshold); tz.threshold = 90;
+        auto ez = A::fresh(K::Exposure); ez.exposure = -1.25; ez.offset = 0.0123; ez.exp_gamma = 1.4;
+        const auto i1 = f.adj(K::Invert), i2 = f.adj(K::Posterize), i3 = f.adj(K::Threshold), i4 = f.adj(K::Exposure);
+        f.set(i2, pz); f.set(i3, tz); f.set(i4, ez);
+        core::file::Contents c;
+        c.image = f.d.image(); c.layers = f.d.snapshot(); c.next_id = f.d.next_id();
+        const auto dir = fs::temp_directory_path() / "klimt_selftest_adjust61";
+        fs::create_directories(dir);
+        const auto path = (dir / "s061.klimt").string();
+        std::string err;
+        const bool saved = core::file::save_klimt(path, c, err);
+        const auto back = saved ? core::file::open(path, err) : std::nullopt;
+        bool same = back.has_value();
+        if (back)
+            for (const auto& i : {i1, i2, i3, i4}) same = same && back->layers.at(i).adjust == c.layers.at(i).adjust;
+        check("file: Invert, Posterize 7, Threshold 90, Exposure -1.25 / 0.0123 / 1.4 come back", same, err);
+        fs::remove_all(dir);
     }
 }
