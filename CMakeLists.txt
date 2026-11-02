@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s085")
+set(KLIMT_BUILD "s086")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,6 +62,7 @@ add_subdirectory(libs/pixel)
 add_subdirectory(libs/formats)   # s007: PNG / JPEG / TIFF in and out
 add_subdirectory(libs/text)      # s046: type -- Pango + Cairo, GTK-free
 add_subdirectory(libs/tint)      # s067: colour management -- lcms2 (Fedora: lcms2-devel)
+add_subdirectory(libs/seg)       # s086: local AI -- ONNX Runtime (Fedora: onnxruntime-devel; optional)
 
 # ── klimt_core -- the GTK-free core (the model side of the one real seam) ──────
 # No gtkmm on this library's link line, BY DESIGN: a stray UI include under
@@ -151,9 +152,10 @@ add_library(klimt_core STATIC
     src/core/RoundTrip.cpp    # s083: the Composix round-trip
     src/core/Actions.cpp      # s084: actions and batch
     src/core/Raw.cpp          # s085: camera RAW (LibRaw)
+    src/core/Subject.cpp      # s086: Select > Subject (libs/seg)
 )
 target_include_directories(klimt_core PUBLIC include)
-target_link_libraries(klimt_core PUBLIC klimt_pixel klimt_formats klimt_text klimt_tint)
+target_link_libraries(klimt_core PUBLIC klimt_pixel klimt_formats klimt_text klimt_tint klimt_seg)
 
 # s010 m3: the PIXEL HOT PATHS are optimised in every build type -- a Debug
 # build composited ~4x slower than Release, and Debug is what build.sh makes.
@@ -200,7 +202,7 @@ add_executable(klimt-thumbnailer src/thumbnailer.cpp)
 target_link_libraries(klimt-thumbnailer PRIVATE klimt_formats PkgConfig::LIBZIP)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_liquify.cpp src/selftest_snapshot.cpp src/selftest_magnetic.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp src/selftest_psd.cpp src/selftest_psdadjust.cpp src/selftest_pdf.cpp src/selftest_colour.cpp src/selftest_clip.cpp src/selftest_trace.cpp src/selftest_smart.cpp src/selftest_roundtrip.cpp src/selftest_actions.cpp src/selftest_raw.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_liquify.cpp src/selftest_snapshot.cpp src/selftest_magnetic.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp src/selftest_psd.cpp src/selftest_psdadjust.cpp src/selftest_pdf.cpp src/selftest_colour.cpp src/selftest_clip.cpp src/selftest_trace.cpp src/selftest_smart.cpp src/selftest_roundtrip.cpp src/selftest_actions.cpp src/selftest_raw.cpp src/selftest_seg.cpp)
 find_package(TIFF REQUIRED)   # s085: the selftest writes its own DNG
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads PkgConfig::LIBZIP ZLIB::ZLIB TIFF::TIFF)   # s085: TIFF -- the test writes its own DNG   # s049: reads the zips it writes
 # The selftest checks every tool's icon is in the resource bundle (s005).

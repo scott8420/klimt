@@ -1,5 +1,12 @@
 #include "AdjustDialog.hpp"   // s064: the eyedroppers
 #include "Shell.hpp"
+#include "core/Subject.hpp"   // s086
+#include "seg/Seg.hpp"
+#include "Log.hpp"
+#include <gtkmm/alertdialog.h>
+#include <gtkmm/filelauncher.h>
+#include <gdkmm/clipboard.h>
+#include <filesystem>
 #include "Log.hpp"
 #include "core/Selection.hpp"
 #include "core/Composite.hpp"
@@ -305,6 +312,78 @@ void Shell::update_select_actions() {
     if (auto it = m_layer_acts.find("crop-selection"); it != m_layer_acts.end()) it->second->set_enabled(any);
     for (const char* a : {"select-expand", "select-contract", "select-border", "select-smooth"})
         if (auto it = m_layer_acts.find(a); it != m_layer_acts.end()) it->second->set_enabled(any);
+}
+
+}  // namespace klimt
+
+// ── s086: Select > Subject ──────────────────────────────────────────────────
+// A local model (libs/seg) finds what stands out -- inside the selection when
+// there is one (a rough Lasso: "the item is in here"). A job: the picture as
+// the eye sees it, the model, the mask; ONE step "Select Subject".
+namespace klimt {
+
+void Shell::say_model_missing(const std::string& verb, const std::string& model_key, const std::string& words) {
+    const auto* m = seg::model(model_key);
+    const std::string dir = seg::default_dir();
+    auto a = Gtk::AlertDialog::create(verb + " needs its model");
+    std::string detail = words + ".\n\n";
+    if (m) detail += std::string(m->what) + ".\nPut " + m->file + " in that folder -- it is published at\n" + m->url;
+    a->set_detail(detail);
+    a->set_buttons({"Close", "Copy Link", "Open Folder"});
+    a->set_cancel_button(0);
+    a->set_default_button(2);
+    const std::string url = m ? m->url : "";
+    a->choose(*this, [this, a, dir, url](Glib::RefPtr<Gio::AsyncResult>& r) {
+        int b = 0;
+        try { b = a->choose_finish(r); } catch (const Glib::Error&) { return; }
+        if (b == 1 && !url.empty()) { get_clipboard()->set_text(url); toast("Link copied"); }
+        if (b == 2) {
+            std::error_code ec;
+            std::filesystem::create_directories(dir, ec);
+            auto l = Gtk::FileLauncher::create(Gio::File::create_for_path(dir));
+            l->launch(*this, [l](Glib::RefPtr<Gio::AsyncResult>& rr) { try { l->launch_finish(rr); } catch (const Glib::Error&) {} });
+        }
+    });
+}
+
+void Shell::on_select_subject() {
+    const std::string verb = "Select Subject";
+    if (!has_image()) { toast(verb + ": no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
+    if (!seg::available()) { toast(verb + ": Klimt was built without ONNX Runtime -- install onnxruntime-devel and build again"); return; }
+    const auto* m = seg::model("subject");
+    if (!m) return;
+    const core::Image im = m_doc.image();
+    const auto layers = m_doc.snapshot();
+    const auto sel = m_doc.selection_ptr();
+    const auto mf = m_doc.mask_format();
+    const auto mark = m_journal.mark();
+    const std::string dir = seg::default_dir();
+    rec(core::actions::select_subject());
+    start_job(verb, [this, im, layers, sel, mf, mark, dir, m, verb](core::Jobs::Token& t) -> core::Jobs::Landing {
+        const auto state = seg::check(*m, dir);
+        if (state != seg::State::Ready) {
+            const auto words = seg::state_words(*m, state, dir);
+            return [this, verb, words] { say_model_missing(verb, "subject", words); };
+        }
+        formats::Progress cancel_only;
+        cancel_only.cancelled = [&t] { return t.cancelled(); };
+        auto flat = core::file::flatten(im, layers, cancel_only);
+        if (!flat) return [] {};
+        t.progress(0.2);
+        std::string err;
+        auto mk = core::subject::mask(*flat, sel.get(), mf, seg::path_of(*m, dir), m->side, err, [&t] { return t.cancelled(); });
+        if (!mk) {
+            if (t.cancelled()) return [] {};
+            return [this, verb, err] { toast(verb + ": " + err); };
+        }
+        auto res = std::make_shared<pixel::TileMap>(std::move(*mk));
+        return [this, verb, sel, mark, res] {
+            if (m_journal.mark() != mark || m_doc.selection_ptr() != sel) { toast(verb + ": the image changed meanwhile -- nothing done"); return; }
+            S::set(m_journal, m_doc, std::move(*res), verb);
+            if (auto lg = log::get(log::Area::Shell)) lg->info("select subject: landed");
+            toast(verb + " -- Select > Refine to Edges takes the edge further", true);
+        };
+    });
 }
 
 }  // namespace klimt

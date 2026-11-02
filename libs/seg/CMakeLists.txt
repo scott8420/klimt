@@ -1,0 +1,27 @@
+# libs/seg -- local AI models through ONNX Runtime (s086; REQUIREMENTS
+# "Added": Select Subject, background matting, LaMa fill). GTK-free; its
+# checks live in klimt_selftest.
+#   Fedora: onnxruntime-devel     (optional: without it the AI verbs say so)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ORT IMPORTED_TARGET libonnxruntime)
+add_library(klimt_seg STATIC src/Seg.cpp src/Sha256.cpp)
+target_include_directories(klimt_seg PUBLIC include)
+target_link_libraries(klimt_seg PUBLIC klimt_pixel)
+target_compile_features(klimt_seg PUBLIC cxx_std_23)
+if(ORT_FOUND)
+  target_compile_definitions(klimt_seg PRIVATE KLIMT_HAVE_ORT)
+  target_link_libraries(klimt_seg PRIVATE PkgConfig::ORT)
+  message(STATUS "ONNX Runtime ${ORT_VERSION}: local AI on")
+else()
+  # Fedora's headers sit in /usr/include/onnxruntime without a .pc on some releases.
+  find_path(ORT_INCLUDE onnxruntime_cxx_api.h PATH_SUFFIXES onnxruntime onnxruntime/core/session)
+  find_library(ORT_LIB onnxruntime)
+  if(ORT_INCLUDE AND ORT_LIB)
+    target_compile_definitions(klimt_seg PRIVATE KLIMT_HAVE_ORT)
+    target_include_directories(klimt_seg PRIVATE ${ORT_INCLUDE})
+    target_link_libraries(klimt_seg PRIVATE ${ORT_LIB})
+    message(STATUS "ONNX Runtime (${ORT_LIB}): local AI on")
+  else()
+    message(WARNING "ONNX Runtime not found (Fedora: sudo dnf install onnxruntime-devel) -- Select Subject and the other local AI verbs will say so")
+  endif()
+endif()

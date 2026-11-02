@@ -114,6 +114,7 @@ void Shell::update_layer_actions() {
     const bool img = has_image();
     on("guides-clear", img && !m_doc.image().guides.empty());   // s032
     on("action-play", img && m_recording < 0 && !m_action_playing);   // s084
+    on("select-subject", img);   // s086
     for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save", "select-range", "refine-edges",
                           "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
                           "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate",
