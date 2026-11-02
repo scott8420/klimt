@@ -614,7 +614,7 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
                         Glib::signal_idle().connect_once([this, tool] { show_tool(*tool); });
             });
             // s008: the variants that don't act yet say so instead of faking.
-            if (t.id == "select" && i >= 4) {
+            if (t.id == "select" && i == 4) {   // s079: Magnetic (5) acts
                 b->set_sensitive(false);
                 b->set_tooltip_text("Arrives with a later milestone");
             }
@@ -663,6 +663,26 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
     }
     if (t.id == "crop")   // s010
         with_settings("Settings", "What happens to the pixels outside the box");
+    if (t.id == "select" && variant("select") == 5) {   // s079: the Magnetic Lasso -- one dropdown (the strip never scrolls)
+        auto mb = Gtk::make_managed<Gtk::MenuButton>();
+        mb->set_name("strip.magnetic");
+        mb->set_label("Edges");
+        mb->set_tooltip_text("The Magnetic Lasso: Width, Contrast, Frequency. Click to start, move along the edge, "
+                             "click to lay an anchor, Backspace takes one, double-click or Enter closes");
+        auto pop = Gtk::make_managed<Gtk::Popover>();
+        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+        box->set_margin(8);
+        const auto line = [&] { auto l = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6); box->append(*l); return l; };
+        number_field(*line(), "Width", 1, 256, m_magnetic.width, "px", "How far from the pointer an edge is looked for",
+                     [this] { return m_magnetic.width; }, [this](int v) { m_magnetic.width = v; });
+        number_field(*line(), "Contrast", 1, 100, m_magnetic.contrast, "%", "How strong an edge must be (of the strongest near it) to be followed",
+                     [this] { return m_magnetic.contrast; }, [this](int v) { m_magnetic.contrast = v; });
+        number_field(*line(), "Frequency", 0, 100, m_magnetic.frequency, "", "How often anchors are laid as you go (0 .. 100)",
+                     [this] { return m_magnetic.frequency; }, [this](int v) { m_magnetic.frequency = v; });
+        pop->set_child(*box);
+        mb->set_popover(*pop);
+        append(*mb);
+    }
     if (t.id == "select" && variant("select") == 3) {   // s008 m3: the Magic Wand
         with_settings("Settings", "The Magic Wand: contiguous, all layers");
         number_field(*this, "Tolerance", 0, 255, m_wand.tolerance, "", "How unlike the clicked pixel a pixel may be (0..255) and still be taken",

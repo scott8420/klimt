@@ -92,6 +92,7 @@ CanvasView::CanvasView() {
         }
         if (m_tool == "crop" && n == 2 && m_crop && crop_hit(x, y) == -1) { commit_crop(); return; }
         if (m_lq.on) return;   // s076: in Liquify, a click is the brush's (the drag has it)
+        if (n == 2 && m_mag_on && lasso_open()) { lasso_finish(); return; }   // s079: a double-click closes the Magnetic Lasso
         if (m_xf.on) {   // s011: in a transform, a click is the box's; a double-click inside commits
             if (n == 2 && xf_inside(x, y)) m_xf_commit.emit();
             return;
@@ -136,6 +137,15 @@ CanvasView::CanvasView() {
                 return;
             }
             m_panning = button == GDK_BUTTON_MIDDLE || m_space || m_tool == "hand";
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && lasso_open() && m_mag_on) {   // s079: an anchor, or the close
+                m_press_x = x;
+                m_press_y = y;
+                m_mag.set_near(6 / m_zoom);
+                m_mag.click({to_image_x(x), to_image_y(y)});
+                if (m_mag.done()) { lasso_land(); drag->set_state(Gtk::EventSequenceState::DENIED); }
+                queue_draw();
+                return;
+            }
             if (!m_panning && button == GDK_BUTTON_PRIMARY && lasso_open()) {   // s038: a corner, or the close
                 const bool alt = (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
                 m_press_x = x;
@@ -262,12 +272,17 @@ CanvasView::CanvasView() {
                 using Op = core::select::Op;
                 m_drag = {};
                 m_drag.op = shift && alt ? Op::Intersect : shift ? Op::Add : alt ? Op::Subtract : Op::Replace;
-                m_drag.kind = m_variant == 1 ? Shape::Kind::Ellipse : m_variant == 2 ? Shape::Kind::Lasso
+                m_drag.kind = m_variant == 1 ? Shape::Kind::Ellipse : (m_variant == 2 || m_variant == 5) ? Shape::Kind::Lasso
                             : m_variant == 3 ? Shape::Kind::Point : Shape::Kind::Rect;
+                m_mag_on = m_variant == 5;   // s079: the Magnetic Lasso
                 m_drag.pts = {{to_image_x(x), to_image_y(y)}};
                 if (m_drag.kind == Shape::Kind::Rect || m_drag.kind == Shape::Kind::Ellipse)   // s032: snap the corner
                     m_drag.pts[0] = {snap_x(m_drag.pts[0].x), snap_y(m_drag.pts[0].y)};
-                if (m_drag.kind == Shape::Kind::Lasso) m_lasso.start(m_drag.pts[0], alt, 6 / m_zoom, 1.5 / m_zoom);   // s038
+                if (m_mag_on) {   // s079: the source first -- it may set the params
+                    auto lum = m_edge_source ? m_edge_source() : core::select::MagneticTrace::Lum{};
+                    m_mag.start(m_drag.pts[0], std::move(lum), m_iw, m_ih, m_mag_params, 6 / m_zoom);
+                }
+                else if (m_drag.kind == Shape::Kind::Lasso) m_lasso.start(m_drag.pts[0], alt, 6 / m_zoom, 1.5 / m_zoom);   // s038
                 m_press_x = x;
                 m_press_y = y;
                 m_rubber = true;
@@ -407,6 +422,11 @@ CanvasView::CanvasView() {
                 return;
             }
             if (m_rubber && m_drag.kind == Shape::Kind::Point) return;   // the Wand: a click, not a drag
+            if (m_rubber && !m_panning && m_mag_on) {   // s079: the wire follows, the button down too
+                m_mag.move({to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)});
+                queue_draw();
+                return;
+            }
             if (m_rubber && !m_panning && m_drag.kind == Shape::Kind::Lasso) {   // s038: Alt -- a straight side
                 const bool alt = (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
                 m_lasso.move({to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)}, alt);
@@ -508,6 +528,7 @@ CanvasView::CanvasView() {
                 m_stroke_signal.emit(StrokeAt::End, {to_image_x(m_press_x + dx), to_image_y(m_press_y + dy)}, false, pressure_of(drag));
                 return;
             }
+            if (m_rubber && !m_panning && m_mag_on) return;   // s079: it stays open -- clicks lay anchors
             if (m_rubber && !m_panning && m_drag.kind == Shape::Kind::Lasso) {   // s038
                 const bool alt = (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
                 const bool click = !m_lasso.went_straight() && m_lasso.points().size() <= 2 && std::hypot(dx, dy) < 3;
@@ -545,7 +566,10 @@ CanvasView::CanvasView() {
         m_px = x;
         m_py = y;
         if (m_lq.on) queue_draw();   // s076: the ring follows
-        if (lasso_open() && m_lasso.open()) {   // s038: the band follows; Alt gone -- it closes
+        if (lasso_open() && m_mag_on) {   // s079: the wire follows
+            m_mag.move({to_image_x(x), to_image_y(y)});
+            queue_draw();
+        } else if (lasso_open() && m_lasso.open()) {   // s038: the band follows; Alt gone -- it closes
             const bool alt = (motion->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
             m_lasso.move({to_image_x(x), to_image_y(y)}, alt);
             if (m_lasso.done()) lasso_land();
@@ -611,7 +635,7 @@ CanvasView::CanvasView() {
         if (k == GDK_KEY_Alt_L || k == GDK_KEY_Alt_R) {
             m_pen_alt = false;
             if (m_tool == "pen") pen_modifiers();
-            if (lasso_open() && m_lasso.open()) { m_lasso.alt_up(); if (m_lasso.done()) lasso_land(); queue_draw(); }   // s038
+            if (lasso_open() && !m_mag_on && m_lasso.open()) { m_lasso.alt_up(); if (m_lasso.done()) lasso_land(); queue_draw(); }   // s038
             if (m_hint_mode) queue_draw();
         }
         if (k == GDK_KEY_space) { m_space = false; update_cursor(); }
@@ -979,6 +1003,31 @@ void CanvasView::draw_rubber(const Cairo::RefPtr<Cairo::Context>& cr) {
     cr->save();
     cr->set_line_width(1);
     const auto& a = m_drag.pts.front();
+    if (m_drag.kind == Shape::Kind::Lasso && m_mag_on) {   // s079: the outline, the anchors, the start
+        const auto pts = m_mag.points();
+        if (pts.empty()) { cr->restore(); return; }
+        cr->move_to(to_screen_x(pts.front().x), to_screen_y(pts.front().y));
+        for (const auto& p : pts) cr->line_to(to_screen_x(p.x), to_screen_y(p.y));
+        cr->set_source_rgb(1, 1, 1);
+        cr->stroke_preserve();
+        cr->set_source_rgb(0, 0, 0);
+        cr->set_dash(std::vector<double>{4, 4}, 0);
+        cr->stroke();
+        cr->unset_dash();
+        for (const auto& a : m_mag.anchors()) {
+            cr->rectangle(std::round(to_screen_x(a.x)) - 2.5, std::round(to_screen_y(a.y)) - 2.5, 5, 5);
+            cr->set_source_rgb(1, 1, 1);
+            cr->fill_preserve();
+            cr->set_source_rgb(0, 0, 0);
+            cr->stroke();
+        }
+        const double sx = std::round(to_screen_x(pts.front().x)) + 0.5, sy = std::round(to_screen_y(pts.front().y)) + 0.5;
+        cr->arc(sx, sy, 4.5, 0, 2 * M_PI);   // the start: a click there closes
+        cr->set_source_rgb(1, 1, 1);
+        cr->stroke();
+        cr->restore();
+        return;
+    }
     if (m_drag.kind == Shape::Kind::Lasso) {   // s038: the trace, and Alt's band to the pointer
         const auto& pts = m_lasso.points();
         if (pts.empty()) { cr->restore(); return; }
@@ -1016,8 +1065,10 @@ void CanvasView::draw_rubber(const Cairo::RefPtr<Cairo::Context>& cr) {
 // ── s038: the Lasso's trace ─────────────────────────────────────────────────
 void CanvasView::lasso_land() {
     Shape s = m_drag;
-    s.pts = m_lasso.points();
+    s.pts = m_mag_on ? m_mag.points() : m_lasso.points();   // s079
     m_lasso = {};
+    m_mag = {};
+    m_mag_on = false;
     m_drag = {};
     m_rubber = false;
     queue_draw();
@@ -1026,21 +1077,30 @@ void CanvasView::lasso_land() {
 
 void CanvasView::lasso_finish() {
     if (!lasso_open()) return;
+    if (m_mag_on) {   // s079
+        m_mag.finish();
+        if (m_mag.done()) lasso_land();
+        else lasso_cancel();
+        return;
+    }
     m_lasso.finish();
     lasso_land();
 }
 
 void CanvasView::lasso_cancel() {
-    if (!lasso_open()) return;
+    if (!lasso_open() && !(m_mag_on && m_rubber)) return;   // s079: a Magnetic Lasso closed too short lands here
     m_lasso.cancel();
     m_lasso = {};
+    m_mag = {};   // s079
+    m_mag_on = false;
     m_drag = {};
     m_rubber = false;
     queue_draw();
 }
 
 bool CanvasView::lasso_back() {
-    if (!lasso_open() || !m_lasso.back()) return false;
+    if (!lasso_open()) return false;
+    if (m_mag_on ? !m_mag.back() : !m_lasso.back()) return false;   // s079
     queue_draw();
     return true;
 }

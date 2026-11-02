@@ -16,6 +16,7 @@
 //     middle-drag, Space+drag and the Hand tool pan; the Zoom tool clicks in
 //     (Alt: out); keys through zoom_in / zoom_out / fit / actual_size.
 #include "core/Selection.hpp"   // s008: the ants' segments, the op
+#include "core/Magnetic.hpp"   // s079
 #include "core/Lasso.hpp"       // s038: the Lasso's straight sides
 
 #include <gtkmm/drawingarea.h>
@@ -80,7 +81,9 @@ public:
         if (id != "crop") m_crop = false;   // s009: the box belongs to the Crop tool
         if (id != "pen") m_pen_sub = -1;     // s035: another tool ends the Pen's subpath
         m_pen_shown = -1;
-        if ((id != m_tool || variant != m_variant) && m_lasso.active()) { m_lasso.cancel(); m_rubber = false; m_drag = {}; }   // s038
+        if ((id != m_tool || variant != m_variant) && (m_lasso.active() || m_mag.active())) {   // s038; s079
+            m_lasso.cancel(); m_mag.cancel(); m_mag_on = false; m_rubber = false; m_drag = {};
+        }
         m_tool = id; m_variant = variant; update_cursor(); queue_draw();
     }
 
@@ -105,7 +108,13 @@ public:
     };
     sigc::signal<void(const Shape&)>& signal_shape() { return m_shape_signal; }
     // s038: the Lasso with Alt's straight sides -- open between clicks.
-    bool lasso_open() const { return m_rubber && m_lasso.active(); }
+    bool lasso_open() const { return m_rubber && (m_mag_on ? m_mag.active() : m_lasso.active()); }
+    // s079: the MAGNETIC LASSO (the Select tool's 6th variant). Where its
+    // edges come from: the Shell gives a reader of the picked layer's
+    // luminance at the press (nullptr: none -- a straight wire); its
+    // settings (Width, Contrast, Frequency).
+    void set_edge_source(std::function<core::select::MagneticTrace::Lum()> f) { m_edge_source = std::move(f); }
+    void set_magnetic(const core::select::MagneticTrace::Params& p) { m_mag_params = p; }
     void lasso_finish();               // Enter: close it as it stands
     void lasso_cancel();               // Esc: drop it
     bool lasso_back();                 // Backspace: the last corner
@@ -338,7 +347,7 @@ private:
     sigc::signal<void(TextAt, double, double, bool)> m_text_signal;    // s046
     TextOverlay m_text_ov;
     bool m_texting = false;
-    bool selecting() const { return m_tool == "select" && m_variant <= 3; }   // Rectangle, Ellipse, Lasso, Wand
+    bool selecting() const { return m_tool == "select" && (m_variant <= 3 || m_variant == 5); }   // Rectangle, Ellipse, Lasso, Wand; s079: Magnetic
     bool painting() const { return m_tool == "brush" || m_tool == "eraser" || m_tool == "clone" || m_tool == "heal" || m_tool == "smudge"; }
     // s015 m4: the tools that take from a source point (Alt- / Ctrl-click).
     bool sourced() const { return m_tool == "clone" || (m_tool == "heal" && m_variant == 1); }
@@ -401,6 +410,10 @@ private:
     void              zoom_to_box(double x0, double y0, double x1, double y1, bool out = false);
     Shape             m_drag;                          // its points so far (image coords)
     core::select::LassoTrace m_lasso;                  // s038: the Lasso's points (m_drag.kind Lasso)
+    core::select::MagneticTrace m_mag;                 // s079: the Magnetic Lasso's (m_drag.kind Lasso, m_mag_on)
+    bool m_mag_on = false;
+    std::function<core::select::MagneticTrace::Lum()> m_edge_source;
+    core::select::MagneticTrace::Params m_mag_params;
     void              lasso_land();                    // the trace done: tell the Shell
     double            m_press_x = 0, m_press_y = 0;    // screen
     sigc::signal<void(const Shape&)> m_shape_signal;

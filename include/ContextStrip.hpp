@@ -36,6 +36,9 @@ public:
     // s008 m3: the Magic Wand's options (view state, remembered).
     struct Wand { int tolerance = 32; bool contiguous = true; bool all_layers = false; };
     const Wand& wand() const { return m_wand; }
+    // s079: the Magnetic Lasso's options (view state, remembered).
+    struct Magnetic { int width = 10; int contrast = 10; int frequency = 57; };
+    const Magnetic& magnetic() const { return m_magnetic; }
     // s012: the Gradient tool's options (view state, remembered).
     struct GradientOpts { int opacity = 100; bool reverse = false; bool to_transparent = false; };
     const GradientOpts& gradient() const { return m_gradient; }
@@ -186,6 +189,7 @@ private:
     bool m_quiet = false;                                 // lighting a button, not choosing
     std::map<std::string, int> m_variant;
     Wand m_wand;
+    Magnetic m_magnetic;   // s079
     bool m_crop_delete = false;
     RefineOpts m_refine;
     GradientOpts m_gradient;

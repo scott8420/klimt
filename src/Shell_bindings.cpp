@@ -86,6 +86,23 @@ void Shell::bind_actions() {  // bindings
         m_canvas.grab_focus();
     });
     m_canvas.signal_warp().connect(sigc::mem_fun(*this, &Shell::on_warp_change));
+    // s079: the Magnetic Lasso reads the picked layer's luminance (alpha-
+    // weighted: a cut-out's outline is an edge), and the strip's settings.
+    m_canvas.set_edge_source([this]() -> core::select::MagneticTrace::Lum {
+        const auto& o = m_strip.magnetic();
+        m_canvas.set_magnetic({double(o.width), o.contrast / 100.0, o.frequency});
+        const auto l = m_doc.get(m_layers.primary());
+        if (!l || !l->pixels) return {};
+        auto px = l->pixels;
+        const bool gray = px->format().mode == pixel::Mode::Gray, alpha = px->format().alpha;
+        if (px->format().mode != pixel::Mode::RGB && !gray) return {};
+        return [px, gray, alpha](int x, int y) -> float {
+            const auto p = px->get(x, y);
+            const float a = alpha ? p.c[gray ? 1 : 3] : 1.f;
+            const float v = gray ? p.c[0] : 0.299f * p.c[0] + 0.587f * p.c[1] + 0.114f * p.c[2];
+            return v * a;
+        };
+    });
     // s076: Liquify.
     m_canvas.signal_liquify().connect(sigc::mem_fun(*this, &Shell::on_liquify_dab));
     m_strip.signal_liquify_changed().connect([this] { if (m_liq.active) m_canvas.set_liquify_radius(m_strip.liquify().size / 2.0); });
