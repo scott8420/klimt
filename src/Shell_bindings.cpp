@@ -77,6 +77,14 @@ void Shell::bind_actions() {  // bindings
     // s011: Free Transform and the one-shot transforms (Shell_transform.cpp).
     m_canvas.signal_transform().connect(sigc::mem_fun(*this, &Shell::on_xform_change));
     m_canvas.signal_transform_commit().connect(sigc::mem_fun(*this, &Shell::xform_commit));
+    m_strip.signal_transform_kind().connect([this](int k) {   // s073: the strip's Skew / Distort / Perspective
+        m_canvas.set_transform_kind(static_cast<CanvasView::XfKind>(k));
+        m_canvas.grab_focus();
+    });
+    m_strip.signal_transform_done().connect([this](bool apply) { if (apply) xform_commit(); else xform_cancel(); });
+    m_canvas.signal_transform_refused().connect([this] {   // s073
+        if (m_xform.plan) toast("Free Transform: " + core::xform::projective_refusal(*m_xform.plan));
+    });
     m_layer_acts["free-transform"] = add_action("free-transform", sigc::mem_fun(*this, &Shell::on_free_transform));
     namespace X = core::xform;
     m_layer_acts["flip-h"] = add_action("flip-h", [this] { run_xform("Flip Horizontal", [](const pixel::Rect& b) { return X::flip_about(b, true); }); });

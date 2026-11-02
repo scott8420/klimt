@@ -5,6 +5,7 @@
 #include "core/Document.hpp"
 #include "core/Selection.hpp"
 #include "core/Transform.hpp"
+#include "core/Text.hpp"
 
 #include <cmath>
 #include <functional>
@@ -209,6 +210,127 @@ void selftest_transform(const Check& check) {
         check("transform: no empty corner inside the straightened canvas", white, "");
         check("transform: what was cropped is kept beyond", t.d.get("L1")->pixels->has_outside(), "");
         check("transform: the selection dropped (a crop's way)", t.d.selection() == nullptr, "");
+    }
+
+    // ── s073: projective -- Skew, Distort, Perspective ──────────────────────
+    std::cout << "\n-- transform: projective (s073) --\n";
+    const auto near = [](X::Pt a, X::Pt b, double tol = 1e-6) { return std::abs(a.x - b.x) < tol && std::abs(a.y - b.y) < tol; };
+    {
+        // The box's corners land on the quad's, and an affine stays affine.
+        const X::Quad q{{{10, 20}, {210, 0}, {260, 180}, {0, 160}}};
+        const auto m = X::Projective::box_to_quad(P::Rect{100, 100, 200, 150}, q);
+        check("projective: box to quad", m.has_value(), "");
+        if (m) {
+            check("projective: the corners land on the quad's",
+                  near(m->apply({100, 100}), q.p[0]) && near(m->apply({300, 100}), q.p[1]) &&
+                  near(m->apply({300, 250}), q.p[2]) && near(m->apply({100, 250}), q.p[3]), "");
+            check("projective: a trapezoid is not affine", !m->affine(), "");
+            const auto r = (*m * m->inverse()).apply({123.5, -7.25});
+            check("projective: m * m^-1 is the identity", near(r, {123.5, -7.25}, 1e-6), "");
+            const auto b = X::mapped(P::Rect{100, 100, 200, 150}, *m);
+            check("projective: where the box lands", b == P::Rect{0, 0, 260, 180}, "");
+        }
+        const X::Quad par{{{100, 100}, {300, 100}, {340, 250}, {140, 250}}};   // a skew: a parallelogram
+        const auto s = X::Projective::box_to_quad(P::Rect{100, 100, 200, 150}, par);
+        check("projective: a skew is affine", s && s->affine(), "");
+        const X::Affine a = X::Affine::about({5, 5}, X::Affine::rotate(0.7) * X::Affine::scale(2, 0.5));
+        const X::Projective pa(a);
+        check("projective: an affine carried over exactly", pa.affine() && near(pa.apply({17, -3}), a.apply({17, -3})), "");
+        check("projective: the identity", X::Projective{}.identity() && !pa.identity(), "");
+    }
+    {
+        const X::Quad bow{{{0, 0}, {100, 100}, {100, 0}, {0, 100}}};   // crossed: a bow-tie
+        const X::Quad fold{{{0, 0}, {100, 0}, {20, 20}, {0, 100}}};    // a corner pushed in: concave
+        const X::Quad flat{{{0, 0}, {50, 0}, {100, 0}, {0, 100}}};     // three in a line
+        check("projective: a bow-tie is refused", !X::convex(bow) && !X::Projective::box_to_quad(P::Rect{0, 0, 10, 10}, bow), "");
+        check("projective: a concave quad is refused", !X::convex(fold) && !X::Projective::box_to_quad(P::Rect{0, 0, 10, 10}, fold), "");
+        check("projective: three corners in a line are refused", !X::convex(flat), "");
+        const X::Quad ccw{{{0, 0}, {0, 100}, {100, 100}, {100, 0}}};   // mirrored (a flip): still one piece
+        check("projective: a mirrored quad is fine", X::convex(ccw), "");
+    }
+    {
+        // Distort the red square into a trapezoid: narrow at the top.
+        Fix t;
+        const X::Quad q{{{150, 100}, {250, 100}, {300, 250}, {100, 250}}};
+        check("projective: Distort", X::distort(t.j, t.d, {"L4"}, q, "Distort", kWhite), "");
+        check("projective: one step, named", t.j.size() == 1 && t.j.undo_label() == "Distort", t.j.undo_label());
+        check("projective: the top narrowed", clear(t.at(120, 104)) && clear(t.at(280, 104)) && (red(t.at(200, 104)) || green(t.at(200, 104))), "");
+        check("projective: the bottom kept its width", blue(t.at(103, 245)) && red(t.at(295, 245)) && red(t.at(120, 245)) && clear(t.at(98, 245)), "");
+        check("projective: the middle is solid", red(t.at(200, 175)), "");
+        // The stripe along the left edge follows the slanted side.
+        check("projective: the blue stripe follows the side", blue(t.at(149, 110)) && blue(t.at(107, 240)) && clear(t.at(144, 110)) && !blue(t.at(155, 110)), "");
+        check("projective: the document holds", t.d.check().empty(), t.d.check());
+        t.j.undo();
+        check("projective: undo", red(t.at(120, 104)) || green(t.at(120, 104)), "");
+    }
+    {
+        // A perspective: the far side (top) shrunk 4x -- the filter widens there
+        // (no aliasing: a 2-px checker averages toward grey, not to stripes).
+        Fix t;
+        {
+            core::Document::Loading load(t.d);
+            auto l = *t.d.get("L4");
+            P::TileMap m = *l.pixels;
+            for (int y = 100; y < 250; ++y)
+                for (int x = 100; x < 300; x += 2)
+                    m = m.fill({x + ((y / 2) % 2), y, 1, 1}, P::rgba(0, 0, 0, 1));
+            l.pixels = std::make_shared<const P::TileMap>(std::move(m));
+            t.d.put("L4", l);
+        }
+        const X::Quad q{{{175, 100}, {225, 100}, {300, 250}, {100, 250}}};
+        check("projective: Perspective", X::distort(t.j, t.d, {"L4"}, q, "Perspective", kWhite), "");
+        double lo = 1, hi = 0;
+        for (int x = 190; x < 210; ++x) {
+            const auto p = t.at(x, 103);
+            lo = std::min<double>(lo, p.c[0]);
+            hi = std::max<double>(hi, p.c[0]);
+        }
+        check("projective: the far side is filtered, not aliased", hi - lo < 0.35, std::to_string(lo) + " .. " + std::to_string(hi));
+        // The near side (bottom) is barely shrunk: the checker still shows.
+        double nlo = 1, nhi = 0;
+        for (int x = 190; x < 210; ++x) {
+            const auto p = t.at(x, 246);
+            nlo = std::min<double>(nlo, p.c[0]);
+            nhi = std::max<double>(nhi, p.c[0]);
+        }
+        check("projective: the near side keeps its detail", nhi - nlo > 0.5, std::to_string(nlo) + " .. " + std::to_string(nhi));
+    }
+    {
+        // A selection's pixels distorted, the selection with them.
+        Fix t;
+        core::layers::load_selection(t.d, {150, 120, 100, 100});
+        const X::Quad q{{{150, 120}, {250, 140}, {250, 200}, {150, 220}}};
+        check("projective: a selection's pixels", X::distort(t.j, t.d, {"L4"}, q, "Distort", kWhite), "");
+        check("projective: the selection took the shape", t.d.selection() && S::coverage(*t.d.selection(), 245, 170) > 0.99f &&
+                                                          S::coverage(*t.d.selection(), 245, 125) < 0.01f, "");
+        check("projective: pixels and selection, one step", t.j.size() == 1, std::to_string(t.j.size()));
+        check("projective: the document holds", t.d.check().empty(), t.d.check());
+    }
+    {
+        // A bad quad is no step.
+        Fix t;
+        const X::Quad bow{{{100, 100}, {300, 250}, {300, 100}, {100, 250}}};
+        check("projective: a bow-tie is no step", !X::distort(t.j, t.d, {"L4"}, bow, "Distort", kWhite) && t.j.size() == 0, "");
+    }
+    {
+        // Type stays type: a distort is refused, a skew keeps it live.
+        Fix t;
+        klimt::text::Spec sp;
+        sp.text = "Klimt"; sp.x = 60; sp.y = 120; sp.size = 40;
+        const auto id = core::layers::add_text(t.j, t.d, sp, "L4");
+        const auto pl = X::plan(t.d, {id}, kWhite);
+        check("projective: a type layer refuses a distort", pl && !X::projective_refusal(*pl).empty(), "");
+        const auto steps = t.j.size();
+        if (pl) {
+            const auto& b = pl->box;
+            const double x0 = b.x, y0 = b.y, x1 = b.x + b.w, y1 = b.y + b.h;
+            const X::Quad trap{{{x0 + 10, y0}, {x1 - 10, y0}, {x1, y1}, {x0, y1}}};
+            check("projective: ... and no step", !X::distort(t.j, t.d, {id}, trap, "Distort", kWhite) && t.j.size() == steps, "");
+            const X::Quad skew{{{x0 + 20, y0}, {x1 + 20, y0}, {x1, y1}, {x0, y1}}};
+            check("projective: a skew of type", X::distort(t.j, t.d, {id}, skew, "Skew", kWhite), "");
+            const auto l = t.d.get(id);
+            check("projective: ... stays type", l && l->kind == core::Kind::Text && l->text, "");
+        }
     }
 }
 

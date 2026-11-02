@@ -1,3 +1,4 @@
+#include "core/Transform.hpp"   // s073: the quad's map
 #include "CanvasView.hpp"
 #include "core/Rulers.hpp"   // s032: guides::snap
 
@@ -292,7 +293,8 @@ CanvasView::CanvasView() {
             if (m_xf.on && m_xf.mode != Xf::Mode::None) {
                 const auto st = drag->get_current_event_state();
                 xf_drag(m_press_x + dx, m_press_y + dy, (st & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{},
-                        (st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{});
+                        (st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{},
+                        (st & Gdk::ModifierType::CONTROL_MASK) != Gdk::ModifierType{});
                 return;
             }
             if (m_moving || m_patching) {
@@ -1136,16 +1138,19 @@ namespace {
 constexpr double kHandle = 8;   // screen px: how near a handle counts
 }
 
-void CanvasView::begin_transform(double x, double y, double w, double h) {
+void CanvasView::begin_transform(double x, double y, double w, double h, bool projective_ok) {
     m_xf = {};
     m_xf.on = true;
     m_xf.bx = x; m_xf.by = y; m_xf.bw = std::max(1.0, w); m_xf.bh = std::max(1.0, h);
+    m_xf.projective_ok = projective_ok;
+    m_xf_kind = XfKind::Free;
     set_cursor("default");
     queue_draw();
 }
 
 void CanvasView::end_transform() {
     m_xf = {};
+    m_xf_kind = XfKind::Free;
     update_cursor();
     queue_draw();
 }
@@ -1159,13 +1164,81 @@ std::array<double, 6> CanvasView::xf_matrix() const {
     return {a, b, c, d, e, f};
 }
 
+std::array<double, 9> CanvasView::xf_map() const {
+    if (m_xf.quad) {
+        core::xform::Quad q{{m_xf.q[0], m_xf.q[1], m_xf.q[2], m_xf.q[3]}};
+        if (const auto m = core::xform::Projective::box_to_quad(m_xf.bx, m_xf.by, m_xf.bw, m_xf.bh, q))
+            return {m->h[0], m->h[1], m->h[2], m->h[3], m->h[4], m->h[5], m->h[6], m->h[7], m->h[8]};
+    }
+    const auto m = xf_matrix();   // a c e / b d f / 0 0 1
+    return {m[0], m[2], m[4], m[1], m[3], m[5], 0, 0, 1};
+}
+
 core::select::Pt CanvasView::xf_world(double lx, double ly) const {
     const auto m = xf_matrix();
     const double x = m_xf.bx + m_xf.bw / 2 + lx, y = m_xf.by + m_xf.bh / 2 + ly;
     return {m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]};
 }
 
+namespace {
+// The corner index of a corner handle (tl tr br bl); -1: not a corner.
+int corner_of(int hx, int hy) {
+    if (hx < 0 && hy < 0) return 0;
+    if (hx > 0 && hy < 0) return 1;
+    if (hx > 0 && hy > 0) return 2;
+    if (hx < 0 && hy > 0) return 3;
+    return -1;
+}
+// The side of a side handle: its two corners (first, second, along the quad's turn).
+bool side_of(int hx, int hy, int& i, int& j) {
+    if (hx == 0 && hy < 0) { i = 0; j = 1; return true; }
+    if (hx > 0 && hy == 0) { i = 1; j = 2; return true; }
+    if (hx == 0 && hy > 0) { i = 2; j = 3; return true; }
+    if (hx < 0 && hy == 0) { i = 3; j = 0; return true; }
+    return false;
+}
+using XPt = core::select::Pt;
+XPt operator+(XPt a, XPt b) { return {a.x + b.x, a.y + b.y}; }
+XPt operator-(XPt a, XPt b) { return {a.x - b.x, a.y - b.y}; }
+XPt operator*(double k, XPt a) { return {k * a.x, k * a.y}; }
+double dot(XPt a, XPt b) { return a.x * b.x + a.y * b.y; }
+XPt unit(XPt a) { const double n = std::hypot(a.x, a.y); return n > 1e-12 ? XPt{a.x / n, a.y / n} : XPt{0, 0}; }
+}  // namespace
+
+core::select::Pt CanvasView::xf_handle(int hx, int hy) const {
+    if (!m_xf.quad) return xf_world(hx * m_xf.bw / 2, hy * m_xf.bh / 2);
+    if (const int c = corner_of(hx, hy); c >= 0) return m_xf.q[c];
+    int i = 0, j = 0;
+    if (side_of(hx, hy, i, j)) return 0.5 * (m_xf.q[i] + m_xf.q[j]);
+    return xf_centre();
+}
+
+core::select::Pt CanvasView::xf_centre() const {
+    if (!m_xf.quad) return xf_world(0, 0);
+    // Where the diagonals cross (a perspective's true middle); the corners'
+    // average if they don't (they always do in a convex quad).
+    const XPt a = m_xf.q[0], c = m_xf.q[2], b = m_xf.q[1], d = m_xf.q[3];
+    const XPt r = c - a, s = d - b;
+    const double den = r.x * s.y - r.y * s.x;
+    if (std::abs(den) < 1e-12) return 0.25 * (a + b + c + d);
+    const double t = ((b.x - a.x) * s.y - (b.y - a.y) * s.x) / den;
+    return a + t * r;
+}
+
 bool CanvasView::xf_inside(double sx, double sy) const {
+    if (m_xf.quad) {   // s073: inside the convex quad -- the same side of every edge
+        const XPt p{to_image_x(sx), to_image_y(sy)};
+        int sign = 0;
+        for (int i = 0; i < 4; ++i) {
+            const XPt a = m_xf.q[i], b = m_xf.q[(i + 1) % 4];
+            const double z = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+            const int sg = z > 0 ? 1 : (z < 0 ? -1 : 0);
+            if (!sg) continue;
+            if (sign && sg != sign) return false;
+            sign = sg;
+        }
+        return true;
+    }
     const auto m = xf_matrix();
     const double det = m[0] * m[3] - m[1] * m[2];
     if (std::abs(det) < 1e-12) return false;
@@ -1179,10 +1252,17 @@ void CanvasView::xf_press(double sx, double sy) {
     m_xf.px0 = to_image_x(sx);
     m_xf.py0 = to_image_y(sy);
     m_xf.mode = Xf::Mode::None;
+    m_xf.refused = false;
+    // s073: the corners as they are at the press (a quad op starts from them).
+    m_xf.quad0 = m_xf.quad;
+    for (int i = 0; i < 4; ++i) {
+        static const int hx[4] = {-1, 1, 1, -1}, hy[4] = {-1, -1, 1, 1};
+        m_xf.q0[i] = xf_handle(hx[i], hy[i]);
+    }
     for (int hy = -1; hy <= 1; ++hy)
         for (int hx = -1; hx <= 1; ++hx) {
             if (!hx && !hy) continue;
-            const auto p = xf_world(hx * m_xf.bw / 2, hy * m_xf.bh / 2);
+            const auto p = xf_handle(hx, hy);
             if (std::hypot(to_screen_x(p.x) - sx, to_screen_y(p.y) - sy) <= kHandle) {
                 m_xf.mode = Xf::Mode::Scale;
                 m_xf.hx = hx;
@@ -1193,9 +1273,130 @@ void CanvasView::xf_press(double sx, double sy) {
     m_xf.mode = xf_inside(sx, sy) ? Xf::Mode::Move : Xf::Mode::Rotate;
 }
 
-void CanvasView::xf_drag(double sx, double sy, bool shift, bool alt) {
+// s073: the quad's ops. Decides what the drag is (the modifiers, else the
+// strip's kind); false when it's the plain box's (box mode, a free drag).
+bool CanvasView::xf_quad_drag(double px, double py, bool shift, bool alt, bool ctrl) {
+    const XPt p{px, py}, p0{m_xf.px0, m_xf.py0}, d = p - p0;
+    const int corner = m_xf.mode == Xf::Mode::Scale ? corner_of(m_xf.hx, m_xf.hy) : -1;
+    int si = -1, sj = -1;
+    const bool side = m_xf.mode == Xf::Mode::Scale && side_of(m_xf.hx, m_xf.hy, si, sj);
+    // What this drag does.
+    XfKind k = XfKind::Free;
+    bool sym = false;   // Alt: the opposite one the other way
+    if (m_xf.mode == Xf::Mode::Scale) {
+        if (ctrl) {
+            if (corner >= 0) { k = (alt && shift) ? XfKind::Perspective : XfKind::Distort; sym = alt && !shift; }
+            else { k = shift ? XfKind::Skew : XfKind::Distort; sym = alt; }
+        } else if (m_xf_kind != XfKind::Free) {
+            k = m_xf_kind;
+            sym = alt;
+        }
+    }
+    if (k == XfKind::Free && !m_xf.quad0) { m_xf.quad = false; return false; }   // the box's own (Ctrl let go: back to it)
+
+    XPt q[4];
+    for (int i = 0; i < 4; ++i) q[i] = m_xf.q0[i];
+    const XPt* q0 = m_xf.q0;
+    const char* label = m_xf.label;
+    if (k == XfKind::Free) {   // the quad, scaled / turned / moved
+        if (m_xf.mode == Xf::Mode::Move) {
+            XPt t = d;
+            if (shift) { if (std::abs(t.x) >= std::abs(t.y)) t.y = 0; else t.x = 0; }
+            for (auto& c : q) c = c + t;
+        } else if (m_xf.mode == Xf::Mode::Rotate) {
+            XPt c0{0, 0};
+            {   // the centre at the press
+                const XPt r = q0[2] - q0[0], s = q0[3] - q0[1];
+                const double den = r.x * s.y - r.y * s.x;
+                c0 = std::abs(den) < 1e-12 ? 0.25 * (q0[0] + q0[1] + q0[2] + q0[3])
+                                           : q0[0] + (((q0[1].x - q0[0].x) * s.y - (q0[1].y - q0[0].y) * s.x) / den) * r;
+            }
+            double a = std::atan2(p.y - c0.y, p.x - c0.x) - std::atan2(p0.y - c0.y, p0.x - c0.x);
+            if (shift) a = std::round(a / (M_PI / 12)) * (M_PI / 12);
+            const double cs = std::cos(a), sn = std::sin(a);
+            for (auto& c : q) { const XPt v = c - c0; c = c0 + XPt{cs * v.x - sn * v.y, sn * v.x + cs * v.y}; }
+        } else if (corner >= 0) {   // proportional, about the opposite corner (Alt: the middle)
+            const XPt an = alt ? 0.25 * (q0[0] + q0[1] + q0[2] + q0[3]) : q0[(corner + 2) % 4];
+            const XPt v = q0[corner] - an;
+            const double kk = dot(p - an, v) / std::max(1e-9, dot(v, v));
+            if (std::abs(kk) < 1e-3) return true;
+            for (auto& c : q) c = an + kk * (c - an);
+        } else if (side) {          // one way, about the opposite side (Alt: the middle)
+            const XPt mid = 0.5 * (q0[si] + q0[sj]);
+            const XPt an = alt ? 0.25 * (q0[0] + q0[1] + q0[2] + q0[3]) : 0.5 * (q0[(si + 2) % 4] + q0[(sj + 2) % 4]);
+            const XPt v = mid - an;
+            const double len = std::hypot(v.x, v.y);
+            if (len < 1e-9) return true;
+            const XPt u = unit(v);
+            const double kk = dot(p - an, u) / len;
+            if (std::abs(kk) < 1e-3) return true;
+            for (auto& c : q) c = c + ((kk - 1) * dot(c - an, u)) * u;
+        }
+    } else if (k == XfKind::Distort) {
+        label = "Distort";
+        if (corner >= 0) {
+            q[corner] = q0[corner] + d;
+            if (sym) q[(corner + 2) % 4] = q0[(corner + 2) % 4] - d;
+        } else if (side) {
+            q[si] = q0[si] + d; q[sj] = q0[sj] + d;
+            if (sym) { q[(si + 2) % 4] = q0[(si + 2) % 4] - d; q[(sj + 2) % 4] = q0[(sj + 2) % 4] - d; }
+        }
+    } else if (k == XfKind::Skew) {
+        label = "Skew";
+        int i = si, j = sj;
+        if (corner >= 0) {   // a corner: the side it is on that the drag runs along most
+            const int prev = (corner + 3) % 4, next = (corner + 1) % 4;
+            const XPt un = unit(q0[next] - q0[corner]), up = unit(q0[prev] - q0[corner]);
+            if (std::abs(dot(d, un)) >= std::abs(dot(d, up))) { i = corner; j = next; }
+            else { i = prev; j = corner; }
+        }
+        if (i >= 0) {
+            const XPt u = unit(q0[j] - q0[i]);
+            const XPt t = dot(d, u) * u;   // along the side itself: it stays a parallelogram
+            q[i] = q0[i] + t; q[j] = q0[j] + t;
+            if (sym) { q[(i + 2) % 4] = q0[(i + 2) % 4] - t; q[(j + 2) % 4] = q0[(j + 2) % 4] - t; }
+        }
+    } else if (k == XfKind::Perspective) {
+        label = "Perspective";
+        if (corner >= 0) {   // along the nearer side; that side's other corner the other way
+            const int prev = (corner + 3) % 4, next = (corner + 1) % 4;
+            const XPt un = unit(q0[next] - q0[corner]), up = unit(q0[prev] - q0[corner]);
+            const bool along_next = std::abs(dot(d, un)) >= std::abs(dot(d, up));
+            const int other = along_next ? next : prev;
+            const XPt u = along_next ? un : up;
+            const XPt t = dot(d, u) * u;
+            q[corner] = q0[corner] + t;
+            q[other] = q0[other] - t;
+        } else if (side) {   // the side's two corners apart / together along it
+            const XPt u = unit(q0[sj] - q0[si]);
+            const XPt t = dot(d, u) * u;
+            q[si] = q0[si] - t; q[sj] = q0[sj] + t;
+        }
+    }
+    core::xform::Quad cand{{q[0], q[1], q[2], q[3]}};
+    if (!core::xform::convex(cand, 1.0)) return true;   // it would fold: stays at the last good shape
+    if (!m_xf.projective_ok) {   // type: only a parallelogram
+        const auto m = core::xform::Projective::box_to_quad(m_xf.bx, m_xf.by, m_xf.bw, m_xf.bh, cand);
+        const bool par = m && (std::abs(m->h[6]) < 1e-9 && std::abs(m->h[7]) < 1e-9);
+        if (!par) {
+            if (!m_xf.refused) { m_xf.refused = true; m_xf_refused.emit(); }
+            return true;
+        }
+    }
+    m_xf.quad = true;
+    for (int i = 0; i < 4; ++i) m_xf.q[i] = q[i];
+    m_xf.label = label;
+    return true;
+}
+
+void CanvasView::xf_drag(double sx, double sy, bool shift, bool alt, bool ctrl) {
     const double px = to_image_x(sx), py = to_image_y(sy);
     const double cx = m_xf.bx + m_xf.bw / 2, cy = m_xf.by + m_xf.bh / 2;
+    if (xf_quad_drag(px, py, shift, alt, ctrl)) {   // s073
+        queue_draw();
+        m_xf_signal.emit(xf_map());
+        return;
+    }
     if (m_xf.mode == Xf::Mode::Move) {
         double dx = px - m_xf.px0, dy = py - m_xf.py0;
         if (shift) { if (std::abs(dx) >= std::abs(dy)) dy = 0; else dx = 0; }
@@ -1236,22 +1437,22 @@ void CanvasView::xf_drag(double sx, double sy, bool shift, bool alt) {
         m_xf.ty = way - cy - (sn * m_xf.sx * ax + cs * m_xf.sy * ay);
     }
     queue_draw();
-    m_xf_signal.emit(xf_matrix());
+    m_xf_signal.emit(xf_map());
 }
 
 void CanvasView::nudge_transform(double dx, double dy) {
     if (!m_xf.on) return;
     m_xf.tx += dx;
     m_xf.ty += dy;
+    if (m_xf.quad) for (auto& c : m_xf.q) c = c + XPt{dx, dy};   // s073
     queue_draw();
-    m_xf_signal.emit(xf_matrix());
+    m_xf_signal.emit(xf_map());
 }
 
 void CanvasView::draw_transform(const Cairo::RefPtr<Cairo::Context>& cr) {
     if (!m_xf.on) return;
     cr->save();
-    const double hw = m_xf.bw / 2, hh = m_xf.bh / 2;
-    const core::select::Pt q[4] = {xf_world(-hw, -hh), xf_world(hw, -hh), xf_world(hw, hh), xf_world(-hw, hh)};
+    const core::select::Pt q[4] = {xf_handle(-1, -1), xf_handle(1, -1), xf_handle(1, 1), xf_handle(-1, 1)};
     cr->set_line_width(1);
     cr->move_to(to_screen_x(q[0].x), to_screen_y(q[0].y));
     for (int i = 1; i < 4; ++i) cr->line_to(to_screen_x(q[i].x), to_screen_y(q[i].y));
@@ -1265,14 +1466,14 @@ void CanvasView::draw_transform(const Cairo::RefPtr<Cairo::Context>& cr) {
     for (int hy = -1; hy <= 1; ++hy)
         for (int hx = -1; hx <= 1; ++hx) {
             if (!hx && !hy) continue;
-            const auto p = xf_world(hx * hw, hy * hh);
+            const auto p = xf_handle(hx, hy);
             cr->rectangle(std::round(to_screen_x(p.x)) - 3.5, std::round(to_screen_y(p.y)) - 3.5, 7, 7);
             cr->set_source_rgb(1, 1, 1);
             cr->fill_preserve();
             cr->set_source_rgb(0.1, 0.1, 0.1);
             cr->stroke();
         }
-    const auto c = xf_world(0, 0);   // the centre the box turns about
+    const auto c = xf_centre();   // the centre the box turns about
     const double ccx = to_screen_x(c.x), ccy = to_screen_y(c.y);
     cr->arc(ccx, ccy, 4, 0, 2 * M_PI);
     cr->set_source_rgb(1, 1, 1);
@@ -1281,13 +1482,15 @@ void CanvasView::draw_transform(const Cairo::RefPtr<Cairo::Context>& cr) {
     char buf[96];
     double deg = m_xf.ang * 180 / M_PI;
     deg = std::remainder(deg, 360.0);
-    std::snprintf(buf, sizeof buf, "W %.0f%%  H %.0f%%  %.1f°", m_xf.sx * 100, m_xf.sy * 100, deg);
+    if (m_xf.quad) std::snprintf(buf, sizeof buf, "%s", m_xf.label ? m_xf.label : "Distort");   // s073: a quad has no one W / H / angle
+    else std::snprintf(buf, sizeof buf, "W %.0f%%  H %.0f%%  %.1f°", m_xf.sx * 100, m_xf.sy * 100, deg);
     auto layout = create_pango_layout(buf);
     int tw = 0, th = 0;
     layout->get_pixel_size(tw, th);
     double top = std::min({to_screen_y(q[0].y), to_screen_y(q[1].y), to_screen_y(q[2].y), to_screen_y(q[3].y)});
     double left = std::min({to_screen_x(q[0].x), to_screen_x(q[1].x), to_screen_x(q[2].x), to_screen_x(q[3].x)});
-    const double ty = top - th - 10 >= 0 ? top - th - 10 : top + 8;
+    left = std::clamp(left, 4.0, std::max(4.0, get_width() - tw - 16.0));   // s073: a corner past the view keeps it in sight
+    const double ty = std::clamp(top - th - 10 >= 0 ? top - th - 10 : top + 8, 4.0, std::max(4.0, get_height() - th - 8.0));
     cr->set_source_rgba(0, 0, 0, 0.7);
     cr->rectangle(left, ty - 2, tw + 12, th + 4);
     cr->fill();

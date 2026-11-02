@@ -139,6 +139,128 @@ Affine Affine::rotate(double r) {
 
 Affine Affine::about(Pt p, const Affine& m) { return translate(p.x, p.y) * m * translate(-p.x, -p.y); }
 
+// ── Projective (s073) ───────────────────────────────────────────────────────
+Pt Projective::apply(Pt p) const {
+    const double w = h[6] * p.x + h[7] * p.y + h[8];
+    const double X = h[0] * p.x + h[1] * p.y + h[2], Y = h[3] * p.x + h[4] * p.y + h[5];
+    if (std::abs(w) < 1e-300) return {X > 0 ? 1e300 : -1e300, Y > 0 ? 1e300 : -1e300};
+    return {X / w, Y / w};
+}
+
+Projective operator*(const Projective& l, const Projective& r) {
+    Projective o;
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+            double s = 0;
+            for (int k = 0; k < 3; ++k) s += l.h[i * 3 + k] * r.h[k * 3 + j];
+            o.h[i * 3 + j] = s;
+        }
+    return o;
+}
+
+Projective Projective::inverse() const {
+    const double* m = h;
+    const double c0 = m[4] * m[8] - m[5] * m[7], c1 = m[5] * m[6] - m[3] * m[8], c2 = m[3] * m[7] - m[4] * m[6];
+    const double det = m[0] * c0 + m[1] * c1 + m[2] * c2;
+    if (std::abs(det) < 1e-300) return {};
+    Projective o;
+    o.h[0] = c0 / det;
+    o.h[1] = (m[2] * m[7] - m[1] * m[8]) / det;
+    o.h[2] = (m[1] * m[5] - m[2] * m[4]) / det;
+    o.h[3] = c1 / det;
+    o.h[4] = (m[0] * m[8] - m[2] * m[6]) / det;
+    o.h[5] = (m[2] * m[3] - m[0] * m[5]) / det;
+    o.h[6] = c2 / det;
+    o.h[7] = (m[1] * m[6] - m[0] * m[7]) / det;
+    o.h[8] = (m[0] * m[4] - m[1] * m[3]) / det;
+    return o;
+}
+
+bool Projective::affine() const {
+    const double s = std::abs(h[8]);
+    return s > 1e-300 && std::abs(h[6]) <= 1e-12 * s && std::abs(h[7]) <= 1e-12 * s;
+}
+
+Affine Projective::to_affine() const {
+    const double s = std::abs(h[8]) > 1e-300 ? h[8] : 1;
+    return {h[0] / s, h[3] / s, h[1] / s, h[4] / s, h[2] / s, h[5] / s};
+}
+
+bool convex(const Quad& q, double min_area) {
+    int sign = 0;
+    double area = 0;
+    for (int i = 0; i < 4; ++i) {
+        const Pt a = q.p[i], b = q.p[(i + 1) % 4], c = q.p[(i + 2) % 4];
+        const double z = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+        if (std::abs(z) < 1e-12) return false;   // three corners in a line: a fold
+        const int s = z > 0 ? 1 : -1;
+        if (sign && s != sign) return false;
+        sign = s;
+        area += a.x * b.y - b.x * a.y;
+    }
+    return std::abs(area) / 2 >= min_area;
+}
+
+namespace {
+// The map from the unit square's corners (0,0) (1,0) (1,1) (0,1) to q's
+// (Heckbert's square-to-quad).
+std::optional<Projective> square_to_quad(const Quad& q) {
+    const double x0 = q.p[0].x, y0 = q.p[0].y, x1 = q.p[1].x, y1 = q.p[1].y;
+    const double x2 = q.p[2].x, y2 = q.p[2].y, x3 = q.p[3].x, y3 = q.p[3].y;
+    const double sx = x0 - x1 + x2 - x3, sy = y0 - y1 + y2 - y3;
+    Projective m;
+    if (std::abs(sx) < 1e-12 && std::abs(sy) < 1e-12) {   // a parallelogram: affine
+        m.h[0] = x1 - x0; m.h[1] = x3 - x0; m.h[2] = x0;
+        m.h[3] = y1 - y0; m.h[4] = y3 - y0; m.h[5] = y0;
+        m.h[6] = 0; m.h[7] = 0; m.h[8] = 1;
+        return m;
+    }
+    const double dx1 = x1 - x2, dx2 = x3 - x2, dy1 = y1 - y2, dy2 = y3 - y2;
+    const double den = dx1 * dy2 - dx2 * dy1;
+    if (std::abs(den) < 1e-12) return std::nullopt;
+    const double g = (sx * dy2 - dx2 * sy) / den, hh = (dx1 * sy - sx * dy1) / den;
+    m.h[0] = x1 - x0 + g * x1; m.h[1] = x3 - x0 + hh * x3; m.h[2] = x0;
+    m.h[3] = y1 - y0 + g * y1; m.h[4] = y3 - y0 + hh * y3; m.h[5] = y0;
+    m.h[6] = g; m.h[7] = hh; m.h[8] = 1;
+    return m;
+}
+}  // namespace
+
+std::optional<Projective> Projective::box_to_quad(double x, double y, double w, double hgt, const Quad& q) {
+    if (w <= 0 || hgt <= 0 || !convex(q)) return std::nullopt;
+    const auto sq = square_to_quad(q);
+    if (!sq) return std::nullopt;
+    Projective to_unit;   // the box to the unit square
+    to_unit.h[0] = 1 / w; to_unit.h[2] = -x / w;
+    to_unit.h[4] = 1 / hgt; to_unit.h[5] = -y / hgt;
+    Projective m = *sq * to_unit;
+    if (std::abs(m.h[8]) > 1e-300) for (double& v : m.h) v /= m.h[8];   // h8 = 1 (W > 0 over the box: convex)
+    // Snap what is affine within rounding to affine (a skew stays affine).
+    if (std::abs(m.h[6]) < 1e-14 && std::abs(m.h[7]) < 1e-14) m.h[6] = m.h[7] = 0;
+    return m;
+}
+
+std::optional<Projective> Projective::box_to_quad(const pixel::Rect& b, const Quad& q) {
+    return box_to_quad(b.x, b.y, b.w, b.h, q);
+}
+
+pixel::Rect mapped(const pixel::Rect& r, const Projective& m) {
+    if (m.affine()) return mapped(r, m.to_affine());
+    double x0 = std::numeric_limits<double>::max(), y0 = x0, x1 = -x0, y1 = -x0;
+    for (const Pt p : {Pt{double(r.x), double(r.y)}, Pt{double(r.x + r.w), double(r.y)},
+                       Pt{double(r.x), double(r.y + r.h)}, Pt{double(r.x + r.w), double(r.y + r.h)}}) {
+        if (m.w_at(p) <= 1e-12) return {};   // beyond the horizon
+        const Pt q = m.apply(p);
+        x0 = std::min(x0, q.x); y0 = std::min(y0, q.y); x1 = std::max(x1, q.x); y1 = std::max(y1, q.y);
+    }
+    // A convex quad's box holds the whole map of the box (W > 0 over it).
+    constexpr double kFar = 1 << 20;
+    if (x0 < -kFar || y0 < -kFar || x1 > kFar || y1 > kFar) return {};
+    const int ix0 = static_cast<int>(std::floor(x0 + 1e-6)), iy0 = static_cast<int>(std::floor(y0 + 1e-6));
+    const int ix1 = static_cast<int>(std::ceil(x1 - 1e-6)), iy1 = static_cast<int>(std::ceil(y1 - 1e-6));
+    return {ix0, iy0, std::max(0, ix1 - ix0), std::max(0, iy1 - iy0)};
+}
+
 pixel::Rect mapped(const pixel::Rect& r, const Affine& m) {
     double x0 = std::numeric_limits<double>::max(), y0 = x0, x1 = -x0, y1 = -x0;
     for (const Pt p : {Pt{double(r.x), double(r.y)}, Pt{double(r.x + r.w), double(r.y)},
@@ -154,7 +276,7 @@ pixel::Rect mapped(const pixel::Rect& r, const Affine& m) {
 // ── the resample ────────────────────────────────────────────────────────────
 std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const pixel::TileMap& src,
                                                const pixel::TileMap* mask, const pixel::Rect& box,
-                                               const Affine& m, Quality q,
+                                               const Projective& m, Quality q,
                                                const std::function<bool()>& cancelled) {
     if (box.empty()) return base;
     const pixel::Format f = base.format();
@@ -162,7 +284,8 @@ std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const
     const auto chs = static_cast<std::size_t>(ch);
     const bool alpha = f.alpha, fl = f.depth == pixel::Depth::F32;
     const int w = base.width(), h = base.height();
-    const Affine inv = m.inverse();
+    const bool flat = m.affine();          // s073: affine -- one filter for every pixel
+    const Projective inv = m.inverse();
     // Where the box lands, a pixel of slack for the filter's reach.
     pixel::Rect land = mapped(box, m);
     land = {land.x - 2, land.y - 2, land.w + 4, land.h + 4};
@@ -173,15 +296,30 @@ std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const
     std::optional<Sampler> ms;
     if (mask) ms.emplace(*mask, pixel::Rect{0, 0, mask->width(), mask->height()});
 
-    // The filter: bilinear, or bicubic widened along a source axis the map shrinks.
-    const double scale_x = std::hypot(m.a, m.b), scale_y = std::hypot(m.c, m.d);
-    const double kx = q == Quality::Best ? std::max(1.0, 1.0 / std::max(1e-6, scale_x)) : 1.0;
-    const double ky = q == Quality::Best ? std::max(1.0, 1.0 / std::max(1e-6, scale_y)) : 1.0;
-    const double reach_x = q == Quality::Best ? 2 * kx : 1, reach_y = q == Quality::Best ? 2 * ky : 1;
+    // The filter: bilinear, or bicubic widened along a source axis the map
+    // shrinks. s073: a projective map shrinks by different amounts in
+    // different places -- its derivative at the source point says how much
+    // (widened at most 16 x: a far vanishing edge would want more).
+    const auto widths = [&](Pt sp, double& kx, double& ky) {
+        if (q != Quality::Best) { kx = ky = 1; return; }
+        const double wt = m.w_at(sp);
+        const Pt d = m.apply(sp);
+        const double iw = std::abs(wt) > 1e-300 ? 1 / wt : 0;
+        const double xx = (m.h[0] - d.x * m.h[6]) * iw, yx = (m.h[3] - d.y * m.h[6]) * iw;   // d(x', y') / dx
+        const double xy = (m.h[1] - d.x * m.h[7]) * iw, yy = (m.h[4] - d.y * m.h[7]) * iw;   // d(x', y') / dy
+        kx = std::clamp(1.0 / std::max(1e-6, std::hypot(xx, yx)), 1.0, 16.0);
+        ky = std::clamp(1.0 / std::max(1e-6, std::hypot(xy, yy)), 1.0, 16.0);
+    };
+    double kx = 1, ky = 1;
+    if (flat) widths({box.x + box.w / 2.0, box.y + box.h / 2.0}, kx, ky);
+    // The most any pixel reaches (for the "is it near the box" test).
+    double reach_x = q == Quality::Best ? 2 * kx : 1, reach_y = q == Quality::Best ? 2 * ky : 1;
+    if (!flat && q == Quality::Best) reach_x = reach_y = 32;
 
     float acc[pixel::kMaxChannels + 1], tap[pixel::kMaxChannels + 1];
-    const auto sample = [&](double u, double v, float* out) {
+    const auto sample = [&](double u, double v, double fkx, double fky, float* out) {
         std::fill_n(out, sn, 0.f);
+        const double rx = q == Quality::Best ? 2 * fkx : 1, ry = q == Quality::Best ? 2 * fky : 1;
         const double cu = u - 0.5, cv = v - 0.5;   // pixel centres at i + 0.5
         if (q == Quality::Fast) {
             const int x0 = static_cast<int>(std::floor(cu)), y0 = static_cast<int>(std::floor(cv));
@@ -195,14 +333,14 @@ std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const
             }
             return;
         }
-        const int x0 = static_cast<int>(std::ceil(cu - reach_x)), x1 = static_cast<int>(std::floor(cu + reach_x));
-        const int y0 = static_cast<int>(std::ceil(cv - reach_y)), y1 = static_cast<int>(std::floor(cv + reach_y));
+        const int x0 = static_cast<int>(std::ceil(cu - rx)), x1 = static_cast<int>(std::floor(cu + rx));
+        const int y0 = static_cast<int>(std::ceil(cv - ry)), y1 = static_cast<int>(std::floor(cv + ry));
         double sum = 0;
         for (int yy = y0; yy <= y1; ++yy) {
-            const double wy = mitchell((yy - cv) / ky);
+            const double wy = mitchell((yy - cv) / fky);
             if (wy == 0) continue;
             for (int xx = x0; xx <= x1; ++xx) {
-                const double wgt = wy * mitchell((xx - cu) / kx);
+                const double wgt = wy * mitchell((xx - cu) / fkx);
                 if (wgt == 0) continue;
                 s.px(xx, yy, tap);
                 for (int c = 0; c < sn; ++c) out[c] += tap[c] * static_cast<float>(wgt);
@@ -241,11 +379,15 @@ std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const
             bool changed = false;
             for (int y = hit.y; y < hit.y + hit.h; ++y)
                 for (int x = hit.x; x < hit.x + hit.w; ++x) {
-                    const Pt sp = inv.apply({x + 0.5, y + 0.5});
+                    const Pt dp{x + 0.5, y + 0.5};
+                    if (!flat && inv.w_at(dp) <= 0) continue;   // s073: beyond the horizon
+                    const Pt sp = inv.apply(dp);
                     if (sp.x < box.x - reach_x - 1 || sp.y < box.y - reach_y - 1 || sp.x > box.x + box.w + reach_x + 1 ||
                         sp.y > box.y + box.h + reach_y + 1)
                         continue;
-                    sample(sp.x, sp.y, acc);
+                    double pkx = kx, pky = ky;
+                    if (!flat) widths(sp, pkx, pky);
+                    sample(sp.x, sp.y, pkx, pky, acc);
                     const float cov = coverage(sp.x, sp.y);
                     const float a = std::clamp(acc[sn - 1] * cov, 0.f, 1.f);
                     if (a <= 0.f) continue;
@@ -356,10 +498,17 @@ std::optional<Plan> plan(const Document& d, const std::vector<Document::Id>& sel
     return p;
 }
 
-std::optional<move::Result> compute(const Plan& pl, const Affine& m, Quality q, const std::function<bool()>& cancelled) {
+std::string projective_refusal(const Plan& p) {
+    if (!p.p.texts.empty()) return "a type layer stays type -- Layer > Rasterize Type to distort it (Skew keeps it type)";
+    return {};
+}
+
+std::optional<move::Result> compute(const Plan& pl, const Projective& pm, Quality q, const std::function<bool()>& cancelled) {
     const auto& p = pl.p;
     move::Result r;
-    if (m.identity()) {
+    const bool flat = pm.affine();
+    const Affine m = pm.to_affine();   // what type is mapped by (exact when flat)
+    if (pm.identity()) {
         for (const auto& id : p.ids) r.pixels[id] = p.original.at(id);
         for (const auto& [id, t] : p.texts) r.texts[id] = t;   // s046
         r.mask = p.mask;
@@ -369,7 +518,7 @@ std::optional<move::Result> compute(const Plan& pl, const Affine& m, Quality q, 
     // moves): sampled exactly, lossless.
     const auto whole = [](double v) { return std::abs(v - std::round(v)) < 1e-9; };
     const auto unit = [&](double v) { return whole(v) && std::abs(v) <= 1; };
-    if (unit(m.a) && unit(m.b) && unit(m.c) && unit(m.d) && whole(m.e) && whole(m.f) &&
+    if (flat && unit(m.a) && unit(m.b) && unit(m.c) && unit(m.d) && whole(m.e) && whole(m.f) &&
         std::abs(std::abs(m.a * m.d - m.b * m.c) - 1) < 1e-9)
         q = Quality::Fast;
     const pixel::TileMap blank(p.format, p.width, p.height);
@@ -378,6 +527,7 @@ std::optional<move::Result> compute(const Plan& pl, const Affine& m, Quality q, 
     // live and sharp (and a selection doesn't cut it: it goes whole).
     for (const auto& [id, t] : p.texts) {
         if (cancelled && cancelled()) return std::nullopt;
+        if (!flat) { r.pixels[id] = p.original.at(id); r.texts[id] = t; continue; }   // s073: type isn't distorted
         auto mapped = std::make_shared<const text::Spec>(text::mapped(*t, {m.a, m.b, m.c, m.d, m.e, m.f}));
         Image im;
         im.width = p.width;
@@ -393,7 +543,7 @@ std::optional<move::Result> compute(const Plan& pl, const Affine& m, Quality q, 
         pixel::TileMap base = blank;
         if (p.mask) { if (const auto& b = p.base.at(id)) base = *b; }
         else if (!p.format.alpha) base = blank.fill({0, 0, p.width, p.height}, p.fill);   // no alpha: the background shows where it left
-        auto out = over_transformed(base, *o, p.mask.get(), pl.box, m, q, cancelled);
+        auto out = over_transformed(base, *o, p.mask.get(), pl.box, pm, q, cancelled);
         if (!out) return std::nullopt;
         r.pixels[id] = out->tile_count() ? std::make_shared<const pixel::TileMap>(std::move(*out)) : nullptr;
     }
@@ -407,13 +557,13 @@ std::optional<move::Result> compute(const Plan& pl, const Affine& m, Quality q, 
                 x1 = std::max(x1, (cell.first + 1) * kTile); y1 = std::max(y1, (cell.second + 1) * kTile);
             }
             const pixel::TileMap mblank(lm->format(), p.width, p.height);
-            auto out = over_transformed(mblank, *lm, nullptr, {x0, y0, x1 - x0, y1 - y0}, m, q, cancelled);
+            auto out = over_transformed(mblank, *lm, nullptr, {x0, y0, x1 - x0, y1 - y0}, pm, q, cancelled);
             if (!out) return std::nullopt;
             r.masks[id] = std::make_shared<const pixel::TileMap>(std::move(*out));
         }
     if (p.mask) {
         const pixel::TileMap mblank(p.mask->format(), p.width, p.height);
-        auto mm = over_transformed(mblank, *p.mask, nullptr, pl.box, m, Quality::Fast, cancelled);
+        auto mm = over_transformed(mblank, *p.mask, nullptr, pl.box, pm, Quality::Fast, cancelled);
         if (!mm) return std::nullopt;
         auto in = mm->without_outside();   // a selection holds nothing beyond the canvas
         r.mask = select::empty(in) ? nullptr : std::make_shared<const pixel::TileMap>(std::move(in));
@@ -421,14 +571,24 @@ std::optional<move::Result> compute(const Plan& pl, const Affine& m, Quality q, 
     return r;
 }
 
-bool apply(DocJournal& j, Document& d, const std::vector<Document::Id>& selected, const Affine& m,
+bool apply(DocJournal& j, Document& d, const std::vector<Document::Id>& selected, const Projective& m,
            const std::string& label, const pixel::Px& background) {
     if (m.identity()) return false;
     const auto p = plan(d, selected, background);
     if (!p) return false;
+    if (!m.affine() && !projective_refusal(*p).empty()) return false;
     const auto r = compute(*p, m, Quality::Best);
     if (!r) return false;
     return j.run(label, move::step_ids(p->p), [&] { move::put(d, p->p, *r); });
+}
+
+bool distort(DocJournal& j, Document& d, const std::vector<Document::Id>& selected, const Quad& q,
+             const std::string& label, const pixel::Px& background) {
+    const auto p = plan(d, selected, background);
+    if (!p) return false;
+    const auto m = Projective::box_to_quad(p->box, q);
+    if (!m) return false;
+    return apply(j, d, selected, *m, label, background);
 }
 
 Affine flip_about(const pixel::Rect& b, bool horizontal) {

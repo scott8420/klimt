@@ -42,19 +42,48 @@ struct Affine {
 };
 Affine operator*(const Affine& l, const Affine& r);   // l after r
 
+// s073: a PROJECTIVE map (a homography) -- Free Transform's Skew, Distort and
+// Perspective. Row-major 3 x 3:  X = h0 x + h1 y + h2,  Y = h3 x + h4 y + h5,
+// W = h6 x + h7 y + h8;  (x', y') = (X / W, Y / W). An affine map is the one
+// with h6 = h7 = 0 (and h8 = 1): every affine path (type kept as type, the
+// lossless flips) still takes it.
+struct Quad { Pt p[4]; };   // corners: top-left, top-right, bottom-right, bottom-left
+struct Projective {
+    double h[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    Projective() = default;
+    Projective(const Affine& m) : h{m.a, m.c, m.e, m.b, m.d, m.f, 0, 0, 1} {}   // NOLINT: implicit on purpose
+    Pt apply(Pt p) const;
+    double w_at(Pt p) const { return h[6] * p.x + h[7] * p.y + h[8]; }   // > 0 where the map is valid
+    Projective inverse() const;
+    bool affine() const;           // h6, h7 ~ 0 (within 1e-12 of h8's scale)
+    Affine to_affine() const;      // its affine part (exact when affine())
+    bool identity() const { return affine() && to_affine().identity(); }
+    // The map taking the box's corners to q's (tl, tr, br, bl). nullopt: q is
+    // not a convex, non-degenerate quad (a bow-tie or a fold has no map that
+    // keeps the picture in one piece).
+    static std::optional<Projective> box_to_quad(const pixel::Rect& box, const Quad& q);
+    static std::optional<Projective> box_to_quad(double x, double y, double w, double h, const Quad& q);
+};
+Projective operator*(const Projective& l, const Projective& r);   // l after r
+// q's corners are a convex quad, turning one way, its area at least min_area.
+bool convex(const Quad& q, double min_area = 1e-6);
+
 enum class Quality { Fast, Best };
 
 // The box a rectangle lands in under m (rounded out to whole pixels).
 pixel::Rect mapped(const pixel::Rect& r, const Affine& m);
+pixel::Rect mapped(const pixel::Rect& r, const Projective& m);   // s073: empty when a corner crosses the horizon
 
 // THE RESAMPLE. `base`, with `src`'s pixels inside `box` (times `mask`'s
 // coverage when given) mapped by m laid over it, premultiplied. `src` and
 // `base` may hold pixels beyond the image; so does the result where they
 // land. Outside `box`, src contributes nothing (a format with no alpha: the
 // box's own edge is its edge). nullopt when cancelled.
+// s073: m is projective -- the filter is widened per pixel, by how much the
+// map shrinks there (a far side of a perspective shrinks more than a near).
 std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const pixel::TileMap& src,
                                                const pixel::TileMap* mask, const pixel::Rect& box,
-                                               const Affine& m, Quality q,
+                                               const Projective& m, Quality q,
                                                const std::function<bool()>& cancelled = {});
 
 // What a transform starts from.
@@ -69,13 +98,22 @@ std::optional<Plan> plan(const Document& d, const std::vector<Document::Id>& sel
 // The box alone, from a Move plan: the selection's bounds, or everything the
 // targets hold. Pure (it scans pixels -- a worker's job); empty: nothing.
 pixel::Rect box_of(const move::Plan& p);
-// The layers (and the selection) under m. Pure.
-std::optional<move::Result> compute(const Plan& p, const Affine& m, Quality q,
+// The layers (and the selection) under m. Pure. s073: m projective -- a type
+// layer can only be mapped affinely (type stays type): with a non-affine m
+// it is left as it was; projective_refusal says so first.
+std::optional<move::Result> compute(const Plan& p, const Projective& m, Quality q,
                                     const std::function<bool()>& cancelled = {});
+// s073: "" a non-affine map is fine for this plan, else why not (a type layer).
+std::string projective_refusal(const Plan& p);
 
 // ── verbs (synchronous; the app runs the same on a worker) ──────────────────
-bool apply(DocJournal& j, Document& d, const std::vector<Document::Id>& selected, const Affine& m,
+bool apply(DocJournal& j, Document& d, const std::vector<Document::Id>& selected, const Projective& m,
            const std::string& label, const pixel::Px& background);
+// s073: the box (what plan() would transform) to the quad -- Distort /
+// Perspective as one verb (the selftest's door). False: no plan, a bad quad,
+// or a type layer.
+bool distort(DocJournal& j, Document& d, const std::vector<Document::Id>& selected, const Quad& q,
+             const std::string& label, const pixel::Px& background);
 // About the box's centre: Flip Horizontal / Vertical, Rotate 90 CW (+90), CCW
 // (-90), 180.
 Affine flip_about(const pixel::Rect& box, bool horizontal);

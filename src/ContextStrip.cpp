@@ -331,9 +331,68 @@ void ContextStrip::show_variant(const std::string& tool_id, int v) {
     m_quiet = false;
 }
 
+// s073: Free Transform's row.
+void ContextStrip::show_transform(int kind) {
+    m_variant_buttons.clear();
+    m_xf_buttons.clear();
+    while (auto* c = get_first_child()) remove(*c);
+    auto name = Gtk::make_managed<Gtk::Label>();
+    name->set_markup("<b>Free Transform</b>");
+    name->set_tooltip_text("Drag the box: a handle scales, inside moves, outside turns. Enter applies, Esc cancels.");
+    append(*name);
+    auto group = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+    group->add_css_class("linked");
+    static const char* labels[] = {"Scale · Rotate", "Skew", "Distort", "Perspective"};
+    static const char* tips[] = {
+        "A corner scales (Shift: freely, Alt: about the middle); a side, one way; outside turns",
+        "A side slides along itself -- the box leans  (or Ctrl+Shift-drag a side)",
+        "A corner goes where it's dragged, a side too; Alt: the opposite one the other way  (or Ctrl-drag)",
+        "A corner and its neighbour move apart or together -- a vanishing side  (or Ctrl+Alt+Shift-drag a corner)"};
+    Gtk::ToggleButton* first = nullptr;
+    for (int i = 0; i < 4; ++i) {
+        auto b = Gtk::make_managed<Gtk::ToggleButton>(labels[i]);
+        b->set_name(std::string("strip.transform.") + (i == 0 ? "free" : i == 1 ? "skew" : i == 2 ? "distort" : "perspective"));
+        b->set_focus_on_click(false);
+        b->set_tooltip_text(tips[i]);
+        if (first) b->set_group(*first); else first = b;
+        if (i == kind) b->set_active(true);
+        b->signal_toggled().connect([this, b, i] {
+            if (!b->get_active() || m_quiet) return;
+            m_xf_kind.emit(i);
+        });
+        m_xf_buttons.push_back(b);
+        group->append(*b);
+    }
+    append(*group);
+    auto spacer = Gtk::make_managed<Gtk::Box>();
+    spacer->set_hexpand(true);
+    append(*spacer);
+    auto cancel = Gtk::make_managed<Gtk::Button>("Cancel");
+    cancel->set_name("strip.transform.cancel");
+    cancel->set_tooltip_text("Drop the transform -- nothing was written  (Esc)");
+    cancel->set_focus_on_click(false);
+    cancel->signal_clicked().connect([this] { m_xf_done.emit(false); });
+    append(*cancel);
+    auto apply = Gtk::make_managed<Gtk::Button>("Apply");
+    apply->set_name("strip.transform.apply");
+    apply->add_css_class("suggested-action");
+    apply->set_tooltip_text("Apply the transform -- one step  (Enter, or double-click inside)");
+    apply->set_focus_on_click(false);
+    apply->signal_clicked().connect([this] { m_xf_done.emit(true); });
+    append(*apply);
+}
+
+void ContextStrip::set_transform_kind(int kind) {
+    if (kind < 0 || kind >= static_cast<int>(m_xf_buttons.size())) return;
+    m_quiet = true;
+    m_xf_buttons[static_cast<std::size_t>(kind)]->set_active(true);
+    m_quiet = false;
+}
+
 void ContextStrip::show_tool(const core::ToolSpec& t) {
     m_shown = t.id;
     m_variant_buttons.clear();
+    m_xf_buttons.clear();
     while (auto* c = get_first_child()) remove(*c);
 
     auto name = Gtk::make_managed<Gtk::Label>();

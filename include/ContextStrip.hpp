@@ -134,8 +134,19 @@ public:
     sigc::signal<void(const std::string&, int)>& signal_variant() { return m_variant_signal; }
     // s035 m5: the Pen's Corner / Smooth buttons (true: Smooth).
     sigc::signal<void(bool)>& signal_pen_point() { return m_pen_point; }
+    // s073: FREE TRANSFORM's row, while its box is up (whatever the tool):
+    // what a plain handle drag does -- Scale / Rotate, Skew, Distort,
+    // Perspective (0..3) -- and Cancel / Apply. show_tool brings the tool's
+    // row back.
+    void show_transform(int kind);
+    void set_transform_kind(int kind);   // the buttons follow (a key chose it)
+    sigc::signal<void(int)>& signal_transform_kind() { return m_xf_kind; }
+    sigc::signal<void(bool)>& signal_transform_done() { return m_xf_done; }   // true: Apply
 
 private:
+    sigc::signal<void(int)> m_xf_kind;                    // s073
+    sigc::signal<void(bool)> m_xf_done;
+    std::vector<Gtk::ToggleButton*> m_xf_buttons;
     TextOpts m_text;                                       // s046
     sigc::signal<void(const std::string&)> m_text_signal;
     void text_strip();                                     // s046: the Text tool's row

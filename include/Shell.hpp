@@ -237,8 +237,9 @@ private:
     void on_canvas_size();                       // category: canvas: Image > Canvas Size (the dialog)
 
     // ── transform (s011 m2) ────────────────────────────────────────────────
+    void show_transform_strip(bool on);          // category: transform: s073 -- the strip's Free Transform row, or the tool's back
     void on_free_transform();                    // category: transform: Ctrl+T -- the box on the canvas
-    void on_xform_change(const std::array<double, 6>& m);   // category: transform: the box moved
+    void on_xform_change(const std::array<double, 9>& m);   // category: transform: the box moved
     void xform_pump();                           // category: transform: the preview, one job at a time
     void xform_commit();                         // category: transform: Enter -- the step, bicubic, on a worker
     void xform_cancel();                         // category: transform: Esc / Ctrl+Z -- nothing was written
@@ -537,7 +538,7 @@ private:
     struct Xform {
         bool                active = false, planning = false, committing = false, has_done = false;
         std::shared_ptr<const core::xform::Plan> plan;
-        core::xform::Affine want, done;
+        core::xform::Projective want, done;   // s073: projective (Skew, Distort, Perspective)
         core::Jobs::Id      job = 0;
     };
     Xform              m_xform;

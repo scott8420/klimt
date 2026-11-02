@@ -147,13 +147,30 @@ public:
     // moves (Shift: one axis), outside rotates (Shift: 15-degree steps).
     // Each change emits signal_transform with the whole map (image coords);
     // a double-click inside asks to commit. The Shell decides Enter / Esc.
-    void begin_transform(double x, double y, double w, double h);
+    //
+    // s073: SKEW, DISTORT, PERSPECTIVE. Ctrl-drag a corner: Distort (it goes
+    // where it is dragged; Alt: the opposite corner the other way); Ctrl-drag
+    // a side: the side goes where it is dragged; Ctrl+Shift a side: Skew
+    // (along itself); Ctrl+Alt+Shift a corner: Perspective (its neighbour
+    // along the nearer side moves the other way). The strip's kind
+    // (set_transform_kind) makes a plain handle drag do the same. Once a
+    // corner has moved on its own the box is a QUAD: scale, turn and move then
+    // act on the quad. A drag that would fold it (concave, crossed) stops at
+    // the last good shape. `projective_ok` false (type is picked): only what
+    // keeps it a parallelogram (Skew) goes; a distort is told (signal_transform_refused).
+    void begin_transform(double x, double y, double w, double h, bool projective_ok = true);
     void end_transform();
     bool transforming() const { return m_xf.on; }
     void nudge_transform(double dx, double dy);                  // the arrows, in transform
     core::select::Pt transform_offset() const { return {m_xf.tx, m_xf.ty}; }
-    sigc::signal<void(const std::array<double, 6>&)>& signal_transform() { return m_xf_signal; }   // a b c d e f
+    // s073: the whole map, a 3 x 3 homography, row-major (an affine one has 0 0 1 below).
+    sigc::signal<void(const std::array<double, 9>&)>& signal_transform() { return m_xf_signal; }
     sigc::signal<void()>& signal_transform_commit() { return m_xf_commit; }
+    sigc::signal<void()>& signal_transform_refused() { return m_xf_refused; }   // s073: a distort of type
+    enum class XfKind { Free = 0, Skew, Distort, Perspective };
+    void set_transform_kind(XfKind k) { m_xf_kind = k; }        // s073: the strip's buttons
+    XfKind transform_kind() const { return m_xf_kind; }
+    bool transform_is_quad() const { return m_xf.quad; }
     // s008 m3: the Eyedropper clicked at an image point; `background`: Alt.
     sigc::signal<void(int, int, bool)>& signal_pick() { return m_pick_signal; }
     // s039 m2: a ONE-CLICK PICK over whatever tool (the Lens Blur dialog's Set
@@ -402,13 +419,24 @@ private:
         int    hx = 0, hy = 0;                           // the handle: -1 / 0 / 1 each
         double tx0 = 0, ty0 = 0, sx0 = 1, sy0 = 1, ang0 = 0;
         double px0 = 0, py0 = 0;                         // the press, image coords
+        // s073: the quad (once a corner moved on its own): tl tr br bl, image coords.
+        bool   quad = false, quad0 = false;
+        core::select::Pt q[4], q0[4];
+        bool   projective_ok = true, refused = false;    // refused: told once a press
+        const char* label = nullptr;                     // what the readout says in quad mode
     } m_xf;
-    sigc::signal<void(const std::array<double, 6>&)> m_xf_signal;
+    XfKind m_xf_kind = XfKind::Free;
+    sigc::signal<void(const std::array<double, 9>&)> m_xf_signal;
     sigc::signal<void()> m_xf_commit;
-    std::array<double, 6> xf_matrix() const;
-    core::select::Pt xf_world(double lx, double ly) const;   // a box-centred local point -> image
+    sigc::signal<void()> m_xf_refused;
+    std::array<double, 6> xf_matrix() const;              // the affine (box mode)
+    std::array<double, 9> xf_map() const;                 // s073: what is emitted (either mode)
+    core::select::Pt xf_world(double lx, double ly) const;   // a box-centred local point -> image (box mode)
+    core::select::Pt xf_handle(int hx, int hy) const;     // s073: a handle, either mode
+    core::select::Pt xf_centre() const;                   // s073: what the box turns about
     void xf_press(double sx, double sy);
-    void xf_drag(double sx, double sy, bool shift, bool alt);
+    void xf_drag(double sx, double sy, bool shift, bool alt, bool ctrl = false);
+    bool xf_quad_drag(double px, double py, bool shift, bool alt, bool ctrl);   // s073: false -- leave it to the box
     bool xf_inside(double sx, double sy) const;
     void draw_transform(const Cairo::RefPtr<Cairo::Context>& cr);
     sigc::signal<void(MoveAt, int, int)> m_move_signal;

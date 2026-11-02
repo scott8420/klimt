@@ -20,11 +20,22 @@ namespace klimt {
 namespace Xf = core::xform;
 
 namespace {
-Xf::Affine affine_of(const std::array<double, 6>& m) { return {m[0], m[1], m[2], m[3], m[4], m[5]}; }
-bool same(const Xf::Affine& a, const Xf::Affine& b) {
-    return a.a == b.a && a.b == b.b && a.c == b.c && a.d == b.d && a.e == b.e && a.f == b.f;
+Xf::Projective map_of(const std::array<double, 9>& m) {   // s073: the canvas's homography
+    Xf::Projective p;
+    for (int i = 0; i < 9; ++i) p.h[i] = m[i];
+    return p;
+}
+bool same(const Xf::Projective& a, const Xf::Projective& b) {
+    for (int i = 0; i < 9; ++i) if (a.h[i] != b.h[i]) return false;
+    return true;
 }
 }  // namespace
+
+// s073: the strip's Free Transform row while the box is up; the tool's after.
+void Shell::show_transform_strip(bool on) {
+    if (on) { m_strip.show_transform(static_cast<int>(m_canvas.transform_kind())); return; }
+    if (const auto* t = core::find_tool(m_rail.tool())) m_strip.show_tool(*t);
+}
 
 // The document still holds what the plan was made from?
 bool Shell::xform_current(const core::xform::Plan& p) const {
@@ -56,16 +67,18 @@ void Shell::on_free_transform() {
             m_xform.active = true;
             m_xform.plan = p;
             m_canvas.set_outline(nullptr);   // the ants come back with the result
-            m_canvas.begin_transform(box.x, box.y, box.w, box.h);
+            // s073: type stays type -- only a skew (a parallelogram) for it.
+            m_canvas.begin_transform(box.x, box.y, box.w, box.h, Xf::projective_refusal(*p).empty());
+            show_transform_strip(true);
             m_canvas.grab_focus();
-            toast("Free Transform: drag the box -- Enter applies, Esc cancels");
+            toast("Free Transform: drag the box -- Ctrl-drag a corner distorts; Enter applies, Esc cancels");
         };
     });
 }
 
-void Shell::on_xform_change(const std::array<double, 6>& m) {
+void Shell::on_xform_change(const std::array<double, 9>& m) {
     if (!m_xform.active || m_xform.committing) return;
-    m_xform.want = affine_of(m);
+    m_xform.want = map_of(m);
     xform_pump();
 }
 
@@ -119,6 +132,7 @@ void Shell::xform_cancel() {
 
 void Shell::xform_end() {
     m_xform = {};
+    show_transform_strip(false);
     m_preview.clear();
     m_canvas.end_transform();
     m_ants_known = false;   // the ants come back (moved, if the selection was)
