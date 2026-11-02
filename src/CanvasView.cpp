@@ -91,6 +91,7 @@ CanvasView::CanvasView() {
             return;
         }
         if (m_tool == "crop" && n == 2 && m_crop && crop_hit(x, y) == -1) { commit_crop(); return; }
+        if (m_lq.on) return;   // s076: in Liquify, a click is the brush's (the drag has it)
         if (m_xf.on) {   // s011: in a transform, a click is the box's; a double-click inside commits
             if (n == 2 && xf_inside(x, y)) m_xf_commit.emit();
             return;
@@ -143,6 +144,22 @@ CanvasView::CanvasView() {
                 m_lasso.press({to_image_x(x), to_image_y(y)}, alt);
                 if (m_lasso.done()) { lasso_land(); drag->set_state(Gtk::EventSequenceState::DENIED); }
                 queue_draw();
+                return;
+            }
+            if (!m_panning && button == GDK_BUTTON_PRIMARY && m_lq.on && m_iw > 0) {   // s076: Liquify's brush, whatever the tool
+                m_lq.drag = true;
+                m_lq.alt = (drag->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+                m_lq.pressure = pressure_of(drag);
+                m_press_x = x;
+                m_press_y = y;
+                m_lq.last = {to_image_x(x), to_image_y(y)};
+                m_lq_signal.emit(LiqAt::Begin, m_lq.last, {0, 0}, m_lq.pressure, m_lq.alt);
+                m_lq.tick.disconnect();
+                m_lq.tick = Glib::signal_timeout().connect([this] {   // held still: keep brushing
+                    if (!m_lq.drag) return false;
+                    m_lq_signal.emit(LiqAt::Move, m_lq.last, {0, 0}, m_lq.pressure, m_lq.alt);
+                    return true;
+                }, 40);
                 return;
             }
             if (!m_panning && button == GDK_BUTTON_PRIMARY && m_xf.on) {   // s011: the transform box first
@@ -319,6 +336,26 @@ CanvasView::CanvasView() {
                 queue_draw();
                 return;
             }
+            if (m_lq.drag) {   // s076
+                m_px = m_press_x + dx;
+                m_py = m_press_y + dy;
+                const core::select::Pt p{to_image_x(m_px), to_image_y(m_py)};
+                const core::select::Pt mv{p.x - m_lq.last.x, p.y - m_lq.last.y};
+                // A dab every tenth of the brush (at least a pixel): a fast drag stays smooth.
+                const double gap = std::max(1.0, m_lq.radius / 10);
+                const double len = std::hypot(mv.x, mv.y);
+                if (len >= gap) {
+                    m_lq.pressure = pressure_of(drag);
+                    const int n = static_cast<int>(std::ceil(len / gap));
+                    for (int i = 1; i <= n; ++i) {
+                        const core::select::Pt c{m_lq.last.x + mv.x * i / n, m_lq.last.y + mv.y * i / n};
+                        m_lq_signal.emit(LiqAt::Move, c, {mv.x / n, mv.y / n}, m_lq.pressure, m_lq.alt);
+                    }
+                    m_lq.last = p;
+                }
+                queue_draw();
+                return;
+            }
             if (m_crop_mode != CropMode::None) {
                 const bool shift = (drag->get_current_event_state() & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{};
                 crop_drag(m_press_x + dx, m_press_y + dy, shift);
@@ -458,6 +495,12 @@ CanvasView::CanvasView() {
                 if (std::hypot(dx, dy) >= 4) (m_line_gradient ? m_gradient_signal : m_straighten_signal).emit(m_line_a, m_line_b);
                 return;
             }
+            if (m_lq.drag) {   // s076
+                m_lq.drag = false;
+                m_lq.tick.disconnect();
+                m_lq_signal.emit(LiqAt::End, m_lq.last, {0, 0}, m_lq.pressure, m_lq.alt);
+                return;
+            }
             if (m_crop_mode != CropMode::None) { crop_release(); return; }
             if (m_xf.on && m_xf.mode != Xf::Mode::None) { m_xf.mode = Xf::Mode::None; return; }
             if (m_stroking) {
@@ -501,6 +544,7 @@ CanvasView::CanvasView() {
     motion->signal_motion().connect([this, motion](double x, double y) {
         m_px = x;
         m_py = y;
+        if (m_lq.on) queue_draw();   // s076: the ring follows
         if (lasso_open() && m_lasso.open()) {   // s038: the band follows; Alt gone -- it closes
             const bool alt = (motion->get_current_event_state() & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
             m_lasso.move({to_image_x(x), to_image_y(y)}, alt);
@@ -1511,6 +1555,22 @@ void CanvasView::nudge_transform(double dx, double dy) {
     m_xf_signal.emit(xf_map());
 }
 
+// ── s076: Liquify ───────────────────────────────────────────────────────────
+void CanvasView::begin_liquify(double radius) {
+    m_lq = {};
+    m_lq.on = true;
+    m_lq.radius = std::max(1.0, radius);
+    set_cursor("crosshair");
+    queue_draw();
+}
+
+void CanvasView::end_liquify() {
+    m_lq.tick.disconnect();
+    m_lq = {};
+    update_cursor();
+    queue_draw();
+}
+
 // ── s074: Warp ──────────────────────────────────────────────────────────────
 bool CanvasView::set_transform_kind(XfKind k) {
     if (!m_xf.on) { m_xf_kind = k; return true; }
@@ -1844,8 +1904,23 @@ void CanvasView::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
         layout->show_in_cairo_context(cr);
         cr->restore();
     }
+    // s076: Liquify's brush ring.
+    if (m_lq.on && m_px >= 0 && !m_space) {
+        const double r = std::max(2.0, m_lq.radius * m_zoom);
+        cr->save();
+        cr->arc(m_px, m_py, r, 0, 2 * M_PI);
+        cr->set_line_width(3);
+        cr->set_source_rgba(0, 0, 0, 0.5);
+        cr->stroke_preserve();
+        cr->set_line_width(1);
+        cr->set_source_rgba(1, 1, 1, 0.9);
+        cr->stroke();
+        cr->arc(m_px, m_py, 1.5, 0, 2 * M_PI);
+        cr->fill();
+        cr->restore();
+    }
     // s008 m4: the brush's outline at the pointer (its real size on screen).
-    if (painting() && m_px >= 0 && !m_space) {
+    if (painting() && !m_lq.on && m_px >= 0 && !m_space) {
         const double r = std::max(1.0, m_brush / 2 * m_zoom);
         if (r >= 3) {
             // s017: the tip's own shape -- an ellipse at its angle, or a square.

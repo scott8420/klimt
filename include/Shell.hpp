@@ -9,6 +9,7 @@
 #include "core/Move.hpp"       // s009: the Move tool
 #include "core/Canvas.hpp"     // s009: Crop, Image / Canvas Size
 #include "core/Transform.hpp"  // s011: Free Transform
+#include "core/Liquify.hpp"    // s076: Liquify
 #include "core/Prefs.hpp"      // s014 m4: settings remembered between runs
 #include "core/Tabs.hpp"       // s020: several documents in one window
 #include "core/Fade.hpp"       // s020: Edit > Fade
@@ -81,6 +82,7 @@ typedef struct _AdwTabPage AdwTabPage;
 //   Move     -- the Move tool's drag, the arrow nudges.  src/Shell_move.cpp (s009)
 //   Canvas   -- Crop, Image Size, Canvas Size (jobs).    src/Shell_canvas.cpp (s009)
 //   Transform-- Free Transform, flips, quarter turns.    src/Shell_transform.cpp (s011)
+//   Liquify  -- Filter > Liquify, its brushes.          src/Shell_liquify.cpp (s076)
 //   Masks    -- the Layer Mask menu, the mask view.     src/Shell_masks.cpp (s012)
 //   Tabs     -- document tabs: switch, close, the bar.  src/Shell_tabs.cpp (s020)
 //   Fade     -- Edit > Fade: the dialog, its preview.   src/Shell_fade.cpp (s020)
@@ -237,7 +239,13 @@ private:
     void on_canvas_size();                       // category: canvas: Image > Canvas Size (the dialog)
 
     // ── transform (s011 m2) ────────────────────────────────────────────────
-    void show_transform_strip(bool on);          // category: transform: s073 -- the strip's Free Transform row, or the tool's back
+    void on_liquify();                           // category: liquify: s076 -- Filter > Liquify (Ctrl+Shift+X)
+    void on_liquify_dab(CanvasView::LiqAt at, core::select::Pt c, core::select::Pt motion, double pressure, bool alt);   // category: liquify
+    void liquify_pump();                         // category: liquify: the preview, one job at a time
+    void liquify_commit();                       // category: liquify: Enter / Apply -- one step
+    void liquify_cancel();                       // category: liquify: Esc / Cancel -- nothing written
+    void liquify_end();                          // category: liquify
+        void show_transform_strip(bool on);          // category: transform: s073 -- the strip's Free Transform row, or the tool's back
     void on_free_transform();                    // category: transform: Ctrl+T -- the box on the canvas
     void on_xform_change(const std::array<double, 9>& m);
     void on_warp_change(const std::array<double, 32>& m);    // category: transform: s074 -- the mesh moved   // category: transform: the box moved
@@ -547,6 +555,16 @@ private:
         core::Jobs::Id      job = 0;
     };
     Xform              m_xform;
+    // ── Liquify in progress (s076) ─────────────────────────────────────────
+    struct Liq {
+        bool active = false, committing = false;
+        core::Document::Id id;
+        std::shared_ptr<const pixel::TileMap> original;   // what the layer held at the start
+        core::liquify::Field field;
+        unsigned gen = 0, done_gen = 0;
+        core::Jobs::Id job = 0;
+    };
+    Liq                m_liq;
     // What the render shows in place of a layer's pixels (the preview).
     std::map<core::Document::Id, std::shared_ptr<const pixel::TileMap>> m_preview;
     std::string        m_mask_view;              // s012: the layer whose mask the canvas shows ("" : the image)

@@ -117,6 +117,13 @@ std::optional<pixel::TileMap> over_warped(const pixel::TileMap& base, const pixe
                                           const Mesh& m, Quality q,
                                           const std::function<bool()>& cancelled = {});
 
+// s076: the shared resample with any map -- `source(x, y, sp)` gives the
+// source point for landing pixel (x, y) (false: nothing lands there), over
+// `land`. `src` is read inside `src_box` only. Liquify's door.
+std::optional<pixel::TileMap> over_mapped(const pixel::TileMap& base, const pixel::TileMap& src, const pixel::Rect& src_box,
+                                          const pixel::Rect& land, const std::function<bool(int, int, Pt&)>& source,
+                                          Quality q, const std::function<bool()>& cancelled = {});
+
 // What a transform starts from.
 struct Plan {
     move::Plan  p;     // the targets, their originals, the lifted bases, the selection

@@ -699,6 +699,24 @@ private:
 };
 }  // namespace
 
+namespace {
+class FnMapper final : public Mapper {
+public:
+    explicit FnMapper(const std::function<bool(int, int, Pt&)>& f) : m_f(f) {}
+    bool at(int x, int y, Pt& sp, double& kx, double& ky) override { kx = ky = 1; return m_f(x, y, sp); }
+private:
+    const std::function<bool(int, int, Pt&)>& m_f;
+};
+}  // namespace
+
+std::optional<pixel::TileMap> over_mapped(const pixel::TileMap& base, const pixel::TileMap& src, const pixel::Rect& src_box,
+                                          const pixel::Rect& land, const std::function<bool(int, int, Pt&)>& source,
+                                          Quality q, const std::function<bool()>& cancelled) {
+    if (land.empty() || src_box.empty()) return base;
+    FnMapper mp(source);
+    return resample(base, src, nullptr, src_box, land, q, cancelled, mp);
+}
+
 std::optional<pixel::TileMap> over_warped(const pixel::TileMap& base, const pixel::TileMap& src,
                                           const pixel::TileMap* mask, const pixel::Rect& box,
                                           const Mesh& m, Quality q, const std::function<bool()>& cancelled) {

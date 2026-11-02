@@ -86,6 +86,20 @@ void Shell::bind_actions() {  // bindings
         m_canvas.grab_focus();
     });
     m_canvas.signal_warp().connect(sigc::mem_fun(*this, &Shell::on_warp_change));
+    // s076: Liquify.
+    m_canvas.signal_liquify().connect(sigc::mem_fun(*this, &Shell::on_liquify_dab));
+    m_strip.signal_liquify_changed().connect([this] { if (m_liq.active) m_canvas.set_liquify_radius(m_strip.liquify().size / 2.0); });
+    m_strip.signal_liquify_done().connect([this](int what) {
+        if (what == 1) liquify_commit();
+        else if (what == 0) liquify_cancel();
+        else if (m_liq.active && !m_liq.committing) {   // Restore All: the field back to nothing
+            m_liq.field.clear();
+            ++m_liq.gen;
+            m_preview.clear();
+            queue_render();
+        }
+        m_canvas.grab_focus();
+    });
     m_strip.signal_warp_style().connect([this](int style, int bend, bool vertical) {   // s075: Warp's Style
         if (!m_xform.active || !m_canvas.transform_is_warp()) return;
         m_xform.presetting = true;
@@ -98,6 +112,7 @@ void Shell::bind_actions() {  // bindings
         if (m_xform.plan) toast("Free Transform: " + core::xform::projective_refusal(*m_xform.plan));
     });
     m_layer_acts["free-transform"] = add_action("free-transform", sigc::mem_fun(*this, &Shell::on_free_transform));
+    m_layer_acts["liquify"] = add_action("liquify", sigc::mem_fun(*this, &Shell::on_liquify));   // s076
     namespace X = core::xform;
     m_layer_acts["flip-h"] = add_action("flip-h", [this] { run_xform("Flip Horizontal", [](const pixel::Rect& b) { return X::flip_about(b, true); }); });
     m_layer_acts["flip-v"] = add_action("flip-v", [this] { run_xform("Flip Vertical", [](const pixel::Rect& b) { return X::flip_about(b, false); }); });
@@ -431,6 +446,17 @@ void Shell::bind_actions() {  // bindings
                 }
                 if ((keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete) && m_canvas.pen_backspace()) return true;
             }
+            // s076: Liquify -- Enter applies, Escape drops it, [ ] size the brush.
+            if (m_liq.active && mods == NONE) {
+                if (keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) { liquify_commit(); return true; }
+                if (keyval == GDK_KEY_Escape) { liquify_cancel(); return true; }
+                if (keyval == GDK_KEY_bracketleft || keyval == GDK_KEY_bracketright) {
+                    const int s0 = m_strip.liquify().size;
+                    const int step = std::max(1, s0 / 10);
+                    m_strip.set_liquify_size(keyval == GDK_KEY_bracketleft ? s0 - step : s0 + step);
+                    return true;
+                }
+            }
             // s011: a transform's box is up -- Enter applies, Escape drops it.
             if (m_xform.active && mods == NONE) {
                 if (keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) { xform_commit(); return true; }
@@ -445,6 +471,7 @@ void Shell::bind_actions() {  // bindings
             // own Delete first).
             else if ((keyval == GDK_KEY_a || keyval == GDK_KEY_A) && mods == CTRL)          act = "win.select-all";
             else if ((keyval == GDK_KEY_t || keyval == GDK_KEY_T) && mods == CTRL)          act = "win.free-transform";
+            else if ((keyval == GDK_KEY_x || keyval == GDK_KEY_X) && mods == (CTRL | SHIFT)) act = "win.liquify";   // s076
             else if ((keyval == GDK_KEY_BackSpace) && mods == Gdk::ModifierType::ALT_MASK)   act = "win.fill-fg";
             else if ((keyval == GDK_KEY_BackSpace) && mods == CTRL)                          act = "win.fill-bg";
             else if ((keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete) && mods == NONE) act = "win.delete-selection";
@@ -519,6 +546,9 @@ void Shell::bind_actions() {  // bindings
     arrows->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
     arrows->signal_key_pressed().connect([this](guint keyval, guint, Gdk::ModifierType state) {
         if (m_te.on) return false;   // s046: typing -- the type's keys
+        // s076: in Liquify, Enter / Escape are its.
+        if (m_liq.active && (keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter)) { liquify_commit(); return true; }
+        if (m_liq.active && keyval == GDK_KEY_Escape) { liquify_cancel(); return true; }
         // s011: in a transform, Enter / Escape / the arrows are the box's.
         if (m_xform.active) {
             const auto m2 = state & (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK | Gdk::ModifierType::ALT_MASK);

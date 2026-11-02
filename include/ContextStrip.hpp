@@ -10,6 +10,7 @@
 #include "core/ToolDefaults.hpp"   // s029
 
 #include <gtkmm/popover.h>
+#include <gtkmm/spinbutton.h>
 #include <gtkmm/menubutton.h>
 #include <gtkmm/dropdown.h>
 
@@ -148,6 +149,15 @@ public:
     // WarpStyle; 0 Custom), Bend (-100 .. 100 %), Vertical. A change is told
     // whole; set_warp_style shows a style without telling (a dragged point
     // makes it Custom).
+    // s076: LIQUIFY's row, while Liquify is on: the brush (Forward Warp,
+    // Reconstruct, Twirl, Pucker, Bloat), Size, Pressure, Rate; Restore All,
+    // Cancel, Apply. Remembered between visits.
+    struct LiquifyOpts { int tool = 0; int size = 100; int pressure = 50; int rate = 50; };
+    const LiquifyOpts& liquify() const { return m_liq; }
+    void show_liquify();
+    void set_liquify_size(int size);   // [ and ] -- the strip follows
+    sigc::signal<void()>& signal_liquify_changed() { return m_liq_changed; }
+    sigc::signal<void(int)>& signal_liquify_done() { return m_liq_done; }   // 0 Cancel, 1 Apply, 2 Restore All
     void show_warp_options(bool on);
     void set_warp_style(int style);
     sigc::signal<void(int, int, bool)>& signal_warp_style() { return m_warp_style; }
@@ -157,6 +167,10 @@ private:
     sigc::signal<void(bool)> m_xf_done;
     std::vector<Gtk::ToggleButton*> m_xf_buttons;
     sigc::signal<void(int, int, bool)> m_warp_style;     // s075
+    LiquifyOpts m_liq;                                    // s076
+    sigc::signal<void()> m_liq_changed;
+    sigc::signal<void(int)> m_liq_done;
+    Gtk::SpinButton* m_liq_size = nullptr;
     Gtk::Box* m_warp_box = nullptr;
     Gtk::DropDown* m_warp_dd = nullptr;
     Gtk::MenuButton* m_warp_mb = nullptr;

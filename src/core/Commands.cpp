@@ -221,6 +221,7 @@ const std::vector<Command>& commands() {
             {"Delete Layer Mask", "Layer", "win.mask-delete", "", "mask remove discard", ""},
             // s011: transforms.
             {"Free Transform", "Edit", "win.free-transform", "", "scale rotate resize skew handles ctrl+t", ""},
+            {"Liquify…", "Filter", "win.liquify", "", "warp push twirl pucker bloat reconstruct smear ctrl+shift+x", ""},   // s076
             {"Flip Horizontal", "Edit", "win.flip-h", "", "mirror transform", ""},
             {"Flip Vertical", "Edit", "win.flip-v", "", "mirror upside down transform", ""},
             {"Rotate 90° Clockwise", "Edit", "win.rotate-cw", "", "turn right transform", ""},

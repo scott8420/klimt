@@ -1,6 +1,7 @@
 #include "ContextStrip.hpp"
 #include "core/Patterns.hpp"   // s033: the texture's patterns
 #include "core/Transform.hpp"  // s075: Warp's styles
+#include "core/Liquify.hpp"    // s076: Liquify's brushes
 #include "text/Hyphen.hpp"     // s048: the hyphenation languages
 
 #include <glibmm/main.h>
@@ -337,6 +338,7 @@ void ContextStrip::show_variant(const std::string& tool_id, int v) {
 void ContextStrip::show_transform(int kind) {
     m_variant_buttons.clear();
     m_xf_buttons.clear();
+    m_liq_size = nullptr;   // s076
     while (auto* c = get_first_child()) remove(*c);
     auto name = Gtk::make_managed<Gtk::Label>();
     name->set_markup("<b>Free Transform</b>");
@@ -445,6 +447,109 @@ void ContextStrip::set_transform_kind(int kind) {
     m_quiet = false;
 }
 
+// s076: Liquify's row.
+void ContextStrip::show_liquify() {
+    m_variant_buttons.clear();
+    m_xf_buttons.clear();
+    m_warp_box = nullptr;
+    m_warp_dd = nullptr;
+    m_warp_mb = nullptr;
+    while (auto* c = get_first_child()) remove(*c);
+    auto name = Gtk::make_managed<Gtk::Label>();
+    name->set_markup("<b>Liquify</b>");
+    name->set_tooltip_text("Brush the picture like warm wax. Enter applies (one step), Esc cancels; [ and ] size the brush.");
+    append(*name);
+    auto group = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+    group->add_css_class("linked");
+    static const char* labels[] = {"Push", "Restore", "Twirl", "Pucker", "Bloat"};
+    static const char* keys[] = {"forward", "reconstruct", "twirl", "pucker", "bloat"};
+    static const char* tips[] = {
+        "Forward Warp -- push the pixels along the stroke",
+        "Restore (Photoshop's Reconstruct) -- brush the picture back toward how it was",
+        "Twirl -- turn the pixels under the brush clockwise; hold still to keep turning (Alt: counter-clockwise)",
+        "Pucker -- draw the pixels in toward the brush's middle (Alt: Bloat)",
+        "Bloat -- push the pixels out from the brush's middle (Alt: Pucker)"};
+    Gtk::ToggleButton* first = nullptr;
+    for (int i = 0; i < core::liquify::kTools; ++i) {
+        auto b = Gtk::make_managed<Gtk::ToggleButton>(labels[i]);
+        b->set_name(std::string("strip.liquify.") + keys[i]);
+        b->set_tooltip_text(tips[i]);
+        b->set_focus_on_click(false);
+        if (first) b->set_group(*first); else first = b;
+        if (i == m_liq.tool) b->set_active(true);
+        b->signal_toggled().connect([this, b, i] {
+            if (!b->get_active()) return;
+            m_liq.tool = i;
+            m_liq_changed.emit();
+        });
+        group->append(*b);
+    }
+    append(*group);
+    const auto spin = [this](Gtk::Box& into, const char* label, const char* name, const char* tip, int lo, int hi, int LiquifyOpts::*f) {
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+        auto l = Gtk::make_managed<Gtk::Label>(label);
+        l->set_hexpand(static_cast<Gtk::Widget*>(&into) != static_cast<Gtk::Widget*>(this));   // the popover's rows line up; the strip's doesn't stretch
+        l->set_xalign(0.f);
+        row->append(*l);
+        auto sp = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(m_liq.*f, lo, hi, 1, 10), 1, 0);
+        sp->set_name(name);
+        sp->set_tooltip_text(tip);
+        sp->set_width_chars(4);
+        sp->signal_value_changed().connect([this, sp, f] { m_liq.*f = sp->get_value_as_int(); m_liq_changed.emit(); });
+        row->append(*sp);
+        into.append(*row);
+        return sp;
+    };
+    // Size on the strip (it changes mid-brushing); Pressure and Rate in the
+    // Brush dropdown -- the strip never scrolls.
+    m_liq_size = spin(*this, "Size", "strip.liquify.size", "The brush's width, px  ([ and ])", 2, 2000, &LiquifyOpts::size);
+    {
+        auto mb = Gtk::make_managed<Gtk::MenuButton>();
+        mb->set_name("strip.liquify.brush");
+        mb->set_label("Brush");
+        mb->set_tooltip_text("Pressure and Rate");
+        auto pop = Gtk::make_managed<Gtk::Popover>();
+        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+        box->set_margin(8);
+        spin(*box, "Pressure %", "strip.liquify.pressure", "How much each dab does  (times the pen's pressure)", 1, 100, &LiquifyOpts::pressure);
+        spin(*box, "Rate %", "strip.liquify.rate", "How fast Reconstruct, Twirl, Pucker and Bloat work", 1, 100, &LiquifyOpts::rate);
+        pop->set_child(*box);
+        mb->set_popover(*pop);
+        append(*mb);
+    }
+    auto spacer = Gtk::make_managed<Gtk::Box>();
+    spacer->set_hexpand(true);
+    append(*spacer);
+    auto restore = Gtk::make_managed<Gtk::Button>();
+    restore->set_icon_name("view-refresh-symbolic");
+    restore->set_name("strip.liquify.restore");
+    restore->set_tooltip_text("Restore All -- every stroke of this Liquify undone, start over");
+    restore->set_focus_on_click(false);
+    restore->signal_clicked().connect([this] { m_liq_done.emit(2); });
+    append(*restore);
+    auto cancel = Gtk::make_managed<Gtk::Button>();
+    cancel->set_icon_name("window-close-symbolic");
+    cancel->set_name("strip.liquify.cancel");
+    cancel->set_tooltip_text("Drop the Liquify -- nothing was written  (Esc)");
+    cancel->set_focus_on_click(false);
+    cancel->signal_clicked().connect([this] { m_liq_done.emit(0); });
+    append(*cancel);
+    auto apply = Gtk::make_managed<Gtk::Button>();
+    apply->set_icon_name("object-select-symbolic");
+    apply->add_css_class("suggested-action");
+    apply->set_name("strip.liquify.apply");
+    apply->set_tooltip_text("Apply the Liquify -- one step  (Enter)");
+    apply->set_focus_on_click(false);
+    apply->signal_clicked().connect([this] { m_liq_done.emit(1); });
+    append(*apply);
+}
+
+void ContextStrip::set_liquify_size(int size) {
+    m_liq.size = std::clamp(size, 2, 2000);
+    if (m_liq_size) m_liq_size->set_value(m_liq.size);   // tells signal_liquify_changed
+    else m_liq_changed.emit();
+}
+
 void ContextStrip::show_warp_options(bool on) {   // s075
     if (m_warp_box) m_warp_box->set_visible(on);
     if (on) set_warp_style(0);
@@ -472,6 +577,7 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
     m_warp_box = nullptr;
     m_warp_dd = nullptr;
     m_warp_mb = nullptr;
+    m_liq_size = nullptr;   // s076
     while (auto* c = get_first_child()) remove(*c);
 
     auto name = Gtk::make_managed<Gtk::Label>();

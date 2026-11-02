@@ -11,6 +11,7 @@
 #include "core/Text.hpp"        // s046: text layers
 #include "core/Rulers.hpp"      // s031: the zero point
 #include "core/Transform.hpp"   // s011: Free Transform, flips, rotations
+#include "core/Liquify.hpp"     // s076: Liquify
 #include "core/Gradient.hpp"    // s012: the Gradient tool
 #include "core/Heal.hpp"        // s015 m3: the healing brushes
 #include "core/Live.hpp"        // s018: live filters
@@ -1386,6 +1387,16 @@ const std::vector<Verb>& verbs() {
         {"free_transform", [](DocJournal& j, Document& d) {
              xform::apply(j, d, {"L4"}, xform::Affine::about({200, 175}, xform::Affine::rotate(0.3) * xform::Affine::scale(1.4, 0.8)),
                           "Free Transform", pixel::rgba(1, 1, 1, 1)); }},
+        {"distort",       [](DocJournal& j, Document& d) {   // s073
+             xform::distort(j, d, {"L4"}, {{{150, 100}, {250, 100}, {300, 250}, {100, 250}}}, "Free Transform", pixel::rgba(1, 1, 1, 1)); }},
+        {"warp",          [](DocJournal& j, Document& d) {   // s074 / s075
+             xform::warp(j, d, {"L4"}, [](const pixel::Rect& b) { return xform::warp_preset(xform::WarpStyle::Flag, b, 40); }, "Warp",
+                         pixel::rgba(1, 1, 1, 1)); }},
+        {"liquify",       [](DocJournal& j, Document& d) {   // s076
+             liquify::Field f(d.image().width, d.image().height);
+             f.dab({liquify::Tool::Forward, 40, 1, 0.5}, {200, 175}, {20, 5});
+             f.dab({liquify::Tool::Twirl, 50, 1, 1}, {250, 200});
+             liquify::liquify(j, d, "L4", f); }},
         {"transform_selection", [](DocJournal& j, Document& d) {
              xform::apply(j, d, {"L4"}, xform::Affine::about({200, 160}, xform::Affine::scale(2, 2)), "Free Transform",
                           pixel::rgba(1, 1, 1, 1)); },

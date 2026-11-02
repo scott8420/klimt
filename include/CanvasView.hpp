@@ -184,6 +184,17 @@ public:
     pixel::Rect transform_box() const;   // the box the transform started from (whole pixels)
     XfKind transform_kind() const { return m_xf_kind; }
     bool transform_is_quad() const { return m_xf.quad; }
+    // s076: LIQUIFY. While on, a left-drag on the canvas brushes the field
+    // (whatever the tool): Begin at the press, Move as it goes (the motion
+    // since the last, image px) and every 40 ms while held still (motion 0 --
+    // Twirl / Pucker / Bloat keep working), End at the release. The ring at
+    // the pointer is the brush (radius, image px). Alt: the brush's other way.
+    enum class LiqAt { Begin, Move, End };
+    void begin_liquify(double radius);
+    void end_liquify();
+    void set_liquify_radius(double r) { m_lq.radius = std::max(1.0, r); queue_draw(); }
+    bool liquifying() const { return m_lq.on; }
+    sigc::signal<void(LiqAt, core::select::Pt, core::select::Pt, double, bool)>& signal_liquify() { return m_lq_signal; }
     // s008 m3: the Eyedropper clicked at an image point; `background`: Alt.
     sigc::signal<void(int, int, bool)>& signal_pick() { return m_pick_signal; }
     // s039 m2: a ONE-CLICK PICK over whatever tool (the Lens Blur dialog's Set
@@ -444,6 +455,13 @@ private:
         int    wi = -1;
         double wu = 0, wv = 0;
     } m_xf;
+    struct Lq {   // s076
+        bool on = false, drag = false, alt = false;
+        double radius = 50, pressure = 1;
+        core::select::Pt last{0, 0};
+        sigc::connection tick;
+    } m_lq;
+    sigc::signal<void(LiqAt, core::select::Pt, core::select::Pt, double, bool)> m_lq_signal;
     sigc::signal<void(const std::array<double, 32>&)> m_warp_signal;
     void warp_emit();
     core::select::Pt warp_at(double u, double v) const;
