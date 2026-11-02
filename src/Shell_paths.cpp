@@ -5,6 +5,8 @@
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "core/Isolate.hpp"
+#include "core/Clip.hpp"   // s080
+#include "ClipDialog.hpp"
 
 namespace klimt {
 
@@ -150,6 +152,35 @@ void Shell::on_path_isolate(const std::string& id, double band, double soft) {
             else toast("Isolate: the selection changed meanwhile -- try again");
         };
     });
+}
+
+// s080: Select > Clipping Path... -- which path layer cuts the picture out
+// where it's placed, and its flatness. ONE step (core::clip::set).
+void Shell::on_clipping_path() {
+    if (!has_image()) return;
+    std::vector<ClipDialog::Choice> paths;
+    for (const auto& id : m_doc.walk()) {
+        const auto l = m_doc.get(id);
+        if (l && l->kind == core::Kind::Path && l->path && !l->path->empty()) paths.push_back({id, l->name});
+    }
+    if (paths.empty()) {
+        toast("Clipping Path: draw a path first (the Pen, P) -- or Make Path from Selection");
+        return;
+    }
+    if (!m_clip_dialog) {
+        m_clip_dialog = std::make_unique<ClipDialog>(*this);
+        m_clip_dialog->signal_ok().connect([this](std::string id, double flatness) {
+            if (core::clip::set(m_journal, m_doc, id, flatness)) {
+                const auto l = id.empty() ? std::nullopt : m_doc.get(id);
+                toast(l ? "\u201c" + l->name + "\u201d is the clipping path -- EPS, TIFF and PSD exports carry it" : std::string("No clipping path"));
+            }
+            if (auto lg = log::get(log::Area::Shell)) lg->info("clipping path: {} (flatness {})", id.empty() ? "none" : id, flatness);
+        });
+    }
+    // The picked path layer is offered first when there's no clipping path yet.
+    std::string current = core::clip::of(m_doc);
+    if (current.empty()) current = path_layer();
+    m_clip_dialog->ask(paths, current, m_doc.image().clip_flatness);
 }
 
 }  // namespace klimt

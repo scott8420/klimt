@@ -414,6 +414,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
         auto ps = Gio::Menu::create();
         ps->append("Load Path as Selection", "win.path-selection");
         ps->append("Make Path from Selection", "win.path-make-work");
+        ps->append("Clipping Path\u2026", "win.clipping-path");   // s080
         sel->append_section(ps);
     }
     auto mod = Gio::Menu::create();   // s011 m4

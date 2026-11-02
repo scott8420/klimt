@@ -10,6 +10,8 @@
 // the name's extension to it); this dialog shows the name as it will be
 // written, and when that is already a file the chooser didn't ask about, its
 // OK becomes Replace.
+// s080: EPS -- RGB / CMYK, run-length / ZIP, the TIFF preview; and what
+// crosses: the clipping path (or that there's none, and where to set it).
 #include "core/Ora.hpp"
 #include "formats/Formats.hpp"
 #include "widgets/Widgets.hpp"
@@ -38,6 +40,7 @@ public:
 private:
     void sync();   // the labels that follow the values
     void fill_ora(const core::ora::Plan& plan, formats::Kind kind);   // s051: PSD and PDF show the same list
+    void fill_eps(const core::ora::Plan& plan);                         // s080
     void show_kind(formats::Kind kind);   // s051: the page, the title, the name's extension
     formats::WriteOptions read() const;
 
@@ -54,6 +57,9 @@ private:
     widgets::Named<Gtk::Switch> m_webp_lossless;
     widgets::DropDown     m_tiff_compression;
     widgets::Box          m_ora_list;
+    // s080: EPS -- colour, encoding, preview; what crosses (the clipping path).
+    widgets::DropDown     m_eps_colour, m_eps_encoding, m_eps_preview;
+    widgets::Box          m_eps_list;
     widgets::Button       m_ok_button, m_cancel_button;
     sigc::signal<void(formats::WriteOptions, formats::Kind, std::string)> m_ok;
 };

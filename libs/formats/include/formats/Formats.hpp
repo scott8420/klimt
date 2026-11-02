@@ -22,7 +22,7 @@
 
 namespace klimt::formats {
 
-enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA, PSD, PDF };   // s049: WebP, OpenRaster; s050: Photoshop; s051: PDF (written only, never sniffed)
+enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA, PSD, PDF, EPS };   // s049: WebP, OpenRaster; s050: Photoshop; s051: PDF (written only, never sniffed)
 // By the file's first bytes, not its name (a .png that is a JPEG opens).
 Kind sniff(const std::string& path);
 // s051 (Scott: changing the chooser's format didn't change the name's
@@ -59,6 +59,9 @@ struct Raster {
     double                    dpi = 72;
     std::vector<std::uint8_t> icc;
     std::vector<std::string>  notes;   // "first page of 3", "palette expanded"
+    // s080: Photoshop's image resources (TIFF tag 34377) -- the paths and the
+    // clipping path ride here, both ways (core/Clip.hpp reads / makes them).
+    std::vector<std::uint8_t> photoshop;
 };
 
 // The guard on what a reader will allocate: no side over this, and no more
@@ -86,6 +89,11 @@ struct WriteOptions {
     int  webp_quality = 90;          // s049: 0..100, lossy
     bool webp_lossless = false;      // s049: exact pixels (quality then sets the effort)
     int  png_level = 6;              // s050: zlib 0..9 (lossless at every level)
+    // s080: EPS (core/Eps.hpp) -- CMYK (else RGB) image data; a TIFF preview;
+    // ZIP (PostScript 3's Flate) instead of run-length (level 2).
+    bool eps_cmyk = false;
+    bool eps_preview = true;
+    bool eps_flate = false;
     bool operator==(const WriteOptions&) const = default;
 };
 bool write_png (const std::string& path, const Raster& r, std::string& error, const Progress& p = {},

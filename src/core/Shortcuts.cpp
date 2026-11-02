@@ -136,7 +136,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"File", "win.open",    {"<Ctrl>o"}, "", "Open an image or a Klimt document"},
         {"File", "win.save",    {"<Ctrl>s"}, "", "Save (.klimt)"},
         {"File", "win.save-as", {"<Ctrl><Shift>s"}, "", "Save As (.klimt)"},
-        {"File", "win.export",  {"<Ctrl><Shift>e"}, "", "Export: PNG, JPEG, TIFF, WebP; layers as ORA or PSD; PDF with type kept"},
+        {"File", "win.export",  {"<Ctrl><Shift>e"}, "", "Export: PNG, JPEG, TIFF, WebP; layers as ORA or PSD; PDF with type kept; EPS with its clipping path"},
         // s020: document tabs.
         {"File", "win.tab-close", {"<Ctrl>w"}, "", "Close the tab (asks if unsaved)"},
         {"File", "win.tab-next",  {"<Ctrl>Tab", "<Ctrl>Page_Down"}, "", "Next tab"},

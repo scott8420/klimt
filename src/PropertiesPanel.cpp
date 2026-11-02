@@ -2,6 +2,7 @@
 #include "Log.hpp"
 #include "core/Live.hpp"   // s018
 #include "core/Paths.hpp"  // s035: what a path masks
+#include "core/Clip.hpp"   // s080: the clipping path
 #include <glibmm/main.h>
 #include <gtkmm/button.h>
 #include <gtkmm/checkbutton.h>
@@ -232,6 +233,36 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
         load->set_tooltip_text("The path's area as the selection, once (Ctrl+Enter)");
         load->signal_clicked().connect([this] { if (!m_path_id.empty()) m_path_load.emit(m_path_id); });
         m_path_box.append(*load);
+        // s080: the clipping path -- for page layout (EPS, TIFF, PSD).
+        m_path_clip.set_name("properties.path.clip");
+        m_path_clip.set_tooltip_text("Where the picture is placed (InDesign, Composix), only what's inside this path shows -- "
+                                     "written into EPS, TIFF and PSD exports. One path at a time is the clipping path.");
+        m_path_clip.set_margin_top(6);
+        m_path_box.append(m_path_clip);
+        {
+            auto fl = Gtk::make_managed<Gtk::Label>("Flatness");
+            fl->set_xalign(0.0f);
+            fl->set_hexpand(true);
+            fl->set_margin_start(28);
+            m_clip_row.append(*fl);
+            m_clip_flat.set_name("properties.path.flatness");
+            m_clip_flat.set_range(0, core::clip::kMaxFlatness);
+            m_clip_flat.set_increments(0.5, 2);
+            m_clip_flat.set_digits(1);
+            m_clip_flat.set_width_chars(5);
+            m_clip_flat.set_tooltip_text("Device pixels a printer may cut a curve with straight lines -- 0: the printer's own; "
+                                         "1 - 3 for a desktop printer, 8 - 10 for a high-res press");
+            m_clip_row.append(m_clip_flat);
+            m_path_box.append(m_clip_row);
+        }
+        const auto clip_changed = [this] {
+            if (m_painting || m_path_id.empty()) return;
+            const bool on = m_path_clip.get_active();
+            core::clip::set(m_journal, m_doc, on ? m_path_id : std::string{}, m_clip_flat.get_value());
+            if (auto lg = log::get(log::Area::Shell)) lg->info("path {}: clipping path {} (flatness {})", m_path_id, on, m_clip_flat.get_value());
+        };
+        m_path_clip.signal_toggled().connect(clip_changed);
+        m_clip_flat.signal_value_changed().connect([this, clip_changed] { if (m_path_clip.get_active()) clip_changed(); });
         // Isolate: the path as a hint -- the figure it goes round.
         auto iso_head = Gtk::make_managed<Gtk::Label>();
         iso_head->set_markup("<b>Isolate</b>");
@@ -485,6 +516,12 @@ void PropertiesPanel::paint() {
                                              : "Masks " + what + (l->path_mask ? "" : " (when on)"));
         }
         m_path_select.set_active(l->path_select);
+        {   // s080: the clipping path
+            const bool is_clip = core::clip::of(m_doc) == primary();
+            m_path_clip.set_active(is_clip);
+            m_clip_flat.set_value(m_doc.image().clip_flatness);
+            m_clip_row.set_sensitive(is_clip);
+        }
         {   // s037: the strokes it holds
             std::size_t nf = 0, nb = 0;
             if (l->hints) for (const auto& st : l->hints->strokes) (st.figure ? nf : nb) += 1;

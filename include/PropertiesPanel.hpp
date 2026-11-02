@@ -126,6 +126,11 @@ private:
     Gtk::Label            m_path_info;
     Gtk::Label            m_path_target;    // what its Mask masks
     Gtk::CheckButton      m_path_show{"Show the outline"};
+    // s080: the CLIPPING PATH (core/Clip.hpp) -- this path cuts the picture
+    // out where it's placed (EPS, TIFF, PSD); the flatness with it.
+    Gtk::CheckButton      m_path_clip{"Clipping path"};
+    Gtk::SpinButton       m_clip_flat;
+    Gtk::Box              m_clip_row{Gtk::Orientation::HORIZONTAL, 6};
     sigc::signal<void(bool)> m_path_outline;
     Gtk::SpinButton       m_band;
     Gtk::SpinButton       m_soft;   // s036: Isolate's soft edge

@@ -103,6 +103,7 @@ class AboutWindow;
 class CommandPalette;
 class NewDialog;
 class NumberDialog;
+class ClipDialog;   // s080
 class ExportDialog;
 class AdjustDialog;
 class FilterDialog;
@@ -367,6 +368,7 @@ private:
     void on_path_edit(const core::path::Path& p, const std::string& label);   // category: paths: the Pen's gesture lands (one step)
     void on_path_selection(core::select::Op op);   // category: paths: Ctrl+Enter -- the active path as the selection
     void on_path_make_work();                  // category: paths: Make Path from Selection -- a new path layer (a job)
+    void on_clipping_path();                   // category: paths: s080 Select > Clipping Path... (asks which path, the flatness)
     void on_path_stroke(const core::path::Stroke& st);   // category: paths: an Isolate stroke painted on the canvas (s037)
     void on_path_isolate(const std::string& id, double band, double soft);   // category: paths: Isolate -- the figure the path goes round (a job)
     std::string path_layer() const;
@@ -402,6 +404,7 @@ private:
     std::unique_ptr<CommandPalette>  m_palette;   // same lifetime stone as About
     std::unique_ptr<NewDialog>       m_new;       // s007: same again
     std::unique_ptr<NumberDialog>    m_feather;   // s008
+    std::unique_ptr<ClipDialog>      m_clip_dialog;   // s080
     std::unique_ptr<ExportDialog>    m_export_dialog;               // s050: after Export's file name
     std::unique_ptr<SizeDialog>      m_image_size, m_canvas_size;   // s009
     std::unique_ptr<ProfileDialog>   m_profile_assign, m_profile_convert;   // s068

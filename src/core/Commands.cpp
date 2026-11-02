@@ -45,7 +45,7 @@ const std::vector<Command>& commands() {
             {"Open", "File", "win.open", "", "load file image photo png jpeg tiff", ""},
             {"Save", "File", "win.save", "", "write keep klimt", ""},
             {"Save As", "File", "win.save-as", "", "write copy rename klimt", ""},
-            {"Export", "File", "win.export", "", "png jpeg jpg tiff flatten write image", ""},
+            {"Export", "File", "win.export", "", "png jpeg jpg tiff eps postscript flatten write image", ""},
             {"Close Tab", "File", "win.tab-close", "", "close document image window", "Ctrl+W"},
             {"Next Tab", "File", "win.tab-next", "", "switch document image other", "Ctrl+Tab"},
             {"Previous Tab", "File", "win.tab-prev", "", "switch document image other back", "Ctrl+Shift+Tab"},
@@ -197,6 +197,7 @@ const std::vector<Command>& commands() {
             {"Load Path as Selection", "Select", "win.path-selection", "", "path pen bezier curve selection outline", "Ctrl+Enter"},
             {"Show / Hide Path Outline", "View", "win.path-outline", "", "path outline hide show nodes anchors extras mask effect", "Ctrl+Shift+H"},
             {"Make Path from Selection", "Select", "win.path-make-work", "", "path pen bezier trace outline vector selection to path work path layer", ""},
+            {"Clipping Path\u2026", "Select", "win.clipping-path", "", "clipping path clip eps tiff psd indesign layout cut out flatness", ""},   // s080
             {"Last Filter's Settings", "Filter", "win.filter-last-dialog", "", "filter again repeat dialog", "Ctrl+Alt+F"},
             // s019: layer styles.
             {"Layer Style: Drop Shadow", "Layer", "win.style-drop-shadow", "", "effect fx shadow", ""},

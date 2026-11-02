@@ -47,6 +47,7 @@ const char* kind_name(Kind k) {
         case Kind::ORA:   return "OpenRaster";
         case Kind::PSD:   return "Photoshop";
         case Kind::PDF:   return "PDF";
+        case Kind::EPS:   return "EPS";
         case Kind::Unknown: break;
     }
     return "";
@@ -79,6 +80,7 @@ const std::vector<ExportFormat>& export_formats() {
         {Kind::ORA, "ora", "OpenRaster (.ora) -- layers, for Krita", ".ora"},
         {Kind::PSD, "psd", "Photoshop (.psd) -- layers", ".psd"},
         {Kind::PDF, "pdf", "PDF -- type kept as type", ".pdf"},
+        {Kind::EPS, "eps", "EPS -- with its clipping path, for page layout", ".eps"},   // s080
     };
     return f;
 }

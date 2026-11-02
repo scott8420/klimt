@@ -755,8 +755,8 @@ void selftest_dirty(const Check& check) {
     {
         namespace F = klimt::formats;
         const auto kind_of = [](const std::string& n) { const auto* f = F::export_format_of_name(n); return f ? f->kind : F::Kind::Unknown; };
-        check("export formats: seven, each its own extension, found by key and kind",
-              F::export_formats().size() == 7 && F::export_format(F::Kind::PDF) && std::string(F::export_format(F::Kind::PDF)->ext) == ".pdf" &&
+        check("export formats: eight (s080: EPS), each its own extension, found by key and kind",
+              F::export_formats().size() == 8 && F::export_format(F::Kind::PDF) && std::string(F::export_format(F::Kind::PDF)->ext) == ".pdf" &&
                   F::export_format("psd") && F::export_format("psd")->kind == F::Kind::PSD && !F::export_format("exe") &&
                   !F::export_format(F::Kind::Klimt), "");
         check("export formats: the name says the format -- .jpeg / .JPG / .tiff too; none or another: nothing",

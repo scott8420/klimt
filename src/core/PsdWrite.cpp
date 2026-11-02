@@ -13,6 +13,7 @@
 #include "core/Composite.hpp"
 #include "core/Live.hpp"
 #include "core/Psd.hpp"
+#include "core/Clip.hpp"   // s080: path resources
 #include "core/PsdAdjust.hpp"
 #include "core/PsdStyles.hpp"
 #include "core/Transfer.hpp"
@@ -308,7 +309,13 @@ Plan plan(const Image& im, const std::map<Document::Id, Layer>& layers) {
     if (r.n_lookup) pl.left_out.push_back(plural(r.n_lookup, "Colour Lookup layer", "Colour Lookup layers") + " left out (its table isn't written to PSD yet)");   // s066
     if (r.n_adjust) pl.left_out.push_back(plural(r.n_adjust, "adjustment layer", "adjustment layers") + " left out");
     if (r.n_filterlayer) pl.left_out.push_back(plural(r.n_filterlayer, "filter layer", "filter layers") + " left out");
-    if (r.n_paths) pl.left_out.push_back(plural(r.n_paths, "path layer", "path layers") + " left out");
+    if (r.n_paths) {   // s080: they go as Photoshop paths (image resources), the clipping path marked
+        const bool clip = !clip::of(im, layers).empty();
+        pl.kept.push_back(plural(r.n_paths, "path layer", "path layers") + " as Photoshop paths" + (clip ? " (the clipping path marked)" : ""));
+        int masking = 0;
+        for (const auto& [id, l] : layers) masking += l.kind == Kind::Path && l.path_mask ? 1 : 0;
+        if (masking) pl.left_out.push_back(plural(masking, "path's Mask switch", "paths' Mask switches") + " left out (the path is kept)");
+    }
     if (r.n_group_fx) pl.left_out.push_back(plural(r.n_group_fx, "group's styles", "groups' styles") + " left out (a pattern overlay)");
     if (r.n_outside) pl.left_out.push_back(plural(r.n_outside, "layer's pixels", "layers' pixels") + " beyond the canvas cut off");
     if (!r.rgb) pl.left_out.push_back("written as RGB (every layer drawn as RGB)");
@@ -630,6 +637,7 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
         be32(ri, fixed); be16(ri, 1); be16(ri, 1);
         resource(1005, ri);
         if (im.icc && !im.icc->empty() && rgb) resource(1039, Bytes(im.icc->begin(), im.icc->end()));
+        put(out, clip::resources(im, layers));   // s080: the paths, the clipping path (already 8BIM blocks)
         fill(out, res);
     }
     {

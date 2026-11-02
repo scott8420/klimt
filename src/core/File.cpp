@@ -1,4 +1,5 @@
 #include "core/File.hpp"
+#include "core/Clip.hpp"   // s080: TIFF's path resources
 #include "tint/Tint.hpp"   // s071: the preview to sRGB
 #include "core/Patterns.hpp"   // s028 m4
 #include "core/Transfer.hpp"   // s022: converted()
@@ -878,6 +879,8 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
         c.image.dpi = im.value("dpi", 72.0);
         c.image.origin_x = im.value("origin_x", 0.0);   // s031: the rulers' zero point
         c.image.origin_y = im.value("origin_y", 0.0);
+        c.image.clip_path = im.value("clip_path", std::string());   // s080: the clipping path (core/Clip.hpp)
+        c.image.clip_flatness = std::clamp(im.value("clip_flatness", 0.0), 0.0, 100.0);
         if (im.contains("guides") && im["guides"].is_array())   // s032
             for (const auto& g : im["guides"]) {
                 if (!g.is_object() || !g.contains("at") || !g["at"].is_number()) continue;
@@ -1226,6 +1229,8 @@ std::optional<Contents> open(const std::string& path, std::string& error, const 
     bg.pixels = std::make_shared<const P::TileMap>(std::move(r->pixels));
     c.layers["L1"] = std::move(bg);
     c.next_id = 2;
+    if (!r->photoshop.empty())   // s080: a TIFF's paths and its clipping path -- path layers
+        clip::adopt(c, clip::parse(r->photoshop.data(), r->photoshop.size(), c.image.width, c.image.height));
     give_alpha(c);
     return c;
 }
@@ -1266,6 +1271,10 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         doc["image"]["guides"] = std::move(gs);
     }
 
+    if (!c.image.clip_path.empty() && c.layers.count(c.image.clip_path)) {   // s080: the clipping path
+        doc["image"]["clip_path"] = c.image.clip_path;
+        doc["image"]["clip_flatness"] = c.image.clip_flatness;
+    }
     if (c.image.origin_x != 0 || c.image.origin_y != 0) {   // s031
         doc["image"]["origin_x"] = c.image.origin_x;
         doc["image"]["origin_y"] = c.image.origin_y;
@@ -1552,6 +1561,7 @@ bool export_image(const std::string& path, formats::Kind kind, const Image& im,
     // The profile describes the document's mode; the flat image is RGB, so
     // only an RGB document's profile still fits it.
     if (im.icc && im.format.mode == P::Mode::RGB) r.icc = *im.icc;
+    if (kind == formats::Kind::TIFF) r.photoshop = clip::resources(im, layers);   // s080: the paths, the clipping path
     if (kind == formats::Kind::JPEG) {
         // No alpha in a JPEG: what shows through is white, as on paper.
         const P::Format f{P::Depth::U8, P::Mode::RGB, false};

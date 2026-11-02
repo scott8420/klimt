@@ -82,6 +82,10 @@ ExportDialog::ExportDialog(Gtk::Window& parent)
       m_webp_lossless("export.webp.lossless"),
       m_tiff_compression("export.tiff.compression"),
       m_ora_list("export.ora.list", Gtk::Orientation::VERTICAL, 6),
+      m_eps_colour("export.eps.colour"),
+      m_eps_encoding("export.eps.encoding"),
+      m_eps_preview("export.eps.preview"),
+      m_eps_list("export.eps.list", Gtk::Orientation::VERTICAL, 6),
       m_ok_button("export.ok", "Export"),
       m_cancel_button("export.cancel", "Cancel") {
     set_name("export");
@@ -154,6 +158,25 @@ ExportDialog::ExportDialog(Gtk::Window& parent)
         g->attach(m_tiff_compression, 1, 0);
         g->attach(*dim("TIFF keeps the document's depth and mode as they are.", true), 0, 1, 2, 1);
         m_pages.add(*g, "tiff");
+    }
+    {   // s080: EPS
+        auto* g = page();
+        g->attach(*dim("Colour"), 0, 0);
+        m_eps_colour.set_model(Gtk::StringList::create({"RGB", "CMYK"}));
+        m_eps_colour.set_hexpand(true);
+        m_eps_colour.set_tooltip_text("CMYK goes through the document's CMYK profile -- else Colour Settings' working CMYK");
+        g->attach(m_eps_colour, 1, 0);
+        g->attach(*dim("Encoding"), 0, 1);
+        m_eps_encoding.set_model(Gtk::StringList::create({"Run-length (PostScript 2 -- every RIP)", "ZIP (PostScript 3 -- smaller)"}));
+        g->attach(m_eps_encoding, 1, 1);
+        g->attach(*dim("Preview"), 0, 2);
+        m_eps_preview.set_model(Gtk::StringList::create({"TIFF (8-bit, 72 ppi)", "None"}));
+        m_eps_preview.set_tooltip_text("What a layout program shows on screen; the print uses the PostScript");
+        g->attach(m_eps_preview, 1, 2);
+        m_eps_list.set_hexpand(true);
+        m_eps_list.set_margin_top(6);
+        g->attach(m_eps_list, 0, 3, 2, 1);
+        m_pages.add(*g, "eps");
     }
     {   // ORA
         auto* g = page();
@@ -233,6 +256,27 @@ void ExportDialog::fill_ora(const core::ora::Plan& plan, formats::Kind kind) {
                                : "Layers for Krita, GIMP and MyPaint. Your .klimt keeps everything.", true));
 }
 
+void ExportDialog::fill_eps(const core::ora::Plan& plan) {   // s080
+    while (auto* c = m_eps_list.get_first_child()) m_eps_list.remove(*c);
+    const auto section = [this](const std::string& title, const std::vector<std::string>& lines) {
+        auto* t = Gtk::make_managed<Gtk::Label>(title);
+        t->set_xalign(0);
+        t->add_css_class("heading");
+        t->set_margin_top(m_eps_list.get_first_child() ? 6 : 0);
+        m_eps_list.append(*t);
+        for (const auto& s : lines) {
+            auto* l = Gtk::make_managed<Gtk::Label>("\u2022  " + s);
+            l->set_xalign(0);
+            fixed_wrap(*l);
+            m_eps_list.append(*l);
+        }
+    };
+    if (!plan.kept.empty()) section("Kept", plan.kept);
+    if (!plan.baked.empty()) section("Flattened", plan.baked);
+    if (!plan.left_out.empty()) section("Not in the file", plan.left_out);
+    m_eps_list.append(*dim("One picture at its resolution, for InDesign, QuarkXPress and Composix. Your .klimt keeps everything.", true));
+}
+
 void ExportDialog::show_kind(formats::Kind kind) {   // s051
     m_kind = kind;
     const char* page = "png";
@@ -244,6 +288,7 @@ void ExportDialog::show_kind(formats::Kind kind) {   // s051
         case formats::Kind::ORA:  page = "ora";  what = "OpenRaster"; break;
         case formats::Kind::PSD:  page = "ora";  what = "Photoshop"; break;   // s051: the same list
         case formats::Kind::PDF:  page = "ora";  what = "PDF"; break;         // s051: kept / drawn as pixels
+        case formats::Kind::EPS:  page = "eps";  what = "EPS"; break;         // s080
         default: break;
     }
     set_title(std::string("Export ") + what);
@@ -258,6 +303,7 @@ void ExportDialog::show_kind(formats::Kind kind) {   // s051
     else { m_ok_button.remove_css_class("destructive-action"); m_ok_button.add_css_class("suggested-action"); }
     if ((kind == formats::Kind::ORA || kind == formats::Kind::PSD || kind == formats::Kind::PDF) && m_plan_for)
         fill_ora(m_plan_for(kind), kind);
+    if (kind == formats::Kind::EPS && m_plan_for) fill_eps(m_plan_for(kind));   // s080
     m_pages.set_visible_child(page);
     sync();
     set_default_size(-1, -1);   // s051: measure this page afresh
@@ -277,6 +323,9 @@ void ExportDialog::ask(formats::Kind kind, const std::string& path, const std::s
     m_webp_lossless.set_active(o.webp_lossless);
     m_png_level.set_value(o.png_level);
     m_tiff_compression.set_selected(o.tiff_deflate ? 0 : 1);
+    m_eps_colour.set_selected(o.eps_cmyk ? 1 : 0);   // s080
+    m_eps_encoding.set_selected(o.eps_flate ? 1 : 0);
+    m_eps_preview.set_selected(o.eps_preview ? 0 : 1);
     show_kind(kind);
     present();
     m_ok_button.grab_focus();
@@ -292,6 +341,11 @@ formats::WriteOptions ExportDialog::read() const {
             break;
         case formats::Kind::PNG:  o.png_level = as_int(m_png_level); break;
         case formats::Kind::TIFF: o.tiff_deflate = m_tiff_compression.get_selected() == 0; break;
+        case formats::Kind::EPS:   // s080
+            o.eps_cmyk = m_eps_colour.get_selected() == 1;
+            o.eps_flate = m_eps_encoding.get_selected() == 1;
+            o.eps_preview = m_eps_preview.get_selected() == 0;
+            break;
         default: break;
     }
     return o;

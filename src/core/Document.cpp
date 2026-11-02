@@ -1,5 +1,6 @@
 #include "core/Document.hpp"
 #include "core/Paths.hpp"   // s035: the verb table
+#include "core/Clip.hpp"    // s080: the clipping path
 #include "core/Fade.hpp"   // s020: the verb table's fade
 #include "core/Transfer.hpp"   // s022: the verb table's paste
 #include "core/ColourRange.hpp"   // s024
@@ -1572,6 +1573,26 @@ const std::vector<Verb>& verbs() {
              [](Document& d) { load_text_layer(d, "Hope", 60, false); }},
         {"text_turn",       [](DocJournal& j, Document& d) { xform::turn(j, d, xform::Turn::Clockwise); },
              [](Document& d) { load_text_layer(d, "Judith", 48, false); }},
+        // s080: the clipping path.
+        {"clip_path_set", [](DocJournal& j, Document& d) { clip::set(j, d, "L6", 2); },
+             [](Document& d) { load_path_layer(d, paths::rect_path(40, 30, 300, 200)); }},
+        {"clip_path_clear", [](DocJournal& j, Document& d) { clip::set(j, d, "", 0); },
+             [](Document& d) {
+                 load_path_layer(d, paths::ellipse_path(200, 150, 120, 90));
+                 Document::Loading load(d);
+                 Image im = d.image();
+                 im.clip_path = "L6";
+                 im.clip_flatness = 4;
+                 d.set_image(im);
+             }},
+        {"clip_path_crop", [](DocJournal& j, Document& d) { canvas::crop(j, d, {20, 20, 400, 300}, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) {
+                 load_path_layer(d, paths::rect_path(40, 30, 300, 200));
+                 Document::Loading load(d);
+                 Image im = d.image();
+                 im.clip_path = "L6";
+                 d.set_image(im);
+             }},
         // s032: guides.
         {"add_guide",    [](DocJournal& j, Document& d) { canvas::add_guide(j, d, {true, 150.4}); }},
         {"move_guide",   [](DocJournal& j, Document& d) { canvas::move_guide(j, d, 0, 120); },

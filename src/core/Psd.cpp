@@ -9,6 +9,7 @@
 // own record (type 1 open / 2 closed) above them. 16-bit files keep their
 // layers in an "Lr16" block at the end of the layer section instead.
 #include "core/Psd.hpp"
+#include "core/Clip.hpp"   // s080: path resources
 #include "core/PsdAdjust.hpp"
 #include "core/PsdStyles.hpp"
 
@@ -574,10 +575,12 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
     // Image resources: the resolution and the profile; s053 m2: the global
     // light, for the styles that use it.
     int global_angle = 120, global_altitude = 30;   // Photoshop's defaults
+    std::vector<std::uint8_t> path_blocks;   // s080
     {
         const std::uint32_t len = r.u32();
         const std::size_t end = r.at + len;
         while (!r.bad && r.at + 12 <= end) {
+            const std::size_t block_at = r.at;   // s080
             if (r.str(4) != "8BIM") break;
             const int id = r.u16();
             const std::uint8_t nl = r.u8();
@@ -596,6 +599,9 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
                 global_altitude = std::clamp(r.i32(), 0, 90);
             } else if (id == 1039 && sz > 0) {   // the ICC profile
                 c.image.icc = std::make_shared<const std::vector<std::uint8_t>>(r.d + at, r.d + at + sz);
+            } else if ((id >= 2000 && id <= 2997) || id == 2999) {   // s080: paths, the clipping path -- kept whole for clip::parse
+                path_blocks.insert(path_blocks.end(), r.d + block_at, r.d + at + sz);
+                if (sz % 2) path_blocks.push_back(0);
             }
             r.seek(at + sz + (sz % 2));
         }
@@ -860,6 +866,8 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
     if (n_smart) c.notes.push_back(plural(n_smart, "smart object", "smart objects") + " read as pixels");
     if (n_unknown_blend) c.notes.push_back(plural(n_unknown_blend, "unknown blend mode", "unknown blend modes") + " shown as Normal");
     if (n_beyond) c.notes.push_back(plural(n_beyond, "layer", "layers") + " cut at the canvas edge");
+    if (!path_blocks.empty())   // s080: its paths and clipping path -- path layers
+        clip::adopt(c, clip::parse(path_blocks.data(), path_blocks.size(), c.image.width, c.image.height));
     const std::string bad = check_tree(c);
     if (!bad.empty()) { error = "a layer tree Klimt can't hold: " + bad; return std::nullopt; }
     p.at(1);

@@ -8,6 +8,7 @@
 #include "core/Ora.hpp"
 #include <gtkmm/filelauncher.h>
 #include "core/Pdf.hpp"        // s051: Export as PDF
+#include "core/Eps.hpp"        // s080: Export as EPS
 #include "core/Psd.hpp"        // s049: Export as OpenRaster
 #include <glibmm/miscutils.h>
 #include "Log.hpp"
@@ -581,6 +582,7 @@ void Shell::export_asked(const std::string& chosen, formats::Kind kind, bool as_
         return k == formats::Kind::ORA   ? core::ora::plan(im, ls)
              : k == formats::Kind::PSD   ? core::psd::plan(im, ls)
              : k == formats::Kind::PDF   ? core::pdf::plan(im, ls).list
+             : k == formats::Kind::EPS   ? core::eps::plan(im, ls)   // s080
                                          : core::ora::Plan{};
     });
 }
@@ -597,6 +599,7 @@ void Shell::export_to(const std::string& path, formats::Kind kind, const formats
         const bool ok = kind == formats::Kind::ORA   ? core::ora::save(path, im, layers, err, notes, progress_of(t))
                         : kind == formats::Kind::PSD ? core::psd::save(path, im, layers, err, notes, progress_of(t))   // s051
                         : kind == formats::Kind::PDF ? core::pdf::save(path, im, layers, fs::path(path).stem().string(), err, notes, progress_of(t))
+                        : kind == formats::Kind::EPS ? core::eps::save(path, im, layers, fs::path(path).stem().string(), o, err, notes, progress_of(t))   // s080
                                                      : core::file::export_image(path, kind, im, layers, err, progress_of(t), o);
         if (!ok) {
             if (t.cancelled()) return [] {};

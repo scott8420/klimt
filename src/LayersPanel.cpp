@@ -1,5 +1,6 @@
 #include "LayersPanel.hpp"
 #include "Log.hpp"
+#include "core/Clip.hpp"   // s080: the clipping path tag
 
 #include <gtkmm/entry.h>
 #include <gtkmm/eventcontrollerfocus.h>
@@ -465,6 +466,7 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
     if (l.kind == core::Kind::Path) {   // s035: its switches
         if (l.path_mask) info += "mask ↓";
         if (l.path_select) info += std::string(info.empty() ? "" : " · ") + "selection";
+        if (m_doc.image().clip_path == id && core::clip::of(m_doc) == id) info += std::string(info.empty() ? "" : " · ") + "clipping path";   // s080
     }
     if (l.blend != core::Blend::Normal && l.blend != core::Blend::PassThrough)
         info += std::string(core::blend_label(l.blend));

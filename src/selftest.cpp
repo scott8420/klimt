@@ -125,6 +125,7 @@ void selftest_psd(const std::function<void(const std::string&, bool, const std::
 void selftest_psd_adjust(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s053
 void selftest_psd_styles(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s053 m2
 void selftest_pdf(const std::function<void(const std::string&, bool, const std::string&)>& check);       // s051
+void selftest_clip(const std::function<void(const std::string&, bool, const std::string&)>& check);      // s080
 void selftest_render(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s044
 void selftest_paths(const std::function<void(const std::string&, bool, const std::string&)>& check);     // s035
 void selftest_isolate(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s035 m7
@@ -1252,6 +1253,7 @@ int main() {
     selftest_psd_adjust([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s053
     selftest_psd_styles([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s053 m2
     selftest_pdf([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s051
+    selftest_clip([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s080
     selftest_dirty([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_select([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_paint([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });

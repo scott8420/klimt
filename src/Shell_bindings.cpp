@@ -331,6 +331,7 @@ void Shell::bind_actions() {  // bindings
     });
     m_layer_acts["path-selection"] = add_action("path-selection", [this] { on_path_selection(core::select::Op::Replace); });
     m_layer_acts["path-make-work"] = add_action("path-make-work", [this] { on_path_make_work(); });
+    m_layer_acts["clipping-path"] = add_action("clipping-path", [this] { on_clipping_path(); });   // s080
     m_canvas.signal_guide_moved().connect([this](int i, double at) {
         if (i >= 0) core::canvas::move_guide(m_journal, m_doc, static_cast<std::size_t>(i), at);
     });

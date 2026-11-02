@@ -205,6 +205,13 @@ struct Image {
     double        origin_x = 0, origin_y = 0;
     // s032: the GUIDES (docs/guides.md) -- carried like the zero point.
     std::vector<Guide> guides;
+    // s080: the CLIPPING PATH (docs/paths.md "Clipping path"; core/Clip.hpp)
+    // -- the path layer whose outline cuts the picture out where it is placed
+    // (EPS, and the path resources of TIFF / PSD); "" none. A path layer gone
+    // (deleted) leaves it inert; its undo brings it back. `clip_flatness`:
+    // device pixels, 0 .. 100 (0: the printer's own).
+    std::string clip_path;
+    double      clip_flatness = 0;
     bool operator==(const Image&) const = default;
 };
 

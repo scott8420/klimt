@@ -7,6 +7,7 @@
 #include "CommandPalette.hpp"   // ditto
 #include "NewDialog.hpp"        // ditto
 #include "NumberDialog.hpp"
+#include "ClipDialog.hpp"   // s080: the destructor sees it
 #include "ExportDialog.hpp"   // s050
 #include "AdjustDialog.hpp"
 #include "FilterDialog.hpp"   // s013     // ditto

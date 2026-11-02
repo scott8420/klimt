@@ -115,6 +115,10 @@ std::optional<Raster> read_tiff(const std::string& path, std::string& error, con
         void* prof = nullptr;
         if (TIFFGetField(t, TIFFTAG_ICCPROFILE, &len, &prof) && prof && len)
             out.icc.assign(static_cast<std::uint8_t*>(prof), static_cast<std::uint8_t*>(prof) + len);
+        std::uint32_t plen = 0;   // s080: Photoshop's resources (paths, the clipping path)
+        void* pdata = nullptr;
+        if (TIFFGetField(t, TIFFTAG_PHOTOSHOP, &plen, &pdata) && pdata && plen)
+            out.photoshop.assign(static_cast<std::uint8_t*>(pdata), static_cast<std::uint8_t*>(pdata) + plen);
         float xr = 0;
         std::uint16_t unit = RESUNIT_INCH;
         TIFFGetFieldDefaulted(t, TIFFTAG_RESOLUTIONUNIT, &unit);
@@ -245,6 +249,8 @@ bool write_tiff(const std::string& path, const Raster& r, std::string& error, co
             TIFFSetField(t, TIFFTAG_RESOLUTIONUNIT, static_cast<std::uint16_t>(RESUNIT_INCH));
         }
         if (!r.icc.empty()) TIFFSetField(t, TIFFTAG_ICCPROFILE, static_cast<std::uint32_t>(r.icc.size()), r.icc.data());
+        if (!r.photoshop.empty())   // s080: the paths, for InDesign / Composix
+            TIFFSetField(t, TIFFTAG_PHOTOSHOP, static_cast<std::uint32_t>(r.photoshop.size()), r.photoshop.data());
         TIFFSetField(t, TIFFTAG_SOFTWARE, "Klimt");
         (void)colours;
         std::vector<std::uint8_t> row(static_cast<std::size_t>(src.width()) * static_cast<std::size_t>(f.bytes_per_pixel()));
