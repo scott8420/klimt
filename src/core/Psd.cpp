@@ -188,6 +188,7 @@ struct Record {
     std::vector<Channel> channels;
     std::string   blend_key = "norm";
     std::uint8_t  opacity = 255, clipping = 0, flags = 0;
+    BlendIf       blend_if;   // s072
     Rect          mask_box;
     bool          has_mask = false;
     std::uint8_t  mask_default = 0, mask_flags = 0;
@@ -329,9 +330,20 @@ LayerInfo read_layer_info(Reader& r, std::size_t end, int bps, std::string& why,
             rec.mask_flags = r.u8();
         }
         r.seek(mask_end);
-        // Blending ranges ("Blend If") -- not read.
+        // Blending ranges ("Blend If") -- s072: gray and the three channels.
         const std::uint32_t blen = r.u32();
-        r.skip(blen);
+        {
+            const std::size_t bend = r.at + blen;
+            for (std::size_t k = 0; k < 4 && r.at + 8 <= bend; ++k)
+                for (auto* q : {&rec.blend_if.self[k], &rec.blend_if.under[k]}) {
+                    int v[4];
+                    for (int& x : v) x = r.u8();
+                    q->lo0 = std::min(v[0], v[1]); q->lo1 = std::max(v[0], v[1]);   // either order on disk
+                    q->hi0 = std::min(v[2], v[3]); q->hi1 = std::max(v[2], v[3]);
+                    if (q->hi0 < q->lo1) *q = BlendRange{};   // nonsense: passing
+                }
+            r.seek(bend);
+        }
         // The Pascal name, padded to 4 with its length byte.
         const std::uint8_t nlen = r.u8();
         rec.name = utf8_of_macroman(r.str(nlen));
@@ -666,6 +678,7 @@ std::optional<file::Contents> open(const std::string& path, std::string& error, 
         L.name = rec.name;
         L.visible = !(rec.flags & 2);
         L.opacity = percent(rec.opacity);
+        L.blend_if = rec.blend_if;   // s072
         // s053 m2: styles live on pixel layers and groups; on an adjustment layer (Klimt's have none) left out.
         if (rec.effects) {
             const auto st = rec.adjust ? std::nullopt : rec.fx.result(global_angle, global_altitude);

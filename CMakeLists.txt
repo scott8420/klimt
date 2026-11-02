@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s071")
+set(KLIMT_BUILD "s072")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -274,6 +274,7 @@ add_executable(klimt
     src/Registry.cpp
     src/Wheel.cpp             # s036: the wheel scrolls the panel
     src/ShearCurve.cpp        # s044: Shear's curve
+    src/BlendIfBar.cpp        # s072: Blend If's slider
     src/Log.cpp
 )
 target_include_directories(klimt PRIVATE include ${GTKMM_INCLUDE_DIRS} ${ADW_INCLUDE_DIRS})

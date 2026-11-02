@@ -7,6 +7,7 @@
 #include "core/Live.hpp"
 #include "core/StylesRender.hpp"
 #include "core/Patterns.hpp"   // s028 m4
+#include "core/Psd.hpp"        // s072: Blend If in a PSD
 
 #include <cmath>
 #include <filesystem>
@@ -589,5 +590,74 @@ void selftest_styles(const Check& check) {
         check("file: your pattern kept -- its name, size, pixels", saved && back && bp.image && bp.user == "Half" && bp.image->width() == 4 &&
                                                                     bp.image->height() == 2 && bp.image->get(1, 1) == st.pattern.image->get(1, 1) &&
                                                                     bp.image->get(3, 0) == st.pattern.image->get(3, 0), ferr);
+    }
+
+    std::cout << "\n-- Blend If (s072) --\n";
+    {
+        core::BlendRange r;
+        check("range: all passing by default; a fade in, a fade out, hidden past the ends",
+              r.all() && near(r.weight(0), 1) && near(r.weight(255), 1) && [] {
+                  core::BlendRange q{20, 60, 180, 220};
+                  return near(q.weight(10), 0) && near(q.weight(40), 0.5) && near(q.weight(100), 1) && near(q.weight(200), 0.5) && near(q.weight(230), 0) && !q.all();
+              }(), "");
+        core::BlendIf b;
+        const float white[3] = {1, 1, 1}, black[3] = {0, 0, 0}, red[3] = {1, 0, 0};
+        check("blend if: none -- weight 1", !b.any() && near(b.weight(white, black), 1), "");
+        b.self[0] = {0, 0, 128, 128};   // this layer's lights hidden (gray)
+        b.under[1] = {0, 0, 100, 100};  // where the red under it is past 100 -- hidden
+        check("blend if: this layer's gray, the underlying red channel, multiplied",
+              b.any() && near(b.weight(white, black), 0) && near(b.weight(black, black), 1) && near(b.weight(black, red), 0), "");
+
+        core::live::clear_cache();
+        core::Document d;
+        core::DocJournal j{d};
+        d.set_door([&] { return j.open(); });
+        L::load_fixture(d);   // white Background, L4 the red square (100, 100) 200 x 150
+        const auto seen = [&](int x, int y) { return core::sample_composite(d.image(), d.snapshot(), x, y, 0); };
+        core::BlendIf hide_red;
+        hide_red.self[1] = {0, 0, 128, 128};   // red past 128 in THIS layer: hidden
+        check("set_blend_if: ONE step", L::set_blend_if(j, d, "L4", hide_red) && j.size() == 1 && j.undo_label().find("Blend If") != std::string::npos, j.undo_label());
+        check("blend if: the red square vanishes (white shows through)", seen(200, 175).g > 0.99f && seen(200, 175).b > 0.99f, num(seen(200, 175).g));
+        auto split = hide_red;
+        split.self[1] = {0, 0, 127, 255};
+        L::set_blend_if(j, d, "L4", split);
+        check("blend if: a split slider -- red at 255, the fade's end: hidden; presses folded", j.size() == 1 && seen(200, 175).g > 0.99f, num(seen(200, 175).g));
+        core::BlendIf under_white;
+        under_white.under[0] = {0, 0, 200, 200};   // where what's under is lighter than 200: hidden
+        L::set_blend_if(j, d, "L4", under_white);
+        check("blend if: the underlying white hides the red too", seen(200, 175).g > 0.99f, "");
+        j.undo();
+        check("blend if: undone -- the red back", seen(200, 175).r > 0.99f && seen(200, 175).g < 0.01f && !d.get("L4")->blend_if.any(), num(seen(200, 175).g));
+        core::BlendIf junk;
+        junk.self[0] = {300, -5, 10, 5};
+        L::set_blend_if(j, d, "L4", junk);
+        const auto& kept = d.get("L4")->blend_if.self[0];
+        check("set_blend_if: points put in order, in 0..255", kept.lo0 <= kept.lo1 && kept.lo1 <= kept.hi0 && kept.hi0 <= kept.hi1 && kept.hi1 <= 255 && kept.lo0 >= 0, "");
+        j.undo();
+        const auto g = L::add_group(j, d, "Folder");
+        check("set_blend_if: refused on a Pass Through group", !g.empty() && !L::set_blend_if(j, d, g, hide_red) && !core::layers::blend_if_allowed(*d.get(g)), "");
+        j.undo();
+        L::set_blend_if(j, d, "L4", hide_red);
+        // The file keeps it.
+        namespace fs = std::filesystem;
+        const auto dir = fs::temp_directory_path() / ("klimt_selftest_blendif_" + std::to_string(::getpid()));
+        fs::create_directories(dir);
+        core::file::Contents c;
+        c.image = d.image();
+        c.layers = d.snapshot();
+        c.next_id = d.next_id();
+        std::string err;
+        const auto kp = (dir / "bif.klimt").string();
+        const bool saved = core::file::save_klimt(kp, c, err);
+        const auto back = saved ? core::file::open(kp, err) : std::nullopt;
+        check("file: Blend If kept in the .klimt", back && back->layers.count("L4") && back->layers.at("L4").blend_if == hide_red, err);
+        std::vector<std::string> notes;
+        const auto pp = (dir / "bif.psd").string();
+        const bool psd_ok = klimt::core::psd::save(pp, d.image(), d.snapshot(), err, notes);
+        const auto pb = psd_ok ? core::file::open(pp, err) : std::nullopt;
+        bool psd_kept = false;
+        if (pb) for (const auto& [id, l] : pb->layers) psd_kept = psd_kept || l.blend_if == hide_red;
+        check("psd: Blend If written as its blending ranges and read back", psd_kept, err);
+        fs::remove_all(dir);
     }
 }

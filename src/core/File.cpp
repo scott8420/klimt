@@ -1058,6 +1058,21 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             L.locks = static_cast<std::uint8_t>(l.value("locks", 0) & lock::Mask);
             L.opacity = l.value("opacity", 100);
             L.fill = l.value("fill", 100);
+            if (l.contains("blend_if") && l["blend_if"].is_object()) {   // s072
+                for (const auto& [key, rs] : {std::pair<const char*, std::array<BlendRange, 4>*>{"self", &L.blend_if.self}, {"under", &L.blend_if.under}}) {
+                    const auto& bi = l["blend_if"];
+                    if (!bi.contains(key) || !bi[key].is_array()) continue;
+                    for (std::size_t c = 0; c < 4 && c < bi[key].size(); ++c) {
+                        const auto& q = bi[key][c];
+                        if (!q.is_array() || q.size() != 4) continue;
+                        auto& r = (*rs)[c];
+                        r.lo0 = std::clamp(q[0].get<int>(), 0, 255);
+                        r.lo1 = std::clamp(q[1].get<int>(), r.lo0, 255);
+                        r.hi0 = std::clamp(q[2].get<int>(), r.lo1, 255);
+                        r.hi1 = std::clamp(q[3].get<int>(), r.hi0, 255);
+                    }
+                }
+            }
             const auto blend = blend_from_key(l.value("blend", std::string("normal")));
             if (!blend) { error = "a blend mode this Klimt doesn't know"; return std::nullopt; }
             L.blend = *blend;
@@ -1296,6 +1311,15 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
                   {"parent", L.parent}, {"pos", L.pos}, {"visible", L.visible}, {"locks", L.locks},
                   {"opacity", L.opacity}, {"fill", L.fill}, {"blend", std::string(blend_key(L.blend))},
                   {"clipped", L.clipped}};
+        if (L.blend_if.any()) {   // s072: [gray, r, g, b] x [lo0, lo1, hi0, hi1]
+            json bi = json::object();
+            for (const auto& [key, rs] : {std::pair<const char*, const std::array<BlendRange, 4>*>{"self", &L.blend_if.self}, {"under", &L.blend_if.under}}) {
+                json a = json::array();
+                for (const auto& r : *rs) a.push_back({r.lo0, r.lo1, r.hi0, r.hi1});
+                bi[key] = a;
+            }
+            l["blend_if"] = bi;
+        }
         if (L.pixels && draws_pixels(L.kind) && !write_map(l, *L.pixels, "tiles", "outside")) return false;
         if (L.kind == Kind::Text && L.text) l["text"] = text_json(*L.text);   // s046
         if (L.kind == Kind::Adjustment) l["adjust"] = adjust_json(L.adjust);   // s013

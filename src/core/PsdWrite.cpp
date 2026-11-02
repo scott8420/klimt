@@ -512,9 +512,19 @@ bool save(const std::string& path, const Image& im, const std::map<Document::Id,
         } else {
             be32(info, 0);
         }
-        // Blending ranges: gray and the three channels, all passing (Photoshop's defaults).
+        // Blending ranges: gray and the three channels (s072: the layer's Blend
+        // If; all passing otherwise -- Photoshop's defaults), source then
+        // destination, each black low / high, white low / high; a fifth pair
+        // for the alpha channel, passing.
         be32(info, 40);
-        for (int k = 0; k < 5; ++k) { be16(info, 0x0000); be16(info, 0xFFFF); be16(info, 0x0000); be16(info, 0xFFFF); }
+        {
+            const BlendIf bi = r.layer && !r.baked ? r.layer->blend_if : BlendIf{};
+            for (std::size_t k = 0; k < 5; ++k) {
+                const BlendRange s = k < 4 ? bi.self[k] : BlendRange{}, d = k < 4 ? bi.under[k] : BlendRange{};
+                for (const auto& q : {s, d})
+                    for (const int v : {q.lo0, q.lo1, q.hi0, q.hi1}) info.push_back(static_cast<std::uint8_t>(std::clamp(v, 0, 255)));
+            }
+        }
         const auto cps = code_points(r.name);
         {
             const std::string pas = macroman_of(cps);

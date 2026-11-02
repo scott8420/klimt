@@ -187,6 +187,21 @@ struct Walker {
                               col * kTile, row * kTile + y);
     }
 
+    // s072: BLEND IF -- each pixel of `src` (premultiplied) faded by where
+    // its colour and the colour under it (dst) fall in the layer's ranges.
+    static void blend_if(const BlendIf& b, std::vector<float>& src, const std::vector<float>& dst) {
+        for (std::size_t i = 0; i < kPx; ++i) {
+            float* s = src.data() + i * 4;
+            if (s[3] <= 0.f) continue;
+            const float* d = dst.data() + i * 4;
+            const float ss[3] = {s[0] / s[3], s[1] / s[3], s[2] / s[3]};
+            const float da = d[3] > 0.f ? d[3] : 1.f;
+            const float dd[3] = {d[0] / da, d[1] / da, d[2] / da};
+            const float w = b.weight(ss, dd);
+            if (w < 1.f) for (int c = 0; c < 4; ++c) s[c] *= w;
+        }
+    }
+
     // The base a clipped layer clips to: the nearest unclipped sibling below.
     const Layer* clip_base(const Document::Id& id) const {
         const auto& sibs = kids.at(layers.at(id).parent);
@@ -228,12 +243,19 @@ struct Walker {
             res = mixed.data();
         }
         float* d = dst.data();
+        const bool bif = l.blend_if.any();
         for (std::size_t i = 0; i < kPx; ++i, d += 4) {
             float w = k;
             if (hp) w *= 1.f - std::clamp(hp[i], 0.f, 1.f);
             if (cp) w *= cp[i * 4 + 3];
             if (w <= 0.f) continue;
             const float* r = res + i * 4;
+            if (bif) {   // s072: Blend If -- the adjusted colour as "this layer"
+                const float da = d[3] > 0.f ? d[3] : 1.f;
+                const float ss[3] = {r[0] / da, r[1] / da, r[2] / da}, dd[3] = {d[0] / da, d[1] / da, d[2] / da};
+                w *= l.blend_if.weight(ss, dd);
+                if (w <= 0.f) continue;
+            }
             d[0] += (r[0] - d[0]) * w;
             d[1] += (r[1] - d[1]) * w;
             d[2] += (r[2] - d[2]) * w;
@@ -271,6 +293,7 @@ struct Walker {
                             const float k = shows(px);
                             for (int c = 0; c < 4; ++c) tmp[px * 4 + static_cast<std::size_t>(c)] *= k;
                         }
+                    if (l.blend_if.any()) blend_if(l.blend_if, tmp, dst);   // s072
                     blend_into(l.blend, tmp, dst, op);
                 }
                 continue;
@@ -283,7 +306,7 @@ struct Walker {
             if (l.kind == Kind::Path) continue;     // s035: a path layer draws nothing (its mask: live::effective)
             // s010 m3: one opaque colour at full strength, Normal, unclipped:
             // it simply IS what's below from here up.
-            if (l.blend == pixel::Blend::Normal && !l.clipped && l.opacity >= 100 && l.fill >= 100 && l.pixels &&
+            if (l.blend == pixel::Blend::Normal && !l.clipped && l.opacity >= 100 && l.fill >= 100 && l.pixels && !l.blend_if.any() &&
                 !(l.mask && l.mask_on && l.mask->tile(col, row)) &&
                 l.pixels->format().mode == pixel::Mode::RGB) {
                 const auto t = l.pixels->tile(col, row);
@@ -310,6 +333,7 @@ struct Walker {
                         for (int c = 0; c < 4; ++c) src[i * 4 + static_cast<std::size_t>(c)] *= mask[i * 4 + 3];
                 }
             }
+            if (l.blend_if.any()) blend_if(l.blend_if, src, dst);   // s072
             blend_into(l.blend, src, dst, op * static_cast<float>(l.fill) / 100.f);
         }
     }

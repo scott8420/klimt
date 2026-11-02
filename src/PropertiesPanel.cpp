@@ -33,6 +33,9 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
       m_blend("properties.blend"),
       m_opacity("properties.opacity", Gtk::Orientation::HORIZONTAL),
       m_fill("properties.fill", Gtk::Orientation::HORIZONTAL),
+      m_bif_channel("properties.blend-if.channel"),
+      m_bif_self("properties.blend-if.self"),
+      m_bif_under("properties.blend-if.under"),
       m_lock_alpha("properties.lock.alpha"),
       m_lock_pixels("properties.lock.pixels"),
       m_lock_position("properties.lock.position"),
@@ -123,6 +126,41 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
     label("Lock", 3);
     grid->attach(*locks, 1, 3);
     m_fields.append(*grid);
+
+    // s072: BLEND IF -- folded away until wanted; the channel picks which
+    // ranges the two bars show (Gray, Red, Green, Blue -- each its own).
+    {
+        auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+        box->set_margin_top(4);
+        m_bif_channel.set_model(Gtk::StringList::create({"Gray", "Red", "Green", "Blue"}));
+        m_bif_channel.set_tooltip_text("The channel the ranges below are of -- each has its own; all of them apply");
+        m_bif_channel.property_selected().signal_changed().connect([this] {
+            const auto c = static_cast<int>(std::min<guint>(3, m_bif_channel.get_selected()));
+            m_bif_self.set(m_bif_shown.self[static_cast<std::size_t>(c)], c);
+            m_bif_under.set(m_bif_shown.under[static_cast<std::size_t>(c)], c);
+            blend_if_changed();
+        });
+        box->append(m_bif_channel);
+        const auto bar = [&](const char* title, widgets::BlendIfBar& b, Gtk::Label& v) {
+            auto* head = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            auto* t = Gtk::make_managed<Gtk::Label>(title);
+            t->add_css_class("dim-label");
+            t->set_xalign(0.0f);
+            t->set_hexpand(true);
+            head->append(*t);
+            v.add_css_class("dim-label");
+            v.add_css_class("numeric");
+            head->append(v);
+            box->append(*head);
+            box->append(b);
+            b.signal_changed().connect([this] { blend_if_changed(); });
+        };
+        bar("This Layer", m_bif_self, m_bif_self_v);
+        bar("Underlying Layer", m_bif_under, m_bif_under_v);
+        m_bif.set_child(*box);
+        m_bif.set_name("properties.blend-if");
+        m_fields.append(m_bif);
+    }
 
     // s013: an adjustment layer's controls -- live, no dialog. A drag on a
     // slider or the graph is ONE step; presses fold.
@@ -463,6 +501,7 @@ void PropertiesPanel::paint() {
     m_opacity.set_sensitive(editable && l->kind != core::Kind::Path);
     m_fill.set_sensitive(editable && l->kind != core::Kind::Path);
     m_later.set_visible(!adj && !flt && !pth);
+    paint_blend_if(*l);   // s072
     paint_edges(*l);  // s036
     paint_live(*l);   // s018
     // s019: one pixel layer picked: its styles.
@@ -800,6 +839,36 @@ void PropertiesPanel::on_opacity() {
     const int p = static_cast<int>(m_opacity.get_value() + 0.5);
     if (m_journal.in_gesture()) L::opacity_to(m_journal, m_doc, m_sel, p);
     else if (!L::set_opacity(m_journal, m_doc, m_sel, p)) paint();
+}
+
+// s072: Blend If -- the primary layer's ranges in the two bars; a drag's
+// changes are ONE step (merge key "blendif:<id>").
+void PropertiesPanel::paint_blend_if(const core::Layer& l) {
+    const bool ok = m_sel.size() == 1 && core::layers::blend_if_allowed(l);
+    m_bif.set_visible(ok);
+    if (!ok) return;
+    m_bif.set_sensitive(!m_doc.locked_all(primary()));
+    m_bif_shown = l.blend_if;
+    const auto c = static_cast<int>(std::min<guint>(3, m_bif_channel.get_selected()));
+    m_bif_self.set(l.blend_if.self[static_cast<std::size_t>(c)], c);
+    m_bif_under.set(l.blend_if.under[static_cast<std::size_t>(c)], c);
+    const auto say = [](const core::BlendRange& r) {
+        const auto pt = [](int a, int b) { return a == b ? std::to_string(a) : std::to_string(a) + "/" + std::to_string(b); };
+        return pt(r.lo0, r.lo1) + "  " + pt(r.hi0, r.hi1);
+    };
+    m_bif_self_v.set_text(say(m_bif_self.value()));
+    m_bif_under_v.set_text(say(m_bif_under.value()));
+    m_bif.set_label(l.blend_if.any() ? "Blend If  ·  on" : "Blend If");
+}
+
+void PropertiesPanel::blend_if_changed() {
+    if (m_painting || m_sel.size() != 1) return;
+    const auto c = static_cast<std::size_t>(std::min<guint>(3, m_bif_channel.get_selected()));
+    core::BlendIf b = m_bif_shown;
+    b.self[c] = m_bif_self.value();
+    b.under[c] = m_bif_under.value();
+    if (b == m_bif_shown) { paint(); return; }
+    core::layers::set_blend_if(m_journal, m_doc, primary(), b);
 }
 
 void PropertiesPanel::on_fill() {

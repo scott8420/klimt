@@ -20,6 +20,8 @@
 #include <gtkmm/togglebutton.h>
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/label.h>
+#include <gtkmm/expander.h>
+#include "widgets/BlendIfBar.hpp"
 
 #include <string>
 #include <vector>
@@ -75,6 +77,8 @@ private:
     void on_opacity();
     void on_fill();
     void on_lock();
+    void paint_blend_if(const core::Layer& l);   // s072
+    void blend_if_changed();
     void paint_live(const core::Layer& l);   // s018: the stack's rows
     void build_edges();                      // s036: the mask's edges
     void paint_edges(const core::Layer& l);
@@ -94,6 +98,12 @@ private:
     widgets::Scale        m_fill;
     widgets::ToggleButton m_lock_alpha, m_lock_pixels, m_lock_position, m_lock_all;
     widgets::Label        m_later;
+    // s072: Blend If -- the channel, This Layer, Underlying Layer.
+    Gtk::Expander         m_bif{"Blend If"};
+    widgets::DropDown     m_bif_channel;
+    widgets::BlendIfBar   m_bif_self, m_bif_under;
+    Gtk::Label            m_bif_self_v, m_bif_under_v;
+    core::BlendIf         m_bif_shown;
     AdjustEditor          m_adjust;     // s013
     Id                    m_adjust_id;  // the layer m_adjust shows
     FilterLayerEditor     m_filter;     // s030: a filter layer's settings

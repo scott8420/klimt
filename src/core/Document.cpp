@@ -20,6 +20,30 @@
 
 namespace klimt::core {
 
+// s072: Blend If.
+float BlendRange::weight(float v) const {
+    if (v < lo0) return 0.f;
+    if (v < lo1) return (v - static_cast<float>(lo0)) / static_cast<float>(std::max(1, lo1 - lo0));
+    if (v <= hi0) return 1.f;
+    if (v <= hi1) return (static_cast<float>(hi1) - v) / static_cast<float>(std::max(1, hi1 - hi0));
+    return 0.f;
+}
+bool BlendIf::any() const {
+    for (std::size_t c = 0; c < 4; ++c) if (!self[c].all() || !under[c].all()) return true;
+    return false;
+}
+float BlendIf::weight(const float* s, const float* d) const {
+    float w = 1.f;
+    const auto one = [&w](const std::array<BlendRange, 4>& r, const float* p) {
+        const float g = (0.3f * p[0] + 0.59f * p[1] + 0.11f * p[2]) * 255.f;
+        if (!r[0].all()) w *= r[0].weight(g);
+        for (std::size_t c = 1; c < 4 && w > 0.f; ++c) if (!r[c].all()) w *= r[c].weight(p[c - 1] * 255.f);
+    };
+    one(self, s);
+    if (w > 0.f) one(under, d);
+    return w;
+}
+
 // ── blend modes ─────────────────────────────────────────────────────────────
 const std::vector<BlendInfo>& blend_modes() {
     static const std::vector<BlendInfo> t = {
@@ -915,6 +939,25 @@ bool set_fill(DocJournal& j, Document& d, const Id& id, int percent) {
     if (d.locked_all(id)) return false;
     return edit(j, d, id, "Fill of " + quoted(d, id),
                 [&](Layer& l) { l.fill = std::clamp(percent, 0, 100); }, "fill:" + id);
+}
+
+bool blend_if_allowed(const Layer& l) {
+    return l.kind == Kind::Pixel || l.kind == Kind::Text || l.kind == Kind::Adjustment ||
+           (l.kind == Kind::Group && l.blend != Blend::PassThrough);
+}
+
+bool set_blend_if(DocJournal& j, Document& d, const Id& id, const BlendIf& b) {
+    const auto l = d.get(id);
+    if (!l || d.locked_all(id) || !blend_if_allowed(*l) || l->blend_if == b) return false;
+    BlendIf v = b;
+    for (auto* rs : {&v.self, &v.under})
+        for (auto& r : *rs) {   // in order, in 0..255
+            r.lo0 = std::clamp(r.lo0, 0, 255);
+            r.lo1 = std::clamp(r.lo1, r.lo0, 255);
+            r.hi1 = std::clamp(r.hi1, r.lo1, 255);
+            r.hi0 = std::clamp(r.hi0, r.lo1, r.hi1);
+        }
+    return edit(j, d, id, "Blend If of " + quoted(d, id), [&](Layer& x) { x.blend_if = v; }, "blendif:" + id);
 }
 
 void opacity_begin(DocJournal& j, Document& d, const Id& id) {

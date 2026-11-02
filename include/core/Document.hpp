@@ -37,6 +37,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <array>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -90,6 +91,28 @@ struct MaskEdges {
     bool operator==(const MaskEdges&) const = default;
 };
 
+// s072: BLEND IF (Photoshop's Blending Options) -- where THIS layer's own
+// colour, or the colour UNDERLYING it, falls outside a range, the layer fades
+// out. A range per channel -- [0] Gray (0.3 R + 0.59 G + 0.11 B), [1..3] R,
+// G, B -- of four 0..255 points: below lo0 hidden, lo0..lo1 fading in, lo1..
+// hi0 shown, hi0..hi1 fading out, above hi1 hidden (Alt-dragging a slider
+// splits it: lo0 < lo1, hi0 < hi1). Every channel's ranges multiply. On
+// pixel, text, adjustment layers and groups that aren't Pass Through. In a
+// Gray / CMYK / Lab document the channels are those of the composite, sRGB.
+struct BlendRange {
+    int lo0 = 0, lo1 = 0, hi0 = 255, hi1 = 255;
+    bool all() const { return lo1 <= 0 && hi0 >= 255; }
+    float weight(float v) const;   // v 0..255
+    bool operator==(const BlendRange&) const = default;
+};
+struct BlendIf {
+    std::array<BlendRange, 4> self, under;
+    bool any() const;
+    // `s`, `d`: straight RGB 0..1 -- this layer's colour and the colour under it.
+    float weight(const float* s, const float* d) const;
+    bool operator==(const BlendIf&) const = default;
+};
+
 struct Layer {
     Kind          kind    = Kind::Pixel;
     std::string   name;
@@ -101,6 +124,7 @@ struct Layer {
     int           fill    = 100;       // 0..100, the content only (not styles)
     Blend         blend   = Blend::Normal;   // a group starts PassThrough
     bool          clipped = false;     // clipped to the base below it
+    BlendIf       blend_if;            // s072: Blend If (all passing: none)
     // s006: the layer's PIXELS -- an immutable tile map (libs/pixel), shared
     // by pointer. nullptr = fully transparent (a new layer, a group). An edit
     // makes a new map that shares every untouched tile, so == compares the
@@ -372,6 +396,10 @@ bool set_locks(DocJournal& j, Document& d, const Id& id, std::uint8_t locks);
 // merge window fold into one step (merge key "opacity:<id>", "fill:<id>").
 bool set_opacity(DocJournal& j, Document& d, const Id& id, int percent);
 bool set_fill(DocJournal& j, Document& d, const Id& id, int percent);
+// s072: Blend If -- one step (a slider's drag merges into it); refused on a
+// locked layer, a Pass Through group, a path or filter layer, or no change.
+bool set_blend_if(DocJournal& j, Document& d, const Id& id, const BlendIf& b);
+bool blend_if_allowed(const Layer& l);
 // The same on a whole SELECTION, as ONE step (s005; WEAKNESSES 5 -- Photoshop
 // sets them on every selected layer). Layers inside an All lock are skipped
 // (and so are layers Pass Through can't apply to); refused when none is left.
