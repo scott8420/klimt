@@ -332,6 +332,67 @@ void selftest_transform(const Check& check) {
             check("projective: ... stays type", l && l->kind == core::Kind::Text && l->text, "");
         }
     }
+
+    // ── s074: Warp -- a 4 x 4 Bezier mesh ───────────────────────────────────
+    std::cout << "\n-- transform: warp (s074) --\n";
+    {
+        const P::Rect box{100, 100, 200, 150};
+        const auto id = X::Mesh::of(box);
+        check("warp: the even mesh is the identity", id.identity_for(box) && near(id.at(0.3, 0.7), {160, 205}, 1e-9) &&
+                                                     near(id.at(0, 0), {100, 100}, 1e-9) && near(id.at(1, 1), {300, 250}, 1e-9), "");
+        const X::Affine a = X::Affine::about({200, 175}, X::Affine::rotate(0.4) * X::Affine::scale(1.3, 0.8));
+        const auto am = X::Mesh::of(box, X::Projective(a));
+        check("warp: an affine mesh is the affine map", near(am.at(0.3, 0.7), a.apply({160, 205}), 1e-9) &&
+                                                         near(am.at(0.9, 0.15), a.apply({280, 122.5}), 1e-9), "");
+        auto bent = id;
+        bent.p[1].y -= 60; bent.p[2].y -= 60;
+        check("warp: raising the top's handles arcs it -- the middle up 3/4 of it", near(bent.at(0.5, 0), {200, 55}, 1e-9) &&
+                                                                                 near(bent.at(0, 0), {100, 100}, 1e-9), "");
+        check("warp: what it lands in holds the control points", X::mapped(box, bent) == P::Rect{100, 40, 200, 210}, "");
+    }
+    {
+        Fix t;
+        check("warp: the identity is no step", !X::warp(t.j, t.d, {"L4"}, [](const P::Rect& b) { return X::Mesh::of(b); }, "Warp", kWhite) &&
+                                               t.j.size() == 0, "");
+        // A mesh slid 20 px right: a move, pixel for pixel.
+        check("warp: a slid mesh", X::warp(t.j, t.d, {"L4"}, [](const P::Rect& b) {
+            return X::Mesh::of(b, X::Projective(X::Affine::translate(20, 0))); }, "Warp", kWhite), "");
+        check("warp: ...moves the pixels", blue(t.at(125, 175)) && red(t.at(315, 175)) && clear(t.at(110, 175)) && clear(t.at(321, 175)), "");
+        check("warp: one step, named", t.j.size() == 1 && t.j.undo_label() == "Warp", t.j.undo_label());
+        t.j.undo();
+        check("warp: undo", blue(t.at(105, 175)) && clear(t.at(305, 175)), "");
+    }
+    {
+        // Arc: the top's two handles raised 60 -- the middle of the top edge 45 up, the corners stay.
+        Fix t;
+        check("warp: Arc", X::warp(t.j, t.d, {"L4"}, [](const P::Rect& b) {
+            auto m = X::Mesh::of(b); m.p[1].y -= 60; m.p[2].y -= 60; return m; }, "Warp", kWhite), "");
+        check("warp: the top arcs up in the middle", green(t.at(200, 58)) && clear(t.at(200, 51)) && red(t.at(200, 175)), "");
+        check("warp: the corners stay", (blue(t.at(102, 102)) || green(t.at(102, 102))) && clear(t.at(101, 96)), "");
+        check("warp: the bottom is as it was", red(t.at(200, 248)) && clear(t.at(200, 252)), "");
+        check("warp: the document holds", t.d.check().empty(), t.d.check());
+    }
+    {
+        // A selection's pixels warped, the selection with them.
+        Fix t;
+        core::layers::load_selection(t.d, {150, 120, 100, 100});
+        check("warp: a selection's pixels", X::warp(t.j, t.d, {"L4"}, [](const P::Rect& b) {
+            auto m = X::Mesh::of(b); for (int c = 0; c < 4; ++c) m.p[12 + c].y += 40; return m; }, "Warp", kWhite), "");
+        check("warp: the selection stretched with them", t.d.selection() && S::coverage(*t.d.selection(), 200, 250) > 0.99f &&
+                                                        S::coverage(*t.d.selection(), 200, 265) < 0.01f, "");
+        check("warp: pixels and selection, one step", t.j.size() == 1, std::to_string(t.j.size()));
+        check("warp: the document holds", t.d.check().empty(), t.d.check());
+    }
+    {
+        // Type stays type: a warp is refused.
+        Fix t;
+        klimt::text::Spec sp;
+        sp.text = "Klimt"; sp.x = 60; sp.y = 120; sp.size = 40;
+        const auto id = core::layers::add_text(t.j, t.d, sp, "L4");
+        const auto steps = t.j.size();
+        check("warp: type is refused", !X::warp(t.j, t.d, {id}, [](const P::Rect& b) {
+            auto m = X::Mesh::of(b); m.p[5].y -= 20; return m; }, "Warp", kWhite) && t.j.size() == steps, "");
+    }
 }
 
 // s011 m4 -- Select > Modify.

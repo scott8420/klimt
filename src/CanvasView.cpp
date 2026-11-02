@@ -1226,6 +1226,21 @@ core::select::Pt CanvasView::xf_centre() const {
 }
 
 bool CanvasView::xf_inside(double sx, double sy) const {
+    if (m_xf.warp) {   // s074: inside the mesh's outline (even-odd over its sampled edge)
+        const XPt p{to_image_x(sx), to_image_y(sy)};
+        std::vector<XPt> ring;
+        constexpr int n = 24;
+        for (int i = 0; i < n; ++i) ring.push_back(warp_at(double(i) / n, 0));
+        for (int i = 0; i < n; ++i) ring.push_back(warp_at(1, double(i) / n));
+        for (int i = 0; i < n; ++i) ring.push_back(warp_at(1 - double(i) / n, 1));
+        for (int i = 0; i < n; ++i) ring.push_back(warp_at(0, 1 - double(i) / n));
+        bool in = false;
+        for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
+            if ((ring[i].y > p.y) != (ring[j].y > p.y) &&
+                p.x < (ring[j].x - ring[i].x) * (p.y - ring[i].y) / (ring[j].y - ring[i].y) + ring[i].x)
+                in = !in;
+        return in;
+    }
     if (m_xf.quad) {   // s073: inside the convex quad -- the same side of every edge
         const XPt p{to_image_x(sx), to_image_y(sy)};
         int sign = 0;
@@ -1253,6 +1268,18 @@ void CanvasView::xf_press(double sx, double sy) {
     m_xf.py0 = to_image_y(sy);
     m_xf.mode = Xf::Mode::None;
     m_xf.refused = false;
+    if (m_xf.warp) {   // s074: a point (the nearest within reach), else the surface under the pointer
+        for (int i = 0; i < 16; ++i) m_xf.w0[i] = m_xf.w[i];
+        int best = -1;
+        double bd = kHandle;
+        for (int i = 0; i < 16; ++i) {
+            const double dd = std::hypot(to_screen_x(m_xf.w[i].x) - sx, to_screen_y(m_xf.w[i].y) - sy);
+            if (dd <= bd) { bd = dd; best = i; }
+        }
+        if (best >= 0) { m_xf.wi = best; m_xf.mode = Xf::Mode::Scale; return; }
+        if (warp_uv({m_xf.px0, m_xf.py0}, m_xf.wu, m_xf.wv)) { m_xf.wi = -1; m_xf.mode = Xf::Mode::Move; }
+        return;
+    }
     // s073: the corners as they are at the press (a quad op starts from them).
     m_xf.quad0 = m_xf.quad;
     for (int i = 0; i < 4; ++i) {
@@ -1391,6 +1418,35 @@ bool CanvasView::xf_quad_drag(double px, double py, bool shift, bool alt, bool c
 
 void CanvasView::xf_drag(double sx, double sy, bool shift, bool alt, bool ctrl) {
     const double px = to_image_x(sx), py = to_image_y(sy);
+    if (m_xf.warp) {   // s074
+        XPt d{px - m_xf.px0, py - m_xf.py0};
+        if (shift) { if (std::abs(d.x) >= std::abs(d.y)) d.y = 0; else d.x = 0; }
+        for (int i = 0; i < 16; ++i) m_xf.w[i] = m_xf.w0[i];
+        if (m_xf.mode == Xf::Mode::Scale && m_xf.wi >= 0) {
+            const int i = m_xf.wi, r = i / 4, c = i % 4;
+            m_xf.w[i] = m_xf.w0[i] + d;
+            if ((r == 0 || r == 3) && (c == 0 || c == 3)) {   // a corner carries its handles
+                const int cn = c == 0 ? 1 : 2, rn = r == 0 ? 1 : 2;
+                m_xf.w[r * 4 + cn] = m_xf.w0[r * 4 + cn] + d;
+                m_xf.w[rn * 4 + c] = m_xf.w0[rn * 4 + c] + d;
+            }
+        } else if (m_xf.mode == Xf::Mode::Move) {
+            // The surface: the least change to the points that brings the
+            // patch's point at (wu, wv) under the pointer.
+            double bu[4], bv[4], wsum = 0;
+            const auto bern = [](double t, double* b) { const double q = 1 - t; b[0] = q * q * q; b[1] = 3 * q * q * t; b[2] = 3 * q * t * t; b[3] = t * t * t; };
+            bern(m_xf.wu, bu);
+            bern(m_xf.wv, bv);
+            for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) wsum += (bv[r] * bu[c]) * (bv[r] * bu[c]);
+            if (wsum > 1e-12)
+                for (int r = 0; r < 4; ++r)
+                    for (int c = 0; c < 4; ++c) m_xf.w[r * 4 + c] = m_xf.w0[r * 4 + c] + (bv[r] * bu[c] / wsum) * d;
+        }
+        (void)alt; (void)ctrl;
+        queue_draw();
+        warp_emit();
+        return;
+    }
     const double cx = m_xf.bx + m_xf.bw / 2, cy = m_xf.by + m_xf.bh / 2;
     if (xf_quad_drag(px, py, shift, alt, ctrl)) {   // s073
         queue_draw();
@@ -1445,12 +1501,145 @@ void CanvasView::nudge_transform(double dx, double dy) {
     m_xf.tx += dx;
     m_xf.ty += dy;
     if (m_xf.quad) for (auto& c : m_xf.q) c = c + XPt{dx, dy};   // s073
+    if (m_xf.warp) {   // s074
+        for (auto& c : m_xf.w) c = c + XPt{dx, dy};
+        queue_draw();
+        warp_emit();
+        return;
+    }
     queue_draw();
     m_xf_signal.emit(xf_map());
 }
 
+// ── s074: Warp ──────────────────────────────────────────────────────────────
+bool CanvasView::set_transform_kind(XfKind k) {
+    if (!m_xf.on) { m_xf_kind = k; return true; }
+    if (m_xf.warp) return k == XfKind::Warp;   // a mesh stays a mesh until Enter / Esc
+    if (k == XfKind::Warp) {
+        if (!m_xf.projective_ok) { m_xf_refused.emit(); return false; }
+        // The mesh from the shape the box has now (exact for a box, the
+        // quad's grid for a distort).
+        const auto h = xf_map();
+        core::xform::Projective pm;
+        for (int i = 0; i < 9; ++i) pm.h[i] = h[i];
+        const auto mesh = core::xform::Mesh::of(pixel::Rect{static_cast<int>(std::lround(m_xf.bx)), static_cast<int>(std::lround(m_xf.by)),
+                                                            static_cast<int>(std::lround(m_xf.bw)), static_cast<int>(std::lround(m_xf.bh))}, pm);
+        for (int i = 0; i < 16; ++i) m_xf.w[i] = mesh.p[i];
+        m_xf.warp = true;
+        m_xf_kind = k;
+        queue_draw();
+        warp_emit();
+        return true;
+    }
+    m_xf_kind = k;
+    return true;
+}
+
+core::select::Pt CanvasView::warp_at(double u, double v) const {
+    core::xform::Mesh m;
+    for (int i = 0; i < 16; ++i) m.p[i] = m_xf.w[i];
+    return m.at(u, v);
+}
+
+bool CanvasView::warp_uv(core::select::Pt p, double& u, double& v) const {
+    // The nearest of a 33 x 33 sampling, then a few Newton steps.
+    constexpr int n = 32;
+    double bd = std::numeric_limits<double>::max();
+    for (int j = 0; j <= n; ++j)
+        for (int i = 0; i <= n; ++i) {
+            const XPt q = warp_at(double(i) / n, double(j) / n);
+            const double dd = std::hypot(q.x - p.x, q.y - p.y);
+            if (dd < bd) { bd = dd; u = double(i) / n; v = double(j) / n; }
+        }
+    for (int it = 0; it < 6; ++it) {
+        const double e = 1e-4;
+        const XPt q = warp_at(u, v), qu = warp_at(u + e, v), qv = warp_at(u, v + e);
+        const double a = (qu.x - q.x) / e, b = (qv.x - q.x) / e, c = (qu.y - q.y) / e, d = (qv.y - q.y) / e;
+        const double det = a * d - b * c;
+        if (std::abs(det) < 1e-12) break;
+        const double rx = p.x - q.x, ry = p.y - q.y;
+        u = std::clamp(u + (d * rx - b * ry) / det, 0.0, 1.0);
+        v = std::clamp(v + (-c * rx + a * ry) / det, 0.0, 1.0);
+    }
+    const XPt q = warp_at(u, v);
+    return std::hypot(to_screen_x(q.x) - to_screen_x(p.x), to_screen_y(q.y) - to_screen_y(p.y)) <= 3;
+}
+
+void CanvasView::warp_emit() {
+    std::array<double, 32> a{};
+    for (int i = 0; i < 16; ++i) { a[static_cast<std::size_t>(2 * i)] = m_xf.w[i].x; a[static_cast<std::size_t>(2 * i + 1)] = m_xf.w[i].y; }
+    m_warp_signal.emit(a);
+}
+
+void CanvasView::draw_warp(const Cairo::RefPtr<Cairo::Context>& cr) {
+    cr->save();
+    const auto line = [&](auto f) {   // a curve of the patch, sampled
+        constexpr int n = 32;
+        for (int i = 0; i <= n; ++i) {
+            const XPt q = f(double(i) / n);
+            if (i == 0) cr->move_to(to_screen_x(q.x), to_screen_y(q.y));
+            else cr->line_to(to_screen_x(q.x), to_screen_y(q.y));
+        }
+    };
+    // The grid: thirds across and down, thin; the outline, as the box's.
+    for (int k = 1; k < 3; ++k) {
+        line([&](double t) { return warp_at(k / 3.0, t); });
+        line([&](double t) { return warp_at(t, k / 3.0); });
+    }
+    cr->set_line_width(2);
+    cr->set_source_rgba(0, 0, 0, 0.6);
+    cr->stroke_preserve();
+    cr->set_line_width(1);
+    cr->set_source_rgba(1, 1, 1, 0.8);
+    cr->stroke();
+    line([&](double t) { return warp_at(t, 0); });
+    line([&](double t) { return warp_at(1, t); });
+    line([&](double t) { return warp_at(1 - t, 1); });
+    line([&](double t) { return warp_at(0, 1 - t); });
+    cr->set_source_rgb(0, 0, 0);
+    cr->set_line_width(3);
+    cr->stroke_preserve();
+    cr->set_source_rgb(1, 1, 1);
+    cr->set_line_width(1);
+    cr->stroke();
+    // A corner's handles: lines to them.
+    const auto sx = [&](int i) { return to_screen_x(m_xf.w[i].x); };
+    const auto sy = [&](int i) { return to_screen_y(m_xf.w[i].y); };
+    for (const auto [c, a, b] : {std::array<int, 3>{0, 1, 4}, {3, 2, 7}, {12, 13, 8}, {15, 14, 11}}) {
+        cr->move_to(sx(a), sy(a)); cr->line_to(sx(c), sy(c)); cr->line_to(sx(b), sy(b));
+    }
+    cr->set_source_rgba(1, 1, 1, 0.9);
+    cr->stroke();
+    for (int i = 0; i < 16; ++i) {
+        const int r = i / 4, c = i % 4;
+        const bool corner = (r == 0 || r == 3) && (c == 0 || c == 3);
+        if (corner) cr->rectangle(std::round(sx(i)) - 3.5, std::round(sy(i)) - 3.5, 7, 7);
+        else cr->arc(sx(i), sy(i), 3.5, 0, 2 * M_PI);
+        cr->set_source_rgb(1, 1, 1);
+        cr->fill_preserve();
+        cr->set_source_rgb(0.1, 0.1, 0.1);
+        cr->stroke();
+    }
+    // The readout.
+    auto layout = create_pango_layout("Warp");
+    int tw = 0, th = 0;
+    layout->get_pixel_size(tw, th);
+    double top = 1e9, left = 1e9;
+    for (const auto& q : m_xf.w) { top = std::min(top, to_screen_y(q.y)); left = std::min(left, to_screen_x(q.x)); }
+    left = std::clamp(left, 4.0, std::max(4.0, get_width() - tw - 16.0));
+    const double ty = std::clamp(top - th - 10 >= 0 ? top - th - 10 : top + 8, 4.0, std::max(4.0, get_height() - th - 8.0));
+    cr->set_source_rgba(0, 0, 0, 0.7);
+    cr->rectangle(left, ty - 2, tw + 12, th + 4);
+    cr->fill();
+    cr->set_source_rgb(1, 1, 1);
+    cr->move_to(left + 6, ty);
+    layout->show_in_cairo_context(cr);
+    cr->restore();
+}
+
 void CanvasView::draw_transform(const Cairo::RefPtr<Cairo::Context>& cr) {
     if (!m_xf.on) return;
+    if (m_xf.warp) { draw_warp(cr); return; }   // s074
     cr->save();
     const core::select::Pt q[4] = {xf_handle(-1, -1), xf_handle(1, -1), xf_handle(1, 1), xf_handle(-1, 1)};
     cr->set_line_width(1);

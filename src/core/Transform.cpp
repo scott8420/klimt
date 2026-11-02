@@ -274,34 +274,46 @@ pixel::Rect mapped(const pixel::Rect& r, const Affine& m) {
 }
 
 // ── the resample ────────────────────────────────────────────────────────────
-std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const pixel::TileMap& src,
-                                               const pixel::TileMap* mask, const pixel::Rect& box,
-                                               const Projective& m, Quality q,
-                                               const std::function<bool()>& cancelled) {
-    if (box.empty()) return base;
-    const pixel::Format f = base.format();
-    const int ch = f.channels();
-    const auto chs = static_cast<std::size_t>(ch);
-    const bool alpha = f.alpha, fl = f.depth == pixel::Depth::F32;
-    const int w = base.width(), h = base.height();
-    const bool flat = m.affine();          // s073: affine -- one filter for every pixel
-    const Projective inv = m.inverse();
-    // Where the box lands, a pixel of slack for the filter's reach.
-    pixel::Rect land = mapped(box, m);
-    land = {land.x - 2, land.y - 2, land.w + 4, land.h + 4};
-    if (land.empty()) return base;
+namespace {
+// s074: where each landing pixel comes from -- the projective inverse, or a
+// warp's mesh. cell() is told each tile's part before its pixels (a warp
+// rasterizes its triangles there); at() gives the source point and the
+// filter's widening, false: nothing lands there.
+class Mapper {
+public:
+    virtual ~Mapper() = default;
+    virtual void cell(const pixel::Rect&) {}
+    virtual bool at(int x, int y, Pt& sp, double& kx, double& ky) = 0;
+};
 
-    Sampler s(src, box);
-    const int sn = s.out_channels();   // ch (alpha) or ch + 1
-    std::optional<Sampler> ms;
-    if (mask) ms.emplace(*mask, pixel::Rect{0, 0, mask->width(), mask->height()});
+class ProjMapper final : public Mapper {
+public:
+    ProjMapper(const Projective& m, const pixel::Rect& box, Quality q)
+        : m_m(m), m_inv(m.inverse()), m_box(box), m_q(q), m_flat(m.affine()) {
+        if (m_flat) widths({box.x + box.w / 2.0, box.y + box.h / 2.0}, m_kx, m_ky);
+        m_rx = q == Quality::Best ? 2 * m_kx : 1;
+        m_ry = q == Quality::Best ? 2 * m_ky : 1;
+        if (!m_flat && q == Quality::Best) m_rx = m_ry = 32;
+    }
+    bool at(int x, int y, Pt& sp, double& kx, double& ky) override {
+        const Pt dp{x + 0.5, y + 0.5};
+        if (!m_flat && m_inv.w_at(dp) <= 0) return false;   // s073: beyond the horizon
+        sp = m_inv.apply(dp);
+        if (sp.x < m_box.x - m_rx - 1 || sp.y < m_box.y - m_ry - 1 || sp.x > m_box.x + m_box.w + m_rx + 1 ||
+            sp.y > m_box.y + m_box.h + m_ry + 1)
+            return false;
+        kx = m_kx; ky = m_ky;
+        if (!m_flat) widths(sp, kx, ky);
+        return true;
+    }
 
-    // The filter: bilinear, or bicubic widened along a source axis the map
-    // shrinks. s073: a projective map shrinks by different amounts in
-    // different places -- its derivative at the source point says how much
-    // (widened at most 16 x: a far vanishing edge would want more).
-    const auto widths = [&](Pt sp, double& kx, double& ky) {
-        if (q != Quality::Best) { kx = ky = 1; return; }
+private:
+    // The filter: bicubic widened along a source axis the map shrinks. s073:
+    // a projective map shrinks by different amounts in different places --
+    // its derivative at the source point says how much (at most 16 x).
+    void widths(Pt sp, double& kx, double& ky) const {
+        if (m_q != Quality::Best) { kx = ky = 1; return; }
+        const Projective& m = m_m;
         const double wt = m.w_at(sp);
         const Pt d = m.apply(sp);
         const double iw = std::abs(wt) > 1e-300 ? 1 / wt : 0;
@@ -309,12 +321,33 @@ std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const
         const double xy = (m.h[1] - d.x * m.h[7]) * iw, yy = (m.h[4] - d.y * m.h[7]) * iw;   // d(x', y') / dy
         kx = std::clamp(1.0 / std::max(1e-6, std::hypot(xx, yx)), 1.0, 16.0);
         ky = std::clamp(1.0 / std::max(1e-6, std::hypot(xy, yy)), 1.0, 16.0);
-    };
-    double kx = 1, ky = 1;
-    if (flat) widths({box.x + box.w / 2.0, box.y + box.h / 2.0}, kx, ky);
-    // The most any pixel reaches (for the "is it near the box" test).
-    double reach_x = q == Quality::Best ? 2 * kx : 1, reach_y = q == Quality::Best ? 2 * ky : 1;
-    if (!flat && q == Quality::Best) reach_x = reach_y = 32;
+    }
+    Projective m_m, m_inv;
+    pixel::Rect m_box;
+    Quality m_q;
+    bool m_flat;
+    double m_kx = 1, m_ky = 1, m_rx = 1, m_ry = 1;
+};
+
+// THE RESAMPLE's body (s011; s074: behind a Mapper): `land` is where pixels
+// may land.
+std::optional<pixel::TileMap> resample(const pixel::TileMap& base, const pixel::TileMap& src,
+                                       const pixel::TileMap* mask, const pixel::Rect& box, pixel::Rect land,
+                                       Quality q, const std::function<bool()>& cancelled, Mapper& mp) {
+    if (box.empty()) return base;
+    const pixel::Format f = base.format();
+    const int ch = f.channels();
+    const auto chs = static_cast<std::size_t>(ch);
+    const bool alpha = f.alpha, fl = f.depth == pixel::Depth::F32;
+    const int w = base.width(), h = base.height();
+    land = {land.x - 2, land.y - 2, land.w + 4, land.h + 4};   // a pixel of slack for the filter's reach
+    if (land.empty()) return base;
+
+    Sampler s(src, box);
+    const int sn = s.out_channels();   // ch (alpha) or ch + 1
+    std::optional<Sampler> ms;
+    if (mask) ms.emplace(*mask, pixel::Rect{0, 0, mask->width(), mask->height()});
+
 
     float acc[pixel::kMaxChannels + 1], tap[pixel::kMaxChannels + 1];
     const auto sample = [&](double u, double v, double fkx, double fky, float* out) {
@@ -377,16 +410,12 @@ std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const
             const pixel::Rect hit = cell.intersect(land);
             decode_cell(base, col, row, buf);
             bool changed = false;
+            mp.cell(hit);
             for (int y = hit.y; y < hit.y + hit.h; ++y)
                 for (int x = hit.x; x < hit.x + hit.w; ++x) {
-                    const Pt dp{x + 0.5, y + 0.5};
-                    if (!flat && inv.w_at(dp) <= 0) continue;   // s073: beyond the horizon
-                    const Pt sp = inv.apply(dp);
-                    if (sp.x < box.x - reach_x - 1 || sp.y < box.y - reach_y - 1 || sp.x > box.x + box.w + reach_x + 1 ||
-                        sp.y > box.y + box.h + reach_y + 1)
-                        continue;
-                    double pkx = kx, pky = ky;
-                    if (!flat) widths(sp, pkx, pky);
+                    Pt sp;
+                    double pkx = 1, pky = 1;
+                    if (!mp.at(x, y, sp, pkx, pky)) continue;
                     sample(sp.x, sp.y, pkx, pky, acc);
                     const float cov = coverage(sp.x, sp.y);
                     const float a = std::clamp(acc[sn - 1] * cov, 0.f, 1.f);
@@ -437,6 +466,184 @@ std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const
         }
     }
     return base.with_grid(std::move(grid)).with_outside(std::move(outside));
+}
+}  // namespace
+
+std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const pixel::TileMap& src,
+                                               const pixel::TileMap* mask, const pixel::Rect& box,
+                                               const Projective& m, Quality q,
+                                               const std::function<bool()>& cancelled) {
+    if (box.empty()) return base;
+    ProjMapper mp(m, box, q);
+    return resample(base, src, mask, box, mapped(box, m), q, cancelled, mp);
+}
+
+// ── Warp (s074) ─────────────────────────────────────────────────────────────
+namespace {
+// Bernstein cubic weights at t.
+void bern(double t, double b[4]) {
+    const double s = 1 - t;
+    b[0] = s * s * s; b[1] = 3 * s * s * t; b[2] = 3 * s * t * t; b[3] = t * t * t;
+}
+}  // namespace
+
+Mesh Mesh::of(const pixel::Rect& box) {
+    Mesh m;
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) m.p[r * 4 + c] = {box.x + box.w * c / 3.0, box.y + box.h * r / 3.0};
+    return m;
+}
+
+Mesh Mesh::of(const pixel::Rect& box, const Projective& pm) {
+    Mesh m = of(box);
+    for (auto& q : m.p) q = pm.apply(q);
+    return m;
+}
+
+Pt Mesh::at(double u, double v) const {
+    double bu[4], bv[4];
+    bern(u, bu);
+    bern(v, bv);
+    Pt o{0, 0};
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) {
+            const double w = bv[r] * bu[c];
+            o.x += w * p[r * 4 + c].x;
+            o.y += w * p[r * 4 + c].y;
+        }
+    return o;
+}
+
+bool Mesh::identity_for(const pixel::Rect& box) const {
+    const Mesh id = of(box);
+    for (int i = 0; i < 16; ++i)
+        if (std::abs(p[i].x - id.p[i].x) > 1e-9 || std::abs(p[i].y - id.p[i].y) > 1e-9) return false;
+    return true;
+}
+
+pixel::Rect mapped(const pixel::Rect&, const Mesh& m) {
+    double x0 = std::numeric_limits<double>::max(), y0 = x0, x1 = -x0, y1 = -x0;
+    for (const Pt q : m.p) { x0 = std::min(x0, q.x); y0 = std::min(y0, q.y); x1 = std::max(x1, q.x); y1 = std::max(y1, q.y); }
+    constexpr double kFar = 1 << 20;
+    if (x0 < -kFar || y0 < -kFar || x1 > kFar || y1 > kFar) return {};
+    const int ix0 = static_cast<int>(std::floor(x0)), iy0 = static_cast<int>(std::floor(y0));
+    const int ix1 = static_cast<int>(std::ceil(x1)), iy1 = static_cast<int>(std::ceil(y1));
+    return {ix0, iy0, std::max(0, ix1 - ix0), std::max(0, iy1 - iy0)};
+}
+
+namespace {
+// The patch cut into triangles (landing points + source points), binned by
+// the tile cells they cover; each tile's pixels are looked up in a small map
+// made when the tile comes.
+class WarpMapper final : public Mapper {
+public:
+    WarpMapper(const Mesh& m, const pixel::Rect& box, Quality q) : m_box(box), m_best(q == Quality::Best) {
+        // Fine enough that a straight piece is within a fraction of a pixel:
+        // a step every ~6 px of the control net's size, 8 .. 160 a side.
+        double span = 0;
+        for (int i = 0; i < 16; ++i)
+            for (int j = i + 1; j < 16; ++j) span = std::max(span, std::hypot(m.p[i].x - m.p[j].x, m.p[i].y - m.p[j].y));
+        span = std::max({span, double(box.w), double(box.h)});
+        const int n = std::clamp(static_cast<int>(std::ceil(span / 6)), 8, 160);
+        // A margin of ~2 source px past the box: the edge's pixels sample the
+        // source's soft edge (nothing past the box), as the projective's do.
+        const double eu = 2.0 / std::max(1, box.w), ev = 2.0 / std::max(1, box.h);
+        const int np = n + 1;
+        std::vector<Pt> dst(static_cast<std::size_t>(np * np)), src(dst.size());
+        for (int j = 0; j <= n; ++j)
+            for (int i = 0; i <= n; ++i) {
+                const double u = -eu + (1 + 2 * eu) * i / n, v = -ev + (1 + 2 * ev) * j / n;
+                const auto k = static_cast<std::size_t>(j * np + i);
+                dst[k] = m.at(u, v);
+                src[k] = {box.x + u * box.w, box.y + v * box.h};
+            }
+        const auto tri = [&](std::size_t a, std::size_t b, std::size_t c) {
+            Tri t{{dst[a], dst[b], dst[c]}, {src[a], src[b], src[c]}, 1, 1};
+            // The source -> landing map's columns: how much a source px grows.
+            const double s1x = t.s[1].x - t.s[0].x, s1y = t.s[1].y - t.s[0].y, s2x = t.s[2].x - t.s[0].x, s2y = t.s[2].y - t.s[0].y;
+            const double d1x = t.d[1].x - t.d[0].x, d1y = t.d[1].y - t.d[0].y, d2x = t.d[2].x - t.d[0].x, d2y = t.d[2].y - t.d[0].y;
+            const double det = s1x * s2y - s2x * s1y;
+            if (std::abs((d1x * d2y - d2x * d1y)) < 1e-12 || std::abs(det) < 1e-12) return;   // flat: lands nowhere
+            if (m_best) {
+                const double gx = (d1x * s2y - d2x * s1y) / det, gy = (d1y * s2y - d2y * s1y) / det;     // d dst / d sx
+                const double hx = (-d1x * s2x + d2x * s1x) / det, hy = (-d1y * s2x + d2y * s1x) / det;   // d dst / d sy
+                t.kx = std::clamp(1.0 / std::max(1e-6, std::hypot(gx, gy)), 1.0, 16.0);
+                t.ky = std::clamp(1.0 / std::max(1e-6, std::hypot(hx, hy)), 1.0, 16.0);
+            }
+            const int idx = static_cast<int>(m_tris.size());
+            m_tris.push_back(t);
+            const double x0 = std::min({t.d[0].x, t.d[1].x, t.d[2].x}), x1 = std::max({t.d[0].x, t.d[1].x, t.d[2].x});
+            const double y0 = std::min({t.d[0].y, t.d[1].y, t.d[2].y}), y1 = std::max({t.d[0].y, t.d[1].y, t.d[2].y});
+            for (int row = pixel::cell_of(static_cast<int>(std::floor(y0))); row <= pixel::cell_of(static_cast<int>(std::floor(y1))); ++row)
+                for (int col = pixel::cell_of(static_cast<int>(std::floor(x0))); col <= pixel::cell_of(static_cast<int>(std::floor(x1))); ++col)
+                    m_bins[{col, row}].push_back(idx);
+        };
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                const auto a = static_cast<std::size_t>(j * np + i), b = a + 1, c = a + static_cast<std::size_t>(np), d = c + 1;
+                tri(a, b, d);
+                tri(a, d, c);
+            }
+    }
+    void cell(const pixel::Rect& hit) override {
+        m_hit = hit;
+        m_map.assign(static_cast<std::size_t>(hit.w) * static_cast<std::size_t>(hit.h), Hit{});
+        const auto it = m_bins.find({pixel::cell_of(hit.x), pixel::cell_of(hit.y)});
+        if (it == m_bins.end()) return;
+        for (const int ti : it->second) {
+            const Tri& t = m_tris[static_cast<std::size_t>(ti)];
+            const double x0 = std::min({t.d[0].x, t.d[1].x, t.d[2].x}), x1 = std::max({t.d[0].x, t.d[1].x, t.d[2].x});
+            const double y0 = std::min({t.d[0].y, t.d[1].y, t.d[2].y}), y1 = std::max({t.d[0].y, t.d[1].y, t.d[2].y});
+            const int px0 = std::max(hit.x, static_cast<int>(std::floor(x0 - 0.5))), px1 = std::min(hit.x + hit.w - 1, static_cast<int>(std::ceil(x1 - 0.5)));
+            const int py0 = std::max(hit.y, static_cast<int>(std::floor(y0 - 0.5))), py1 = std::min(hit.y + hit.h - 1, static_cast<int>(std::ceil(y1 - 0.5)));
+            if (px0 > px1 || py0 > py1) continue;
+            const double den = (t.d[1].y - t.d[2].y) * (t.d[0].x - t.d[2].x) + (t.d[2].x - t.d[1].x) * (t.d[0].y - t.d[2].y);
+            const double eps = -1e-9 * std::abs(den);
+            for (int y = py0; y <= py1; ++y)
+                for (int x = px0; x <= px1; ++x) {
+                    const double cx = x + 0.5, cy = y + 0.5;
+                    double l0 = (t.d[1].y - t.d[2].y) * (cx - t.d[2].x) + (t.d[2].x - t.d[1].x) * (cy - t.d[2].y);
+                    double l1 = (t.d[2].y - t.d[0].y) * (cx - t.d[2].x) + (t.d[0].x - t.d[2].x) * (cy - t.d[2].y);
+                    if (den < 0) { l0 = -l0; l1 = -l1; }
+                    const double ad = std::abs(den);
+                    const double l2 = ad - l0 - l1;
+                    if (l0 < eps || l1 < eps || l2 < eps) continue;
+                    const double w0 = l0 / ad, w1 = l1 / ad, w2 = l2 / ad;
+                    Hit& h = m_map[static_cast<std::size_t>(y - hit.y) * static_cast<std::size_t>(hit.w) + static_cast<std::size_t>(x - hit.x)];
+                    h.on = true;
+                    h.sp = {w0 * t.s[0].x + w1 * t.s[1].x + w2 * t.s[2].x, w0 * t.s[0].y + w1 * t.s[1].y + w2 * t.s[2].y};
+                    h.kx = t.kx;
+                    h.ky = t.ky;
+                }
+        }
+    }
+    bool at(int x, int y, Pt& sp, double& kx, double& ky) override {
+        const Hit& h = m_map[static_cast<std::size_t>(y - m_hit.y) * static_cast<std::size_t>(m_hit.w) + static_cast<std::size_t>(x - m_hit.x)];
+        if (!h.on) return false;
+        sp = h.sp; kx = h.kx; ky = h.ky;
+        return true;
+    }
+
+private:
+    struct Tri { Pt d[3], s[3]; double kx, ky; };
+    struct Hit { bool on = false; Pt sp{0, 0}; double kx = 1, ky = 1; };
+    pixel::Rect m_box;
+    bool m_best;
+    std::vector<Tri> m_tris;
+    std::map<Cell, std::vector<int>> m_bins;
+    pixel::Rect m_hit;
+    std::vector<Hit> m_map;
+};
+}  // namespace
+
+std::optional<pixel::TileMap> over_warped(const pixel::TileMap& base, const pixel::TileMap& src,
+                                          const pixel::TileMap* mask, const pixel::Rect& box,
+                                          const Mesh& m, Quality q, const std::function<bool()>& cancelled) {
+    if (box.empty()) return base;
+    const pixel::Rect land = mapped(box, m);
+    if (land.empty()) return base;
+    WarpMapper mp(m, box, q);
+    return resample(base, src, mask, box, land, q, cancelled, mp);
 }
 
 // ── plans and verbs ─────────────────────────────────────────────────────────
@@ -503,12 +710,22 @@ std::string projective_refusal(const Plan& p) {
     return {};
 }
 
-std::optional<move::Result> compute(const Plan& pl, const Projective& pm, Quality q, const std::function<bool()>& cancelled) {
+namespace {
+// s074: the layers, their masks and the selection under any map `xf` (the
+// projective resample, or a warp's). `type_map`: what type is mapped by --
+// null: type isn't (a distort or a warp leaves it as it was). `mask_box`:
+// a whole layer mask is mapped over its own extent (true -- a projective
+// map reaches everywhere) or over the plan's box (false -- a warp's mesh
+// lives on the box).
+using XfFn = std::function<std::optional<pixel::TileMap>(const pixel::TileMap&, const pixel::TileMap&, const pixel::TileMap*,
+                                                         const pixel::Rect&, Quality)>;
+std::optional<move::Result> compute_with(const Plan& pl, bool identity, const Affine* type_map, Quality q,
+                                         const std::function<bool()>& cancelled, const XfFn& xf, bool mask_extent) {
     const auto& p = pl.p;
     move::Result r;
-    const bool flat = pm.affine();
-    const Affine m = pm.to_affine();   // what type is mapped by (exact when flat)
-    if (pm.identity()) {
+    const bool flat = type_map != nullptr;
+    const Affine m = flat ? *type_map : Affine{};
+    if (identity) {
         for (const auto& id : p.ids) r.pixels[id] = p.original.at(id);
         for (const auto& [id, t] : p.texts) r.texts[id] = t;   // s046
         r.mask = p.mask;
@@ -543,7 +760,7 @@ std::optional<move::Result> compute(const Plan& pl, const Projective& pm, Qualit
         pixel::TileMap base = blank;
         if (p.mask) { if (const auto& b = p.base.at(id)) base = *b; }
         else if (!p.format.alpha) base = blank.fill({0, 0, p.width, p.height}, p.fill);   // no alpha: the background shows where it left
-        auto out = over_transformed(base, *o, p.mask.get(), pl.box, pm, q, cancelled);
+        auto out = xf(base, *o, p.mask.get(), pl.box, q);
         if (!out) return std::nullopt;
         r.pixels[id] = out->tile_count() ? std::make_shared<const pixel::TileMap>(std::move(*out)) : nullptr;
     }
@@ -557,18 +774,35 @@ std::optional<move::Result> compute(const Plan& pl, const Projective& pm, Qualit
                 x1 = std::max(x1, (cell.first + 1) * kTile); y1 = std::max(y1, (cell.second + 1) * kTile);
             }
             const pixel::TileMap mblank(lm->format(), p.width, p.height);
-            auto out = over_transformed(mblank, *lm, nullptr, {x0, y0, x1 - x0, y1 - y0}, pm, q, cancelled);
+            auto out = xf(mblank, *lm, nullptr, mask_extent ? pixel::Rect{x0, y0, x1 - x0, y1 - y0} : pl.box, q);
             if (!out) return std::nullopt;
             r.masks[id] = std::make_shared<const pixel::TileMap>(std::move(*out));
         }
     if (p.mask) {
         const pixel::TileMap mblank(p.mask->format(), p.width, p.height);
-        auto mm = over_transformed(mblank, *p.mask, nullptr, pl.box, pm, Quality::Fast, cancelled);
+        auto mm = xf(mblank, *p.mask, nullptr, pl.box, Quality::Fast);
         if (!mm) return std::nullopt;
         auto in = mm->without_outside();   // a selection holds nothing beyond the canvas
         r.mask = select::empty(in) ? nullptr : std::make_shared<const pixel::TileMap>(std::move(in));
     }
     return r;
+}
+
+}  // namespace
+
+std::optional<move::Result> compute(const Plan& pl, const Projective& pm, Quality q, const std::function<bool()>& cancelled) {
+    const Affine am = pm.to_affine();
+    return compute_with(pl, pm.identity(), pm.affine() ? &am : nullptr, q, cancelled,
+                        [&](const pixel::TileMap& base, const pixel::TileMap& src, const pixel::TileMap* mask, const pixel::Rect& box, Quality qq) {
+                            return over_transformed(base, src, mask, box, pm, qq, cancelled);
+                        }, true);
+}
+
+std::optional<move::Result> compute_warp(const Plan& pl, const Mesh& mesh, Quality q, const std::function<bool()>& cancelled) {
+    return compute_with(pl, mesh.identity_for(pl.box), nullptr, q, cancelled,
+                        [&](const pixel::TileMap& base, const pixel::TileMap& src, const pixel::TileMap* mask, const pixel::Rect& box, Quality qq) {
+                            return over_warped(base, src, mask, box, mesh, qq, cancelled);   // box: always the plan's
+                        }, false);
 }
 
 bool apply(DocJournal& j, Document& d, const std::vector<Document::Id>& selected, const Projective& m,
@@ -589,6 +823,17 @@ bool distort(DocJournal& j, Document& d, const std::vector<Document::Id>& select
     const auto m = Projective::box_to_quad(p->box, q);
     if (!m) return false;
     return apply(j, d, selected, *m, label, background);
+}
+
+bool warp(DocJournal& j, Document& d, const std::vector<Document::Id>& selected,
+          const std::function<Mesh(const pixel::Rect&)>& bend, const std::string& label, const pixel::Px& background) {
+    const auto p = plan(d, selected, background);
+    if (!p || !projective_refusal(*p).empty()) return false;
+    const Mesh m = bend(p->box);
+    if (m.identity_for(p->box)) return false;
+    const auto r = compute_warp(*p, m, Quality::Best);
+    if (!r) return false;
+    return j.run(label, move::step_ids(p->p), [&] { move::put(d, p->p, *r); });
 }
 
 Affine flip_about(const pixel::Rect& b, bool horizontal) {

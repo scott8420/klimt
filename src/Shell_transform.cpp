@@ -77,24 +77,40 @@ void Shell::on_free_transform() {
 }
 
 void Shell::on_xform_change(const std::array<double, 9>& m) {
+    if (!m_xform.active || m_xform.committing || m_xform.warp) return;
+    const auto w = map_of(m);
+    if (m_xform.has_done && same(w, m_xform.want)) return;
+    m_xform.want = w;
+    ++m_xform.gen;
+    xform_pump();
+}
+
+void Shell::on_warp_change(const std::array<double, 32>& m) {   // s074
     if (!m_xform.active || m_xform.committing) return;
-    m_xform.want = map_of(m);
+    m_xform.warp = true;
+    for (int i = 0; i < 16; ++i) m_xform.wmesh.p[i] = {m[static_cast<std::size_t>(2 * i)], m[static_cast<std::size_t>(2 * i + 1)]};
+    ++m_xform.gen;
     xform_pump();
 }
 
 void Shell::xform_pump() {
     if (!m_xform.active || m_xform.committing || m_xform.job) return;
-    if (m_xform.has_done && same(m_xform.want, m_xform.done)) return;
+    if (m_xform.has_done && m_xform.done_gen == m_xform.gen) return;
     const auto want = m_xform.want;
-    m_xform.job = m_jobs.submit("Transform", [this, plan = m_xform.plan, want](core::Jobs::Token& t) -> core::Jobs::Landing {
-        auto r = Xf::compute(*plan, want, Xf::Quality::Fast, [&t] { return t.cancelled(); });
+    const bool warp = m_xform.warp;
+    const auto mesh = m_xform.wmesh;
+    const unsigned gen = m_xform.gen;
+    m_xform.job = m_jobs.submit(warp ? "Warp" : "Transform", [this, plan = m_xform.plan, want, warp, mesh, gen](core::Jobs::Token& t) -> core::Jobs::Landing {
+        auto r = warp ? Xf::compute_warp(*plan, mesh, Xf::Quality::Fast, [&t] { return t.cancelled(); })
+                      : Xf::compute(*plan, want, Xf::Quality::Fast, [&t] { return t.cancelled(); });
         if (!r) return [this] { m_xform.job = 0; };
         auto res = std::make_shared<const core::move::Result>(std::move(*r));
-        return [this, plan, res, want] {
+        return [this, plan, res, want, gen] {
             m_xform.job = 0;
             if (!m_xform.active || m_xform.plan != plan || m_xform.committing) return;
             m_preview = res->pixels;
             m_xform.done = want;
+            m_xform.done_gen = gen;
             m_xform.has_done = true;
             queue_render();
             xform_pump();
@@ -104,19 +120,23 @@ void Shell::xform_pump() {
 
 void Shell::xform_commit() {
     if (!m_xform.active || m_xform.committing) return;
-    if (m_xform.want.identity()) { xform_cancel(); return; }
+    const bool warp = m_xform.warp;
+    if (warp ? m_xform.wmesh.identity_for(m_xform.plan->box) : m_xform.want.identity()) { xform_cancel(); return; }
     m_xform.committing = true;
     if (m_xform.job) m_jobs.cancel(m_xform.job);
     m_xform.job = 0;
     const auto plan = m_xform.plan;
     const auto m = m_xform.want;
-    start_job("Free Transform", [this, plan, m](core::Jobs::Token& t) -> core::Jobs::Landing {
-        auto r = Xf::compute(*plan, m, Xf::Quality::Best, [&t] { return t.cancelled(); });
+    const auto mesh = m_xform.wmesh;
+    const std::string label = warp ? "Warp" : "Free Transform";   // s074
+    start_job(label, [this, plan, m, warp, mesh, label](core::Jobs::Token& t) -> core::Jobs::Landing {
+        auto r = warp ? Xf::compute_warp(*plan, mesh, Xf::Quality::Best, [&t] { return t.cancelled(); })
+                      : Xf::compute(*plan, m, Xf::Quality::Best, [&t] { return t.cancelled(); });
         if (!r) return [this] { xform_end(); };
         auto res = std::make_shared<const core::move::Result>(std::move(*r));
-        return [this, plan, res] {
+        return [this, plan, res, label] {
             if (xform_current(*plan))
-                m_journal.run("Free Transform", core::move::step_ids(plan->p), [&] { core::move::put(m_doc, plan->p, *res); });
+                m_journal.run(label, core::move::step_ids(plan->p), [&] { core::move::put(m_doc, plan->p, *res); });
             else
                 toast("Free Transform: the layers changed meanwhile -- nothing done");
             xform_end();

@@ -77,10 +77,15 @@ void Shell::bind_actions() {  // bindings
     // s011: Free Transform and the one-shot transforms (Shell_transform.cpp).
     m_canvas.signal_transform().connect(sigc::mem_fun(*this, &Shell::on_xform_change));
     m_canvas.signal_transform_commit().connect(sigc::mem_fun(*this, &Shell::xform_commit));
-    m_strip.signal_transform_kind().connect([this](int k) {   // s073: the strip's Skew / Distort / Perspective
-        m_canvas.set_transform_kind(static_cast<CanvasView::XfKind>(k));
+    m_strip.signal_transform_kind().connect([this](int k) {   // s073: the strip's Skew / Distort / Perspective; s074: Warp
+        if (!m_canvas.set_transform_kind(static_cast<CanvasView::XfKind>(k))) {
+            const int now = static_cast<int>(m_canvas.transform_kind());
+            Glib::signal_idle().connect_once([this, now] { m_strip.set_transform_kind(now); });   // not inside the button's own signal
+            if (m_canvas.transform_is_warp()) toast("Warp: Enter applies, Esc cancels -- then Free Transform again");
+        }
         m_canvas.grab_focus();
     });
+    m_canvas.signal_warp().connect(sigc::mem_fun(*this, &Shell::on_warp_change));
     m_strip.signal_transform_done().connect([this](bool apply) { if (apply) xform_commit(); else xform_cancel(); });
     m_canvas.signal_transform_refused().connect([this] {   // s073
         if (m_xform.plan) toast("Free Transform: " + core::xform::projective_refusal(*m_xform.plan));

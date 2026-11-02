@@ -167,8 +167,16 @@ public:
     sigc::signal<void(const std::array<double, 9>&)>& signal_transform() { return m_xf_signal; }
     sigc::signal<void()>& signal_transform_commit() { return m_xf_commit; }
     sigc::signal<void()>& signal_transform_refused() { return m_xf_refused; }   // s073: a distort of type
-    enum class XfKind { Free = 0, Skew, Distort, Perspective };
-    void set_transform_kind(XfKind k) { m_xf_kind = k; }        // s073: the strip's buttons
+    enum class XfKind { Free = 0, Skew, Distort, Perspective, Warp };
+    // s073: the strip's buttons. s074: Warp turns the box into a 4 x 4 mesh
+    // (from the shape it has); once warping, the box stays a mesh until Enter
+    // / Esc -- false: refused (type is picked, or leaving Warp), the kind kept.
+    bool set_transform_kind(XfKind k);
+    // s074: WARP. Drag a point (a corner carries its two handles); drag
+    // inside the mesh: the surface under the pointer follows it. Each change
+    // emits signal_warp with the 16 points (x y, row by row).
+    sigc::signal<void(const std::array<double, 32>&)>& signal_warp() { return m_warp_signal; }
+    bool transform_is_warp() const { return m_xf.warp; }
     XfKind transform_kind() const { return m_xf_kind; }
     bool transform_is_quad() const { return m_xf.quad; }
     // s008 m3: the Eyedropper clicked at an image point; `background`: Alt.
@@ -424,7 +432,18 @@ private:
         core::select::Pt q[4], q0[4];
         bool   projective_ok = true, refused = false;    // refused: told once a press
         const char* label = nullptr;                     // what the readout says in quad mode
+        // s074: the warp's mesh (p[row * 4 + col]), at the press too; the
+        // point dragged (-1: the surface, at wu wv).
+        bool   warp = false;
+        core::select::Pt w[16], w0[16];
+        int    wi = -1;
+        double wu = 0, wv = 0;
     } m_xf;
+    sigc::signal<void(const std::array<double, 32>&)> m_warp_signal;
+    void warp_emit();
+    core::select::Pt warp_at(double u, double v) const;
+    bool warp_uv(core::select::Pt p, double& u, double& v) const;   // the mesh point nearest p (false: not on it)
+    void draw_warp(const Cairo::RefPtr<Cairo::Context>& cr);
     XfKind m_xf_kind = XfKind::Free;
     sigc::signal<void(const std::array<double, 9>&)> m_xf_signal;
     sigc::signal<void()> m_xf_commit;

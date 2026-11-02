@@ -70,6 +70,19 @@ bool convex(const Quad& q, double min_area = 1e-6);
 
 enum class Quality { Fast, Best };
 
+// s074: WARP -- a 4 x 4 mesh of control points over the box: one bicubic
+// Bezier patch (Photoshop's Warp). p[row * 4 + col], row 0 the top; the
+// corners are p[0], p[3], p[12], p[15]; the rest are their handles (the
+// sides') and the inner four. Evenly spaced points are the identity.
+struct Mesh {
+    Pt p[16];
+    static Mesh of(const pixel::Rect& box);                          // the identity over the box
+    static Mesh of(const pixel::Rect& box, const Projective& m);     // the grid mapped by m (exact when m is affine)
+    Pt at(double u, double v) const;                                 // the patch at (u, v), 0..1 across the box
+    bool identity_for(const pixel::Rect& box) const;
+};
+pixel::Rect mapped(const pixel::Rect& box, const Mesh& m);   // the control points' box (the patch lies inside them)
+
 // The box a rectangle lands in under m (rounded out to whole pixels).
 pixel::Rect mapped(const pixel::Rect& r, const Affine& m);
 pixel::Rect mapped(const pixel::Rect& r, const Projective& m);   // s073: empty when a corner crosses the horizon
@@ -85,6 +98,15 @@ std::optional<pixel::TileMap> over_transformed(const pixel::TileMap& base, const
                                                const pixel::TileMap* mask, const pixel::Rect& box,
                                                const Projective& m, Quality q,
                                                const std::function<bool()>& cancelled = {});
+
+// s074: the same over a warp's mesh (defined over `box`): the patch is cut
+// into small triangles, each landing pixel takes its source point from the
+// one it falls in (a fold: the one drawn last), and the filter is widened by
+// that triangle's shrink.
+std::optional<pixel::TileMap> over_warped(const pixel::TileMap& base, const pixel::TileMap& src,
+                                          const pixel::TileMap* mask, const pixel::Rect& box,
+                                          const Mesh& m, Quality q,
+                                          const std::function<bool()>& cancelled = {});
 
 // What a transform starts from.
 struct Plan {
@@ -105,6 +127,11 @@ std::optional<move::Result> compute(const Plan& p, const Projective& m, Quality 
                                     const std::function<bool()>& cancelled = {});
 // s073: "" a non-affine map is fine for this plan, else why not (a type layer).
 std::string projective_refusal(const Plan& p);
+// s074: the layers under a warp (the mesh over p.box). Type is left as it was
+// (projective_refusal says so first). A whole layer's mask is warped over the
+// box (beyond it the mask shows all). Pure.
+std::optional<move::Result> compute_warp(const Plan& p, const Mesh& m, Quality q,
+                                         const std::function<bool()>& cancelled = {});
 
 // ── verbs (synchronous; the app runs the same on a worker) ──────────────────
 bool apply(DocJournal& j, Document& d, const std::vector<Document::Id>& selected, const Projective& m,
@@ -114,6 +141,10 @@ bool apply(DocJournal& j, Document& d, const std::vector<Document::Id>& selected
 // or a type layer.
 bool distort(DocJournal& j, Document& d, const std::vector<Document::Id>& selected, const Quad& q,
              const std::string& label, const pixel::Px& background);
+// s074: Warp as one verb. `bend(box)` gives the mesh for the plan's box (the
+// selftest's door). False: no plan, a type layer, or the identity.
+bool warp(DocJournal& j, Document& d, const std::vector<Document::Id>& selected,
+          const std::function<Mesh(const pixel::Rect&)>& bend, const std::string& label, const pixel::Px& background);
 // About the box's centre: Flip Horizontal / Vertical, Rotate 90 CW (+90), CCW
 // (-90), 180.
 Affine flip_about(const pixel::Rect& box, bool horizontal);
