@@ -1393,6 +1393,16 @@ const std::vector<Verb>& verbs() {
         {"warp",          [](DocJournal& j, Document& d) {   // s074 / s075
              xform::warp(j, d, {"L4"}, [](const pixel::Rect& b) { return xform::warp_preset(xform::WarpStyle::Flag, b, 40); }, "Warp",
                          pixel::rgba(1, 1, 1, 1)); }},
+        {"auto_color",    [](DocJournal& j, Document& d) { apply_auto(j, d, "L4", adjust::AutoMethod::Colour); },   // s078
+             [](Document& d) {   // a dim, bluish ramp: a cast and too little contrast
+                 Document::Loading load(d);
+                 auto l = *d.get("L4");
+                 pixel::TileMap m = *l.pixels;
+                 for (int x = 100; x < 300; x += 10)
+                     m = m.fill({x, 100, 10, 150}, pixel::rgba(0.25f + 0.002f * (x - 100), 0.25f + 0.002f * (x - 100), 0.4f + 0.002f * (x - 100), 1));
+                 l.pixels = std::make_shared<const pixel::TileMap>(std::move(m));
+                 d.put("L4", l);
+             }},
         {"snapshot",      [](DocJournal& j, Document& d) {   // s077: back to a snapshot without the empty layer (L5) -- one step
              auto s = snapshot::take(d, "Snapshot 1");
              s.records.erase("L5");

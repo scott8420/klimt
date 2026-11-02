@@ -271,6 +271,7 @@ private:
     // ── adjustments (s013) ─────────────────────────────────────────────────
     void on_adjust_new(core::AdjustKind k);      // category: adjust: Layer > New Adjustment Layer (and the panel's button)
     void on_adjust_apply(core::AdjustKind k);    // category: adjust: Image > Adjustments -- the dialog, then a job
+    void on_auto(core::adjust::AutoMethod m);    // category: adjust: s078 -- Image > Auto Tone / Contrast / Color / White Balance, a job, one step
     // s014: the Filter menu (Shell_filter.cpp).
     // s015: retouching (Shell_paint.cpp).
     void on_clone_source(core::select::Pt p);    // category: paint: Alt- / Ctrl-click with the Clone Stamp

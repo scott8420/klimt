@@ -164,7 +164,7 @@ private:
     int  m_mid = -1;
     // s064: the range bar's handle being dragged (-1 none) and the hue at its middle while it is.
     bool m_huesat_ranges = false;
-    Gtk::Button* m_auto = nullptr;        // s064: Levels / Curves' Auto (needs the histogram)
+    Gtk::Widget* m_auto = nullptr;        // s064: Levels / Curves' Auto (needs the histogram); s078: a menu of the four
     std::array<Gtk::ToggleButton*, 3> m_drop_btn{};
     // s065: the Preset row -- its rows are Default, m_preset_rows (indices
     // into presets()), then Custom.

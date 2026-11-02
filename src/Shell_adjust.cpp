@@ -147,6 +147,34 @@ void Shell::on_adjust_apply(core::AdjustKind k) {
 }
 
 
+// s078: Image > Auto Tone / Contrast / Color / White Balance -- the layer's
+// own histogram (through the selection), the Levels it implies, applied: one
+// job, one step named for it.
+void Shell::on_auto(core::adjust::AutoMethod m) {
+    const std::string verb = core::adjust::auto_label(m);
+    const auto id = m_layers.primary();
+    const auto l = m_doc.get(id);
+    if (!l) { toast(verb + ": select a layer first"); return; }
+    if (l->kind != core::Kind::Pixel) { toast(verb + ": " + L::not_pixels(m_doc, id)); return; }
+    if (m_doc.locked_all(id) || (l->locks & core::lock::Pixels)) { toast(verb + ": “" + l->name + "” is locked"); return; }
+    if (!l->pixels) { toast(verb + ": “" + l->name + "” is empty"); return; }
+    const auto mode = m_doc.image().format.mode;
+    if (mode != pixel::Mode::RGB && mode != pixel::Mode::Gray) { toast(verb + ": RGB and Gray documents only, for now"); return; }
+    const auto before = l->pixels;
+    const auto sel = m_doc.selection_ptr();
+    start_job(verb, [this, id, before, sel, m, verb](core::Jobs::Token& t) -> core::Jobs::Landing {
+        const auto a = core::adjust::auto_adjust(core::adjust::fresh(core::AdjustKind::Levels), core::adjust::histogram_of(*before, sel.get()), m);
+        if (core::adjust::identity(a)) return [this, verb] { toast(verb + ": nothing to change -- it already spans the tones"); };
+        auto out = core::adjust::applied(*before, a, sel.get(), [&t] { return t.cancelled(); });
+        if (!out || t.cancelled()) return [] {};
+        auto res = std::make_shared<pixel::TileMap>(std::move(*out));
+        return [this, id, before, sel, res, verb] {
+            if (m_doc.selection_ptr() != sel || !L::set_pixels_if(m_journal, m_doc, id, before, std::move(*res), verb))
+                toast(verb + ": the layer changed meanwhile -- nothing done");
+        };
+    });
+}
+
 // OK (and s061: Invert at once): m_adjust_target's pixels through `a`, one step.
 void Shell::adjust_run(const core::Adjust& a) {
     const auto target = m_adjust_target;

@@ -728,6 +728,122 @@ Adjust auto_tone(const Adjust& in, const Histogram& h, double clip) {
     return normalised(a);
 }
 
+// ── s078: the other autos ───────────────────────────────────────────────────
+const char* auto_label(AutoMethod m) {
+    switch (m) {
+        case AutoMethod::Tone:         return "Auto Tone";
+        case AutoMethod::Contrast:     return "Auto Contrast";
+        case AutoMethod::Colour:       return "Auto Color";
+        case AutoMethod::WhiteBalance: return "Auto White Balance";
+    }
+    return "Auto";
+}
+
+namespace {
+// The darkest and lightest levels of a histogram, past `clip` of it at each end.
+bool ends(const std::array<std::uint32_t, 256>& h, double clip, int& lo, int& hi) {
+    std::uint64_t total = 0;
+    for (const auto v : h) total += v;
+    if (total == 0) return false;
+    const auto cut = static_cast<std::uint64_t>(std::floor(static_cast<double>(total) * std::clamp(clip, 0.0, 0.49)));
+    lo = 0; hi = 255;
+    for (std::uint64_t run = 0; lo < 255; ++lo) { run += h[static_cast<std::size_t>(lo)]; if (run > cut) break; }
+    for (std::uint64_t run = 0; hi > 0; --hi) { run += h[static_cast<std::size_t>(hi)]; if (run > cut) break; }
+    return hi - lo >= 2;
+}
+// The picture's neutral: the average of its near-grey midtone colours (each
+// channel within 5/32 of the others, luminance between a quarter and three
+// quarters); too few of them (< 0.5 %): the average of every colour.
+std::array<double, 3> neutral_of(const Histogram& h) {
+    double w = 0, all = 0;
+    std::array<double, 3> sum{}, sum_all{};
+    for (std::size_t i = 0; i < kColourBins; ++i) {
+        const double n = h.colours[i];
+        if (n == 0) continue;
+        const int r = static_cast<int>(i >> 10), g = static_cast<int>((i >> 5) & 31), b = static_cast<int>(i & 31);
+        const std::array<double, 3> c{(r + 0.5) / 32, (g + 0.5) / 32, (b + 0.5) / 32};
+        for (std::size_t k = 0; k < 3; ++k) sum_all[k] += n * c[k];
+        all += n;
+        const int mx = std::max({r, g, b}), mn = std::min({r, g, b});
+        const double lum = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+        if (mx - mn <= 5 && lum >= 0.25 && lum <= 0.75) {
+            for (std::size_t k = 0; k < 3; ++k) sum[k] += n * c[k];
+            w += n;
+        }
+    }
+    if (all == 0) return {0.5, 0.5, 0.5};
+    if (w < all * 0.005) return {sum_all[0] / all, sum_all[1] / all, sum_all[2] / all};
+    return {sum[0] / w, sum[1] / w, sum[2] / w};
+}
+}  // namespace
+
+Adjust auto_adjust(const Adjust& in, const Histogram& h, AutoMethod m, double clip) {
+    if (in.kind != AdjustKind::Levels && in.kind != AdjustKind::Curves) return in;
+    if (m == AutoMethod::Tone) return auto_tone(in, h, clip);
+    Adjust a = in;
+    if (m == AutoMethod::Contrast) {   // the three as one: the colours keep their balance
+        std::array<std::uint32_t, 256> rgb{};
+        for (std::size_t c = 1; c <= 3; ++c)
+            for (std::size_t i = 0; i < 256; ++i) rgb[i] += h[c][i];
+        int lo = 0, hi = 255;
+        if (!ends(rgb, clip, lo, hi)) return a;
+        if (a.kind == AdjustKind::Levels) { auto& L = a.levels[0]; L.in_black = lo / 255.0; L.in_white = hi / 255.0; L.gamma = 1; }
+        else a.curves[0] = {{lo / 255.0, 0}, {hi / 255.0, 1}};
+        return normalised(a);
+    }
+    if (m == AutoMethod::Colour) a = auto_tone(a, h, clip);
+    // The neutral, through what the channels do now, made grey -- each
+    // channel's midtone moved to the three's average.
+    const auto nt = neutral_of(h);
+    std::array<double, 3> now{};
+    for (std::size_t c = 0; c < 3; ++c) {
+        if (a.kind == AdjustKind::Levels) now[c] = levels_map(a.levels[c + 1], nt[c]);
+        else {
+            const auto t = curve_table(a.curves[c + 1], 1024);
+            now[c] = t[static_cast<std::size_t>(std::clamp(nt[c], 0.0, 1.0) * 1023)];
+        }
+    }
+    const double target = (now[0] + now[1] + now[2]) / 3;
+    if (target <= 0.02 || target >= 0.98) return normalised(a);   // nothing in the middle to balance
+    for (std::size_t c = 0; c < 3; ++c) {
+        if (now[c] <= 0.005 || now[c] >= 0.995 || std::abs(now[c] - target) < 1e-4) continue;
+        if (a.kind == AdjustKind::Levels) {
+            // t^(1/g) = target, t the channel's stretched value before its gamma
+            auto& L = a.levels[c + 1];
+            const double span = std::max(1e-6, L.in_white - L.in_black);
+            const double t = std::clamp((nt[c] - L.in_black) / span, 1e-4, 0.9999);
+            L.gamma = std::clamp(std::log(t) / std::log(target), 0.1, 9.99);
+        } else {
+            auto pts = a.curves[c + 1];
+            if (pts.size() < 2) pts = {{0, 0}, {1, 1}};
+            pts.push_back({std::clamp(nt[c], 0.02, 0.98), target});
+            std::sort(pts.begin(), pts.end(), [](const CurvePt& p, const CurvePt& q) { return p.x < q.x; });
+            a.curves[c + 1] = pts;
+        }
+    }
+    return normalised(a);
+}
+
+Histogram histogram_of(const pixel::TileMap& px, const pixel::TileMap* sel) {
+    const int w = px.width(), hgt = px.height();
+    std::vector<std::uint32_t> argb;
+    const double area = static_cast<double>(w) * hgt;
+    const int step = std::max(1, static_cast<int>(std::floor(std::sqrt(area / 1.0e6))));
+    argb.reserve(static_cast<std::size_t>(area / (step * step)) + 1);
+    const bool gray = px.format().mode == pixel::Mode::Gray;
+    for (int y = 0; y < hgt; y += step)
+        for (int x = 0; x < w; x += step) {
+            if (sel && sel->get(x, y).c[0] < 0.5f) continue;
+            const auto p = px.get(x, y);
+            const float al = px.format().alpha ? p.c[gray ? 1 : 3] : 1.f;
+            if (al <= 0.f) continue;
+            const auto q = [&](float v) { return static_cast<std::uint32_t>(std::clamp(v * al, 0.f, 1.f) * 255.f + 0.5f); };
+            const float r = p.c[0], g = gray ? p.c[0] : p.c[1], b = gray ? p.c[0] : p.c[2];
+            argb.push_back((static_cast<std::uint32_t>(std::clamp(al, 0.f, 1.f) * 255.f + 0.5f) << 24) | (q(r) << 16) | (q(g) << 8) | q(b));
+        }
+    return histogram(argb);
+}
+
 Adjust dropped(const Adjust& in, Dropper d, const std::array<double, 3>& rgb) {
     Adjust a = in;
     if (d == Dropper::None || (a.kind != AdjustKind::Levels && a.kind != AdjustKind::Curves)) return a;

@@ -51,6 +51,18 @@ bool apply_adjust(DocJournal& j, Document& d, const Id& id, const Adjust& a) {
     return set_pixels_if(j, d, id, l->pixels, std::move(*out), std::string(adjust::label(n.kind)));
 }
 
+bool apply_auto(DocJournal& j, Document& d, const Id& id, adjust::AutoMethod m) {   // s078
+    const auto l = d.get(id);
+    if (!l || l->kind != Kind::Pixel || d.locked_all(id) || (l->locks & lock::Pixels) || !l->pixels) return false;
+    const auto mode = l->pixels->format().mode;
+    if (mode != pixel::Mode::RGB && mode != pixel::Mode::Gray) return false;
+    const auto a = adjust::auto_adjust(adjust::fresh(AdjustKind::Levels), adjust::histogram_of(*l->pixels, d.selection()), m);
+    if (adjust::identity(a)) return false;
+    auto out = adjust::applied(*l->pixels, a, d.selection());
+    if (!out) return false;
+    return set_pixels_if(j, d, id, l->pixels, std::move(*out), adjust::auto_label(m));
+}
+
 bool apply_filter(DocJournal& j, Document& d, const Id& id, const Filter& f) {
     const auto l = d.get(id);
     if (!l || l->kind != Kind::Pixel || d.locked_all(id) || (l->locks & lock::Pixels) || !l->pixels) return false;

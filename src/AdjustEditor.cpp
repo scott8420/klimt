@@ -340,29 +340,51 @@ void AdjustEditor::rebuild() {
             paint();
         });
         head->append(*m_channel);
-        // s064: Auto -- each channel stretched to black and white.
-        m_auto = Gtk::make_managed<Gtk::Button>("Auto");
-        m_auto->set_name("adjust.auto");
-        m_auto->add_css_class("flat");
-        m_auto->set_tooltip_text("Auto -- stretch each of red, green and blue so its darkest is black and its lightest white "
-                                 "(the extreme 0.1 % let go), as Photoshop's");
-        m_auto->signal_clicked().connect([this] {
-            if (!m_hist) return;
-            m_a = A::auto_tone(m_a, *m_hist);
-            m_point = -1;
-            emit();
-            paint();
-        });
-        head->append(*m_auto);
+        // s064: Auto -- each channel stretched to black and white. s078: the
+        // four of Photoshop's Auto Color Correction Options, as a menu.
+        auto mb = Gtk::make_managed<Gtk::MenuButton>();
+        mb->set_name("adjust.auto");
+        mb->set_label("Auto");
+        mb->add_css_class("flat");
+        mb->set_tooltip_text("Auto -- set from the picture's own histogram: Tone, Contrast, Color or White Balance");
+        auto pop = Gtk::make_managed<Gtk::Popover>();
+        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 2);
+        box->set_margin(4);
+        struct Item { A::AutoMethod m; const char* name; const char* tip; };
+        static const Item items[] = {
+            {A::AutoMethod::Tone, "Auto Tone", "Each of red, green and blue stretched so its darkest is black and its lightest white (a cast goes too)"},
+            {A::AutoMethod::Contrast, "Auto Contrast", "The three stretched together -- more contrast, the colours kept as they are"},
+            {A::AutoMethod::Colour, "Auto Color", "Auto Tone, then the near-grey midtones made neutral"},
+            {A::AutoMethod::WhiteBalance, "Auto White Balance", "The near-grey midtones made neutral alone -- black and white points left"}};
+        for (const auto& it : items) {
+            auto b = Gtk::make_managed<Gtk::Button>(it.name);
+            b->add_css_class("flat");
+            b->set_tooltip_text(it.tip);
+            b->signal_clicked().connect([this, pop, m = it.m] {
+                pop->popdown();
+                if (!m_hist) return;
+                m_a = A::auto_adjust(m_a, *m_hist, m);
+                m_point = -1;
+                emit();
+                paint();
+            });
+            box->append(*b);
+        }
+        pop->set_child(*box);
+        mb->set_popover(*pop);
+        mb->set_sensitive(m_hist.has_value());
+        m_auto = mb;
+        head->append(*mb);
     } else if (m_a.kind == AdjustKind::BlackWhite) {
         // s066: Black & White's Auto -- the six sliders from the picture's colours.
-        m_auto = Gtk::make_managed<Gtk::Button>("Auto");
-        m_auto->set_name("adjust.auto");
-        m_auto->add_css_class("flat");
-        m_auto->set_tooltip_text("Auto -- the mix from the picture's own colours: its greys spread as wide as they "
-                                 "go without blocking up or blowing out (a starting point)");
-        m_auto->set_sensitive(m_hist.has_value());
-        m_auto->signal_clicked().connect([this] {
+        auto bw = Gtk::make_managed<Gtk::Button>("Auto");
+        m_auto = bw;
+        bw->set_name("adjust.auto");
+        bw->add_css_class("flat");
+        bw->set_tooltip_text("Auto -- the mix from the picture's own colours: its greys spread as wide as they "
+                             "go without blocking up or blowing out (a starting point)");
+        bw->set_sensitive(m_hist.has_value());
+        bw->signal_clicked().connect([this] {
             if (!m_hist) return;
             m_a = A::bw_auto(m_a, *m_hist);
             emit();

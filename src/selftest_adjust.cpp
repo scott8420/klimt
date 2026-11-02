@@ -981,4 +981,53 @@ void selftest_adjust(const Check& check) {
         check("lookup layer: the red square turns blue; the white background stays white", near(px.r, 0, 0.02) && near(px.b, 1, 0.02) &&
               near(t.seen(20, 20).r, 1, 0.02), num(px.r) + "," + num(px.b));
     }
+
+    // ── s078: Auto Tone / Contrast / Color / White Balance ─────────────────
+    std::cout << "\n-- adjust: the autos (s078) --\n";
+    {
+        using K = core::AdjustKind;
+        namespace P = klimt::pixel;
+        // A bluish, flat picture: r, g 0.2 .. 0.6, b 0.3 .. 0.7 across 200 columns.
+        P::TileMap m(P::Format{}, 200, 50);
+        for (int x = 0; x < 200; x += 4) {
+            const float t = x / 199.f * 0.4f;
+            m = m.fill({x, 0, 4, 50}, P::rgba(0.2f + t, 0.2f + t, 0.3f + t, 1));
+        }
+        const auto h = A::histogram_of(m);
+        const auto lv = A::fresh(K::Levels);
+        const auto run = [&](const core::Adjust& a, float r, float g, float b) { A::apply_rgb(a, r, g, b); return std::array<float, 3>{r, g, b}; };
+        const auto tone = A::auto_adjust(lv, h, A::AutoMethod::Tone);
+        check("autos: Tone stretches each channel apart", tone.levels[1].in_black < 0.22 && tone.levels[3].in_black > 0.28 &&
+                                                          tone.levels[0] == lv.levels[0], num(tone.levels[3].in_black));
+        const auto con = A::auto_adjust(lv, h, A::AutoMethod::Contrast);
+        check("autos: Contrast stretches the three together (the composite)", con.levels[1] == lv.levels[1] && con.levels[3] == lv.levels[3] &&
+                                                                              con.levels[0].in_black < 0.22 && con.levels[0].in_white > 0.68, num(con.levels[0].in_white));
+        const auto c1 = run(con, 0.4f, 0.4f, 0.5f);
+        check("autos: ...so the cast stays (blue still bluer)", c1[2] - c1[0] > 0.1f, num(c1[2] - c1[0]));
+        const auto col = A::auto_adjust(lv, h, A::AutoMethod::Colour);
+        const auto c2 = run(col, 0.4f, 0.4f, 0.5f);
+        check("autos: Color -- the cast gone (the middle grey neutral)", std::abs(c2[2] - c2[0]) < 0.04f && std::abs(c2[1] - c2[0]) < 0.04f,
+              num(c2[0]) + "," + num(c2[2]));
+        const auto wb = A::auto_adjust(lv, h, A::AutoMethod::WhiteBalance);
+        const auto c3 = run(wb, 0.4f, 0.4f, 0.5f);
+        check("autos: White Balance -- neutral, the black and white points left", std::abs(c3[2] - c3[0]) < 0.04f &&
+              wb.levels[3].in_black == 0 && wb.levels[3].in_white == 1, num(c3[0]) + "," + num(c3[2]));
+        check("autos: labels", std::string(A::auto_label(A::AutoMethod::Colour)) == "Auto Color", "");
+        const auto cv = A::auto_adjust(A::fresh(K::Curves), h, A::AutoMethod::Colour);
+        const auto c4 = run(cv, 0.4f, 0.4f, 0.5f);
+        check("autos: on Curves too", std::abs(c4[2] - c4[0]) < 0.05f, num(c4[0]) + "," + num(c4[2]));
+        // The histogram reads through the selection and leaves transparency out.
+        P::TileMap two(P::Format{}, 100, 10);
+        two = two.fill({0, 0, 50, 10}, P::rgba(1, 0, 0, 1)).fill({50, 0, 50, 10}, P::rgba(0, 0, 1, 1));
+        P::TileMap sel(P::Format{P::Depth::U8, P::Mode::Gray, false}, 100, 10);
+        sel = sel.fill({0, 0, 50, 10}, [] { P::Px p; p.c[0] = 1; return p; }());
+        const auto hs = A::histogram_of(two, &sel);
+        check("autos: the histogram through the selection", hs[1][255] > 0 && hs[3][255] == 0, "");
+        P::TileMap clear(P::Format{}, 50, 10);
+        check("autos: transparent pixels left out", A::histogram_of(clear)[1][0] == 0, "");
+        P::TileMap flat(P::Format{}, 50, 10);
+        flat = flat.fill({0, 0, 50, 10}, P::rgba(0.5f, 0.5f, 0.5f, 1));
+        check("autos: a flat grey -- nothing to do", A::identity(A::auto_adjust(lv, A::histogram_of(flat), A::AutoMethod::Colour)), "");
+    }
 }
+

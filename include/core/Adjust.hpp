@@ -261,6 +261,23 @@ std::array<std::uint32_t, 256> bw_histogram(const Adjust& a, const Histogram& h)
 // Curves: each channel a straight line through those two. The rest of `a`
 // (and the composite channel) kept. A channel with nothing in it is left.
 Adjust auto_tone(const Adjust& a, const Histogram& h, double clip = 0.001);
+// s078: the other AUTOS (Photoshop's Auto Color Correction Options):
+//   Tone     -- auto_tone (each channel stretched apart: a cast goes too);
+//   Contrast -- the three stretched TOGETHER on the composite channel (the
+//               colours keep their balance, only the contrast grows);
+//   Colour   -- Tone, then the picture's near-grey midtones made neutral (each
+//               channel's gamma);
+//   WhiteBalance -- the near-grey midtones made neutral alone (black and
+//               white points left where they are).
+// Levels or Curves; the rest of `a` kept. No neutral to find (a picture with
+// no near-greys): the average of all its colours stands in (grey world).
+enum class AutoMethod : std::uint8_t { Tone, Contrast, Colour, WhiteBalance };
+const char* auto_label(AutoMethod m);   // "Auto Tone" ...
+Adjust auto_adjust(const Adjust& a, const Histogram& h, AutoMethod m, double clip = 0.001);
+// The histogram of a map's pixels (RGB / Gray; at most ~1M of them read,
+// evenly), through `sel`'s coverage when given (a pixel half selected counts
+// once if over half). Transparent pixels are left out.
+Histogram histogram_of(const pixel::TileMap& px, const pixel::TileMap* sel = nullptr);
 // s064: Levels / Curves' eyedroppers -- `rgb` (0..1, picked on the canvas)
 // set as each channel's black point, white point, or (grey) made neutral
 // at the average of what its three channels map to now. Levels: the input

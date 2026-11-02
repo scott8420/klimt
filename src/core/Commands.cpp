@@ -87,6 +87,10 @@ const std::vector<Command>& commands() {
             {"New Adjustment Layer: Selective Colour", "Layer", "win.adjust-new-selective-colour", "", "adjustment layer selective color colour cmyk cyan magenta yellow black reds neutrals", ""},   // s063
             {"Brightness/Contrast", "Image", "win.adjust-apply-brightness-contrast", "", "adjustments light dark pixels", ""},
             {"Levels", "Image", "win.adjust-apply-levels", "", "adjustments histogram black white point gamma pixels", ""},
+            {"Auto Tone", "Image", "win.auto-tone", "", "auto levels stretch channels shift+ctrl+l", ""},   // s078
+            {"Auto Contrast", "Image", "win.auto-contrast", "", "auto contrast stretch alt+shift+ctrl+l", ""},
+            {"Auto Color", "Image", "win.auto-color", "", "auto colour cast neutral white balance shift+ctrl+b", ""},
+            {"Auto White Balance", "Image", "win.auto-white", "", "auto white balance cast neutral grey", ""},
             {"Curves", "Image", "win.adjust-apply-curves", "", "adjustments tone contrast pixels", ""},
             {"Hue/Saturation", "Image", "win.adjust-apply-hue-saturation", "", "adjustments colour colorize tint pixels", ""},
             {"Exposure", "Image", "win.adjust-apply-exposure", "", "adjustments stops light offset gamma pixels", ""},   // s061

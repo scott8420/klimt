@@ -113,6 +113,11 @@ void Shell::bind_actions() {  // bindings
     });
     m_layer_acts["free-transform"] = add_action("free-transform", sigc::mem_fun(*this, &Shell::on_free_transform));
     m_layer_acts["liquify"] = add_action("liquify", sigc::mem_fun(*this, &Shell::on_liquify));   // s076
+    // s078: the autos.
+    m_layer_acts["auto-tone"]     = add_action("auto-tone",     [this] { on_auto(core::adjust::AutoMethod::Tone); });
+    m_layer_acts["auto-contrast"] = add_action("auto-contrast", [this] { on_auto(core::adjust::AutoMethod::Contrast); });
+    m_layer_acts["auto-color"]    = add_action("auto-color",    [this] { on_auto(core::adjust::AutoMethod::Colour); });
+    m_layer_acts["auto-white"]    = add_action("auto-white",    [this] { on_auto(core::adjust::AutoMethod::WhiteBalance); });
     namespace X = core::xform;
     m_layer_acts["flip-h"] = add_action("flip-h", [this] { run_xform("Flip Horizontal", [](const pixel::Rect& b) { return X::flip_about(b, true); }); });
     m_layer_acts["flip-v"] = add_action("flip-v", [this] { run_xform("Flip Vertical", [](const pixel::Rect& b) { return X::flip_about(b, false); }); });
@@ -429,6 +434,7 @@ void Shell::bind_actions() {  // bindings
             const auto NONE  = Gdk::ModifierType{};
             const auto CTRL  = Gdk::ModifierType::CONTROL_MASK;
             const auto SHIFT = Gdk::ModifierType::SHIFT_MASK;
+            const auto ALT   = Gdk::ModifierType::ALT_MASK;   // s078
             if (focus_is_text()) return false;
             // s035: the Pen -- Enter / Escape end the subpath being drawn;
             // Backspace / Delete take its last anchor (or the picked one).
@@ -473,6 +479,10 @@ void Shell::bind_actions() {  // bindings
             else if ((keyval == GDK_KEY_a || keyval == GDK_KEY_A) && mods == CTRL)          act = "win.select-all";
             else if ((keyval == GDK_KEY_t || keyval == GDK_KEY_T) && mods == CTRL)          act = "win.free-transform";
             else if ((keyval == GDK_KEY_x || keyval == GDK_KEY_X) && mods == (CTRL | SHIFT)) act = "win.liquify";   // s076
+            // s078: Photoshop's -- Auto Tone Shift+Ctrl+L, Auto Contrast Alt+Shift+Ctrl+L, Auto Color Shift+Ctrl+B.
+            else if ((keyval == GDK_KEY_l || keyval == GDK_KEY_L) && mods == (CTRL | SHIFT))       act = "win.auto-tone";
+            else if ((keyval == GDK_KEY_l || keyval == GDK_KEY_L) && mods == (CTRL | SHIFT | ALT)) act = "win.auto-contrast";
+            else if ((keyval == GDK_KEY_b || keyval == GDK_KEY_B) && mods == (CTRL | SHIFT))       act = "win.auto-color";
             else if ((keyval == GDK_KEY_BackSpace) && mods == Gdk::ModifierType::ALT_MASK)   act = "win.fill-fg";
             else if ((keyval == GDK_KEY_BackSpace) && mods == CTRL)                          act = "win.fill-bg";
             else if ((keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete) && mods == NONE) act = "win.delete-selection";

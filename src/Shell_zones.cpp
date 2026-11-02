@@ -446,6 +446,13 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     turn->append("Flip Canvas Horizontal", "win.canvas-flip-h");
     turn->append("Flip Canvas Vertical", "win.canvas-flip-v");
     image->append_submenu("Image Rotation", turn);
+    // s078: the autos, above Adjustments (Photoshop's place).
+    auto autos = Gio::Menu::create();
+    autos->append("Auto Tone", "win.auto-tone");
+    autos->append("Auto Contrast", "win.auto-contrast");
+    autos->append("Auto Color", "win.auto-color");
+    autos->append("Auto White Balance", "win.auto-white");
+    image->append_section(autos);
     // s013: Image > Adjustments -- on the pixels, for good.
     auto adj = Gio::Menu::create();
     for (const auto k : core::adjust::kinds())

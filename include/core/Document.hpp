@@ -469,6 +469,10 @@ bool filter_layer_end(DocJournal& j);
 // through the selection. Refused on a group / adjustment layer, under an All
 // or a Pixels lock, on CMYK / Lab documents, or when it changes nothing.
 bool apply_adjust(DocJournal& j, Document& d, const Id& id, const Adjust& a);
+// s078: Image > Auto Tone / Auto Contrast / Auto Color / Auto White Balance --
+// Levels found from the layer's own pixels (through the selection), applied,
+// one step named for it. False: refused, or it would change nothing.
+bool apply_auto(DocJournal& j, Document& d, const Id& id, adjust::AutoMethod m);
 // s014 -- the Filter menu: `f` applied to a pixel layer's pixels for good,
 // through the selection (a transparency lock keeps a blur off alpha). Refused
 // as apply_adjust is. docs/filters.md.
