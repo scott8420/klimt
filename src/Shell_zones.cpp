@@ -342,6 +342,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     edit->append("Free Transform", "win.free-transform");
     edit->append("Define Pattern", "win.define-pattern");   // s033
     edit->append("Colour Settings…", "win.colour-settings");   // s070
+    edit->append("AI Models…", "win.ai-models");               // s089: what the local AI verbs need
     auto tr = Gio::Menu::create();
     tr->append("Flip Horizontal", "win.flip-h");
     tr->append("Flip Vertical", "win.flip-v");

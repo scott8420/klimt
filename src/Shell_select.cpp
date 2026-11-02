@@ -6,6 +6,10 @@
 #include "Log.hpp"
 #include <gtkmm/alertdialog.h>
 #include <gtkmm/filelauncher.h>
+#include <gtkmm/grid.h>
+#include <gtkmm/window.h>
+#include <glibmm/markup.h>
+#include <glibmm/main.h>
 #include <gdkmm/clipboard.h>
 #include <filesystem>
 #include "Log.hpp"
@@ -38,6 +42,7 @@ void Shell::on_shape(const CanvasView::Shape& shape) {
     const auto im = m_doc.image();
     const auto mf = m_doc.mask_format();
     const auto old = m_doc.selection_ptr();
+    if (shape.object && shape.kind == K::Rect && shape.pts.size() >= 2) { object_select(shape); return; }   // s089
     if (shape.kind == K::Point) {
         // The Magic Wand: the pixels like the clicked one, in the selected
         // layer -- or in what you see, with "All layers".
@@ -490,6 +495,140 @@ void Shell::on_content_aware_fill() {
             toast(verb + " -- on a layer of its own above; the picture under it is untouched", true);
         };
     });
+}
+
+// ── s089: Object Select (the Select tool's 7th variant) ────────────────────
+// A box dragged round one thing: the subject model looks only there and the
+// thing becomes the selection -- Shift adds it, Alt takes it away, both
+// intersect (the op at the press). A job; ONE step.
+void Shell::object_select(const CanvasView::Shape& shape) {
+    const std::string verb = shape.op != S::Op::Replace ? std::string("Object Select (") + S::op_name(shape.op) + ")" : "Object Select";
+    if (!seg::available()) { toast("Object Select: Klimt was built without ONNX Runtime -- install onnxruntime-devel and build again"); return; }
+    const auto& p = shape.pts;
+    const int x0 = static_cast<int>(std::floor(std::min(p.front().x, p.back().x))), y0 = static_cast<int>(std::floor(std::min(p.front().y, p.back().y)));
+    const int x1 = static_cast<int>(std::ceil(std::max(p.front().x, p.back().x))), y1 = static_cast<int>(std::ceil(std::max(p.front().y, p.back().y)));
+    const core::Image im = m_doc.image();
+    const pixel::Rect box{std::max(0, x0), std::max(0, y0), std::min(im.width, x1) - std::max(0, x0), std::min(im.height, y1) - std::max(0, y0)};
+    if (box.w < 4 || box.h < 4) { toast("Object Select: drag a box round the thing"); return; }
+    const auto layers = m_doc.snapshot();
+    const auto old = m_doc.selection_ptr();
+    const auto mf = m_doc.mask_format();
+    const auto op = shape.op;
+    const std::string dir = seg::default_dir();
+    start_job(verb, [this, im, layers, old, mf, op, box, dir, verb](core::Jobs::Token& t) -> core::Jobs::Landing {
+        const auto* m = seg::best_subject(dir);
+        if (!m) {
+            const auto words = "Neither model is in " + dir;
+            return [this, words] { say_model_missing("Object Select", "subject", words); };
+        }
+        formats::Progress cancel_only;
+        cancel_only.cancelled = [&t] { return t.cancelled(); };
+        auto flat = core::file::flatten(im, layers, cancel_only);
+        if (!flat) return [] {};
+        std::string err;
+        auto mk = core::subject::object(*flat, box, mf, *m, seg::path_of(*m, dir), err, [&t] { return t.cancelled(); });
+        if (!mk) {
+            if (t.cancelled()) return [] {};
+            return [this, err] { toast("Object Select: " + err); };
+        }
+        auto next = std::make_shared<pixel::TileMap>(S::combine(old.get(), *mk, op));
+        return [this, old, next, verb] {
+            if (!S::set_if(m_journal, m_doc, old, std::move(*next), verb)) { toast("Object Select: the selection changed meanwhile -- nothing done"); return; }
+            if (auto lg = log::get(log::Area::Shell)) lg->info("object select: landed");
+        };
+    });
+}
+
+// ── s089: Edit > AI Models… ─────────────────────────────────────────────────
+// What the local AI verbs need, and what's in the folder: each model's use,
+// file, size and state (checked on a worker -- a hash of 200 MB takes a
+// moment), its link (Copy), the folder (Open). Nothing is fetched.
+void Shell::on_models() {
+    auto* win = new Gtk::Window();
+    win->set_title("AI Models");
+    win->set_name("models");
+    win->set_transient_for(*this);
+    win->set_modal(true);
+    win->set_default_size(640, -1);
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 10);
+    box->set_margin(18);
+    const std::string dir = seg::default_dir();
+    auto* head = Gtk::make_managed<Gtk::Label>();
+    head->set_xalign(0.0f);
+    head->set_wrap(true);
+    head->set_markup(std::string("<b>The models live in</b> ") + Glib::Markup::escape_text(dir) +
+                     (seg::available() ? std::string() : std::string("\n<b>This Klimt was built without ONNX Runtime</b> -- install onnxruntime-devel and build again.")));
+    box->append(*head);
+    auto* grid = Gtk::make_managed<Gtk::Grid>();
+    grid->set_row_spacing(8);
+    grid->set_column_spacing(12);
+    auto states = std::make_shared<std::vector<Gtk::Label*>>();
+    int row = 0;
+    for (const auto& m : seg::catalog()) {
+        auto* what = Gtk::make_managed<Gtk::Label>();
+        what->set_xalign(0.0f);
+        what->set_wrap(true);
+        what->set_max_width_chars(44);
+        what->set_markup("<b>" + Glib::Markup::escape_text(m.file) + "</b>  " + std::to_string(static_cast<int>(m.bytes / 1e6 + 0.5)) +
+                         " MB\n<small>" + Glib::Markup::escape_text(m.what) + "</small>");
+        grid->attach(*what, 0, row);
+        auto* st = Gtk::make_managed<Gtk::Label>("checking…");
+        st->add_css_class("dim-label");
+        st->set_xalign(0.0f);
+        grid->attach(*st, 1, row);
+        states->push_back(st);
+        auto* copy = Gtk::make_managed<Gtk::Button>("Copy Link");
+        copy->set_tooltip_text(m.url);
+        const std::string url = m.url;
+        copy->signal_clicked().connect([this, url] { get_clipboard()->set_text(url); toast("Link copied"); });
+        grid->attach(*copy, 2, row);
+        ++row;
+    }
+    box->append(*grid);
+    auto* buttons = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+    buttons->set_halign(Gtk::Align::END);
+    auto* open = Gtk::make_managed<Gtk::Button>("Open Folder");
+    open->signal_clicked().connect([this, dir] {
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        auto l = Gtk::FileLauncher::create(Gio::File::create_for_path(dir));
+        l->launch(*this, [l](Glib::RefPtr<Gio::AsyncResult>& rr) { try { l->launch_finish(rr); } catch (const Glib::Error&) {} });
+    });
+    auto* again = Gtk::make_managed<Gtk::Button>("Check Again");
+    auto* close = Gtk::make_managed<Gtk::Button>("Close");
+    close->signal_clicked().connect([win] { win->close(); });
+    buttons->append(*open);
+    buttons->append(*again);
+    buttons->append(*close);
+    box->append(*buttons);
+    win->set_child(*box);
+    auto alive = std::make_shared<bool>(true);
+    const auto check = [this, states, dir, alive] {
+        for (auto* l : *states) l->set_text("checking…");
+        start_job("Check models", [this, states, dir, alive](core::Jobs::Token&) -> core::Jobs::Landing {
+            auto out = std::make_shared<std::vector<std::pair<std::string, bool>>>();
+            for (const auto& m : seg::catalog()) {
+                const auto s = seg::check(m, dir);
+                out->push_back({s == seg::State::Ready ? "ready" : s == seg::State::Missing ? "not there" :
+                                s == seg::State::WrongSize ? "the wrong size" : "not the right file", s == seg::State::Ready});
+            }
+            return [states, out, alive] {
+                if (!*alive) return;
+                for (std::size_t i = 0; i < states->size() && i < out->size(); ++i) {
+                    auto* l = (*states)[i];
+                    l->set_text((*out)[i].first);
+                    l->remove_css_class("dim-label");
+                    l->remove_css_class("error");
+                    l->remove_css_class("success");
+                    l->add_css_class((*out)[i].second ? "success" : "error");
+                }
+            };
+        });
+    };
+    again->signal_clicked().connect(check);
+    win->signal_hide().connect([win, alive] { *alive = false; Glib::signal_idle().connect_once([win] { delete win; }); });
+    win->present();
+    check();
 }
 
 }  // namespace klimt

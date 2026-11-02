@@ -105,6 +105,7 @@ public:
         enum class Kind { None, Rect, Ellipse, Lasso, Point } kind = Kind::None;   // Point: the Wand's click
         std::vector<core::select::Pt> pts;
         core::select::Op op = core::select::Op::Replace;
+        bool object = false;   // s089: Object Select -- the box says where the thing is (a model finds it)
     };
     sigc::signal<void(const Shape&)>& signal_shape() { return m_shape_signal; }
     // s038: the Lasso with Alt's straight sides -- open between clicks.
@@ -347,7 +348,7 @@ private:
     sigc::signal<void(TextAt, double, double, bool)> m_text_signal;    // s046
     TextOverlay m_text_ov;
     bool m_texting = false;
-    bool selecting() const { return m_tool == "select" && (m_variant <= 3 || m_variant == 5); }   // Rectangle, Ellipse, Lasso, Wand; s079: Magnetic
+    bool selecting() const { return m_tool == "select" && (m_variant <= 3 || m_variant == 5 || m_variant == 6); }   // s089: Object   // Rectangle, Ellipse, Lasso, Wand; s079: Magnetic
     bool painting() const { return m_tool == "brush" || m_tool == "eraser" || m_tool == "clone" || m_tool == "heal" || m_tool == "smudge"; }
     // s015 m4: the tools that take from a source point (Alt- / Ctrl-click).
     bool sourced() const { return m_tool == "clone" || (m_tool == "heal" && m_variant == 1); }

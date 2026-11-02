@@ -145,6 +145,22 @@ void selftest_seg(const Check& check) {
     const auto hide = sub::background_mask(pic, nullptr, mf, *fine, seg::path_of(*fine, dir), sub::edge_for(400, 300), err);
     check("seg: Remove Background's mask -- hides the ground, shows the disc, a soft edge at its rim",
           hide && hide->format() == mf && hide->get(10, 10).c[0] > 0.9f && hide->get(150, 160).c[0] < 0.1f, err);
+    // s089: Object Select -- a box round one of two things finds that one.
+    {
+        const P::TileMap two = P::TileMap(f8, 400, 300).paint({0, 0, 400, 300}, [](int x, int y, const P::Px&) {
+            if ((x - 110) * (x - 110) + (y - 150) * (y - 150) < 60 * 60) return P::rgba(0.85f, 0.15f, 0.1f);
+            if (x >= 260 && x < 340 && y >= 110 && y < 190) return P::rgba(0.1f, 0.3f, 0.85f);
+            return P::rgba(0.55f, 0.6f, 0.62f);
+        });
+        const auto* best = seg::best_subject(dir);
+        const auto o = sub::object(two, {245, 95, 110, 110}, mf, *best, seg::path_of(*best, dir), err);
+        check("seg: Object Select -- a box round the blue square: the square in, the disc (outside the box) out",
+              o && o->get(300, 150).c[0] > 0.9f && o->get(110, 150).c[0] == 0.f && o->get(250, 100).c[0] < 0.5f, err);
+        const auto d = sub::object(two, {40, 80, 140, 140}, mf, *best, seg::path_of(*best, dir), err);
+        check("seg: ... and round the disc: the disc in, the square out", d && d->get(110, 150).c[0] > 0.9f && d->get(300, 150).c[0] == 0.f, err);
+        std::string e3;
+        check("seg: ... a box too small -- said", !sub::object(two, {10, 10, 2, 2}, mf, *best, seg::path_of(*best, dir), e3) && !e3.empty(), e3);
+    }
     // s088: Content-Aware Fill -- stripes, a square hole: the stripes go on through it.
     const auto* lama = seg::model("fill");
     if (!lama || seg::check(*lama, dir) != seg::State::Ready) {

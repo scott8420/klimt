@@ -60,6 +60,22 @@ std::optional<P::TileMap> mask(const P::TileMap& picture, const P::TileMap* with
     return out;
 }
 
+std::optional<P::TileMap> object(const P::TileMap& picture, const P::Rect& box, const P::Format& mask_format,
+                                 const seg::Model& model, const std::string& model_path, std::string& error,
+                                 const std::function<bool()>& cancelled) {
+    const int W = picture.width(), H = picture.height();
+    if (box.w < 4 || box.h < 4) { error = "draw a box round the thing (a bigger one)"; return std::nullopt; }
+    // The box grown 3 % of its larger side: a tight box keeps the thing's edge.
+    const int g = std::max(2, std::max(box.w, box.h) * 3 / 100);
+    const P::Rect grown{std::max(0, box.x - g), std::max(0, box.y - g), 0, 0};
+    const int x1 = std::min(W, box.x + box.w + g), y1 = std::min(H, box.y + box.h + g);
+    P::TileMap within(mask_format, W, H);
+    P::Px one{};
+    one.c[0] = 1;
+    within = within.fill({grown.x, grown.y, x1 - grown.x, y1 - grown.y}, one);
+    return mask(picture, &within, mask_format, model, model_path, error, cancelled);
+}
+
 double edge_for(int width, int height) { return std::clamp(std::max(width, height) * 0.004, 2.0, 24.0); }
 
 std::optional<P::TileMap> background_mask(const P::TileMap& picture, const P::TileMap* within, const P::Format& mask_format,

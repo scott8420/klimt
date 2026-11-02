@@ -62,6 +62,7 @@ const std::vector<Command>& commands() {
             {"Contract Selection", "Select", "win.select-contract", "", "modify shrink smaller", ""},
             {"Border Selection", "Select", "win.select-border", "", "modify edge band outline ring", ""},
             {"Color Range", "Select", "win.select-range", "", "colour color pick sample similar fuzziness range", ""},
+            {"AI Models\u2026", "Edit", "win.ai-models", "", "ai models onnx lama isnet u2net folder download local", ""},   // s089
             {"Content-Aware Fill", "Edit", "win.fill-content-aware", "", "content aware fill remove object heal inpaint lama erase patch ai", ""},   // s088
             {"Remove Background", "Layer", "win.remove-background", "", "remove background cut out isolate subject mask ai model matting hair", ""},   // s087
             {"Subject", "Select", "win.select-subject", "", "select subject object person ai model mask cut out isolate automatic", ""},   // s086

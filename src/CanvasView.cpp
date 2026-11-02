@@ -275,6 +275,7 @@ CanvasView::CanvasView() {
                 m_drag.kind = m_variant == 1 ? Shape::Kind::Ellipse : (m_variant == 2 || m_variant == 5) ? Shape::Kind::Lasso
                             : m_variant == 3 ? Shape::Kind::Point : Shape::Kind::Rect;
                 m_mag_on = m_variant == 5;   // s079: the Magnetic Lasso
+                m_drag.object = m_variant == 6;   // s089: Object Select -- a box
                 m_drag.pts = {{to_image_x(x), to_image_y(y)}};
                 if (m_drag.kind == Shape::Kind::Rect || m_drag.kind == Shape::Kind::Ellipse)   // s032: snap the corner
                     m_drag.pts[0] = {snap_x(m_drag.pts[0].x), snap_y(m_drag.pts[0].y)};

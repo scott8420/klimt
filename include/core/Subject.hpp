@@ -29,6 +29,14 @@ std::optional<pixel::TileMap> mask(const pixel::TileMap& picture, const pixel::T
                                    const seg::Model& model, const std::string& model_path, std::string& error,
                                    const std::function<bool()>& cancelled = {});
 
+// s089: OBJECT SELECT -- the one thing inside `box` (dragged round it): the
+// subject model looks at the box padded, and what it finds is cut to the
+// box grown a little (a box drawn tight still keeps the edge). nullopt with
+// `error` ("nothing stands out there" when the box holds no one thing).
+std::optional<pixel::TileMap> object(const pixel::TileMap& picture, const pixel::Rect& box, const pixel::Format& mask_format,
+                                     const seg::Model& model, const std::string& model_path, std::string& error,
+                                     const std::function<bool()>& cancelled = {});
+
 // s087: LAYER > REMOVE BACKGROUND -- the layer mask (how much it HIDES, in
 // `mask_format`): the subject as above, its edge then taken from the
 // picture's own colours within `edge` px (core/Matte's soft edge -- hair and

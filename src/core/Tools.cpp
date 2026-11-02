@@ -7,8 +7,8 @@ const std::vector<ToolSpec>& tools() {
         {"move",       "Move",        "klimt-tool-move-symbolic",       'v', 0, {},
          "Drag to move the selected layers; with a selection, just its pixels. Arrows nudge (Shift: 10 px)."},
         {"select",     "Select",      "klimt-tool-select-symbolic",     'm', 0,
-         {"Rectangle", "Ellipse", "Lasso", "Wand", "Colour Range", "Magnetic"},   // s079: Magnetic -- the live-wire lasso
-         "Drag to select (the Wand: click). Shift adds, Alt subtracts, both intersect; a click deselects."},
+         {"Rectangle", "Ellipse", "Lasso", "Wand", "Colour Range", "Magnetic", "Object"},   // s079: Magnetic; s089: Object -- a box round one thing
+         "Drag to select (the Wand: click; Object: a box round one thing -- a model finds it). Shift adds, Alt subtracts, both intersect; a click deselects."},
         {"refine",     "Refine",      "klimt-tool-refine-symbolic",     'w', 0, {},   // s038 (Scott: "could it like pixelmator")
          "Paint over what belongs -- the selection snaps to its edges; Alt-paint takes away. [ and ] the size. "
          "Starts from the selection you have (a rough Lasso round the subject is best), or from nothing."},
