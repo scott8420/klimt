@@ -59,6 +59,7 @@ Prefs load_prefs(const std::string& file) {
         p.export_format = j["export_format"].get<std::string>();   // s051
     if (j.contains("proof_profile") && j["proof_profile"].is_string()) p.proof_profile = j["proof_profile"].get<std::string>();   // s069
     if (j.contains("proof_paper") && j["proof_paper"].is_boolean()) p.proof_paper = j["proof_paper"].get<bool>();
+    if (j.contains("raw_develop") && j["raw_develop"].is_string()) p.raw_develop = j["raw_develop"].get<std::string>();   // s085
     {   // s070
         const auto str = [&](const char* k, std::string& v) { if (j.contains(k) && j[k].is_string()) v = j[k].get<std::string>(); };
         const auto flag = [&](const char* k, bool& v) { if (j.contains(k) && j[k].is_boolean()) v = j[k].get<bool>(); };
@@ -98,6 +99,7 @@ bool save_prefs(const std::string& file, const Prefs& p) {
     j["export_format"] = p.export_format;   // s051
     j["proof_profile"] = p.proof_profile;   // s069
     j["proof_paper"] = p.proof_paper;
+    j["raw_develop"] = p.raw_develop;   // s085
     j["proof_intent"] = p.proof_intent;   // s070
     j["proof_bpc"] = p.proof_bpc;
     j["working_cmyk"] = p.working_cmyk;

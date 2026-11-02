@@ -24,6 +24,7 @@ struct Prefs {
     std::string           export_format = "png";   // s051: the format last exported (formats::export_format key)
     std::string proof_profile;      // s069: View > Proof Setup -- a path, or Klimt's own by name ("": the default)
     bool        proof_paper = false;   // s069: Simulate Paper Colour
+    std::string raw_develop;           // s085: the Develop dialog's last Open (core/Raw.hpp's text; "" = the defaults)
     std::string proof_intent = "relative";   // s070: Proof Setup's intent (tint::intent_key) and BPC
     bool        proof_bpc = true;
     // s070: Edit > Colour Settings -- the working CMYK / Gray (a path, or

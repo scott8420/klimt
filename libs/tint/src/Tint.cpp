@@ -554,6 +554,17 @@ Icc adobe_rgb() {
     return rgb(p, 563.0 / 256.0, "Adobe RGB (1998) compatible");
 }
 
+// s085: ProPhoto (ROMM) RGB -- its white is D50, so built here, not by rgb().
+Icc prophoto_rgb() {
+    const cmsCIExyYTRIPLE prim{{0.7347, 0.2653, 1}, {0.1596, 0.8404, 1}, {0.0366, 0.0001, 1}};
+    cmsToneCurve* c = cmsBuildGamma(nullptr, 1.8);
+    cmsToneCurve* three[3] = {c, c, c};
+    cmsHPROFILE h = cmsCreateRGBProfile(cmsD50_xyY(), &prim, three);
+    cmsFreeToneCurve(c);
+    if (h) describe(h, "ProPhoto RGB compatible");
+    return save(h);
+}
+
 Icc plain_cmyk() {
     // CMYK -> Lab (AToB0) and Lab -> CMYK (BToA0) as 3D / 4D tables: the
     // textbook (1-c)(1-k) through sRGB, and back with full black generation.

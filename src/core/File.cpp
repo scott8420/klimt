@@ -1,5 +1,6 @@
 #include "core/File.hpp"
 #include "core/RoundTrip.hpp"   // s083
+#include "core/Raw.hpp"         // s085
 #include "core/Clip.hpp"   // s080: TIFF's path resources
 #include "core/Smart.hpp"  // s082: smart layers
 #include "tint/Tint.hpp"   // s071: the preview to sRGB
@@ -1228,6 +1229,8 @@ void give_alpha(Contents& c) {
 }
 
 std::optional<Contents> open(const std::string& path, std::string& error, const formats::Progress& p) {
+    // s085: a camera RAW by its name (CR2 / NEF / DNG are TIFFs inside -- their small preview isn't the picture).
+    if (raw::is_raw_name(path)) return raw::open(path, raw::defaults(), error, p);
     const auto kind = formats::sniff(path);
     if (kind == formats::Kind::Klimt) {
         auto k = open_klimt(path, error, p);

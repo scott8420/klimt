@@ -1,3 +1,4 @@
+#include "core/Raw.hpp"   // s085
 #include "core/Patterns.hpp"   // s033: the pattern library
 #include "core/Recents.hpp"   // s054
 #include <gtkmm/grid.h>   // s031: the canvas and its rulers
@@ -270,6 +271,7 @@ Gtk::Widget& Shell::build_dock() {  // zone
     // s014 m4: where Scott left it last time (360 the first time).
     m_prefs_file = Glib::build_filename(Glib::get_user_config_dir(), "klimt", "prefs.json");
     m_prefs = core::load_prefs(m_prefs_file);
+    if (!m_prefs.raw_develop.empty()) core::raw::set_defaults(core::raw::develop_parse(m_prefs.raw_develop));   // s085
     apply_colour_settings();   // s070: the working CMYK / Gray
     if (m_hruler) {   // s031: the rulers as left last time
         const auto u = core::rulers::from_key(m_prefs.ruler_unit);

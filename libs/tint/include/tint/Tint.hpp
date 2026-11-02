@@ -130,6 +130,7 @@ Icc srgb();
 Icc gray(double gamma);
 Icc rgb(const double primaries[6], double gamma, const std::string& name);
 Icc adobe_rgb();
+Icc prophoto_rgb();   // s085: ROMM primaries, D50, gamma 1.8 (camera RAW's widest)
 Icc plain_cmyk();
 
 }  // namespace klimt::tint

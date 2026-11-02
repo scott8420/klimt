@@ -24,6 +24,7 @@
 #include "ChannelsPanel.hpp"   // s016: saved selections
 #include "HistoryPanel.hpp"
 #include "ActionsPanel.hpp"   // s084
+#include "RawDialog.hpp"      // s085
 #include "LayersPanel.hpp"
 #include "PropertiesPanel.hpp"
 #include "StatusLine.hpp"
@@ -610,7 +611,13 @@ private:
     void play_action(std::size_t action, std::size_t from);   // category: actions: a JOB -- played on a copy, ONE step lands
     void sync_actions();                         // category: actions: the panel and the actions' greying
     void save_actions();                         // category: actions: the library to its file
-    void on_batch();                             // category: actions: File > Automate > Batch… (the dialog, then a job)   // category: history: s077 -- take, go back to, delete
+    void on_batch();
+    // ── s085: camera RAW -- the Develop dialog (Shell_files.cpp) ──────────
+    std::unique_ptr<RawDialog> m_raw_dialog;
+    core::Jobs::Id m_raw_job = 0;
+    sigc::connection m_raw_soon;
+    void ask_raw(const std::string& path);       // category: files: s085 File > Open of a RAW -- Develop first
+    void raw_preview_soon(const core::raw::Develop& d);   // category: files: s085 a half-size develop, on a worker, for the dialog                             // category: actions: File > Automate > Batch… (the dialog, then a job)   // category: history: s077 -- take, go back to, delete
     void update_snapshots();                                     // category: history: s077 -- the panel follows the live tab
     // What the render shows in place of a layer's pixels (the preview).
     std::map<core::Document::Id, std::shared_ptr<const pixel::TileMap>> m_preview;

@@ -11,6 +11,9 @@
 #include "core/Eps.hpp"        // s080: Export as EPS
 #include "core/Smart.hpp"      // s082: Place, smart layers
 #include "core/RoundTrip.hpp"  // s083: the Composix round-trip
+#include "core/Raw.hpp"        // s085: camera RAW
+#include "core/Canvas.hpp"
+#include "core/Transfer.hpp"
 #include "core/Psd.hpp"        // s049: Export as OpenRaster
 #include <glibmm/miscutils.h>
 #include "Log.hpp"
@@ -248,7 +251,9 @@ void Shell::on_open() {
         auto dlg = Gtk::FileDialog::create();
         dlg->set_title("Open");
         auto filters = Gio::ListStore<Gtk::FileFilter>::create();
-        auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp", "pdf"});
+        auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp", "pdf",
+                                                   "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "dng", "raf", "orf", "rw2",
+                                                   "rwl", "pef", "srw", "x3f", "3fr", "fff", "iiq", "mos", "mef", "mrw", "erf", "kdc", "dcr"});
         filters->append(all);
         filters->append(filter("Klimt document (.klimt)", {"klimt"}));
         filters->append(filter("OpenRaster (.ora)", {"ora"}));   // s049
@@ -258,15 +263,112 @@ void Shell::on_open() {
         filters->append(filter("TIFF", {"tif", "tiff"}));
         filters->append(filter("WebP", {"webp"}));                // s049
         filters->append(filter("PDF written by Klimt", {"pdf"}));  // s083: its layers ride inside
+        filters->append(filter("Camera RAW", {"cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "dng", "raf", "orf", "rw2",
+                                              "rwl", "pef", "srw", "x3f", "3fr", "fff", "iiq", "mos", "mef", "mrw", "erf", "kdc", "dcr"}));   // s085
         dlg->set_filters(filters);
         dlg->set_default_filter(all);
         if (!m_folder.empty()) dlg->set_initial_folder(Gio::File::create_for_path(m_folder));
         dlg->open(*this, [this, dlg](Glib::RefPtr<Gio::AsyncResult>& res) {
             Glib::RefPtr<Gio::File> f;
             try { f = dlg->open_finish(res); } catch (const Glib::Error&) { return; }
-            if (f && !f->get_path().empty()) open_path(f->get_path());
+            if (!f || f->get_path().empty()) return;
+            // s085: a camera RAW -- Develop first.
+            if (core::raw::is_raw_name(f->get_path()) && core::raw::available()) ask_raw(f->get_path());
+            else open_path(f->get_path());
         });
     }
+}
+
+// ── s085: camera RAW -- the Develop dialog ─────────────────────────────────
+namespace {
+// A picture for the dialog: at most `side` px a side, 8-bit RGBA bytes.
+struct Shown { int w = 0, h = 0; std::shared_ptr<const std::vector<std::uint8_t>> rgba; };
+std::optional<Shown> shown_of(const pixel::TileMap& m, int side, const std::function<bool()>& cancelled) {
+    int w = m.width(), h = m.height();
+    if (w <= 0 || h <= 0) return std::nullopt;
+    std::optional<pixel::TileMap> small;
+    if (std::max(w, h) > side) {
+        const double k = static_cast<double>(side) / std::max(w, h);
+        w = std::max(1, static_cast<int>(w * k));
+        h = std::max(1, static_cast<int>(h * k));
+        small = core::canvas::resampled(m, w, h, core::canvas::Filter::Smooth, cancelled);
+        if (!small) return std::nullopt;
+    }
+    const pixel::Format f8{pixel::Depth::U8, pixel::Mode::RGB, true};
+    const pixel::TileMap& src = small ? *small : m;
+    const pixel::TileMap m8 = src.format() == f8 ? src : core::transfer::converted(src, f8);
+    auto bytes = std::make_shared<std::vector<std::uint8_t>>(static_cast<std::size_t>(w) * h * 4);
+    for (int y = 0; y < h; ++y) m8.row_bytes(y, bytes->data() + static_cast<std::size_t>(y) * w * 4);
+    return Shown{w, h, bytes};
+}
+}  // namespace
+
+void Shell::ask_raw(const std::string& path) {
+    namespace R = core::raw;
+    if (!m_raw_dialog) {
+        m_raw_dialog = std::make_unique<RawDialog>(*this);
+        m_raw_dialog->signal_changed().connect([this](R::Develop d) { raw_preview_soon(d); });
+        m_raw_dialog->signal_gone().connect([this] {
+            if (m_raw_soon.connected()) m_raw_soon.disconnect();
+            if (m_raw_job) { m_jobs.cancel(m_raw_job); m_raw_job = 0; }
+        });
+        m_raw_dialog->signal_open().connect([this](std::string p, R::Develop d) {
+            if (m_raw_soon.connected()) m_raw_soon.disconnect();
+            if (m_raw_job) { m_jobs.cancel(m_raw_job); m_raw_job = 0; }
+            R::set_defaults(d);   // what a plain open of a RAW uses from now on
+            m_prefs.raw_develop = R::develop_text(d);
+            core::save_prefs(m_prefs_file, m_prefs);
+            if (auto lg = log::get(log::Area::Shell)) lg->info("raw: develop {} with {}", p, m_prefs.raw_develop);
+            open_paths({p});
+        });
+    }
+    m_folder = fs::path(path).parent_path().string();
+    m_raw_dialog->ask(path, R::defaults());
+    // At once: what the file says and the camera's own preview; then a develop.
+    if (m_raw_job) { m_jobs.cancel(m_raw_job); m_raw_job = 0; }
+    m_raw_job = start_job("Read " + fs::path(path).filename().string(), [this, path](core::Jobs::Token& t) -> core::Jobs::Landing {
+        std::string err;
+        const auto info = R::info(path, err);
+        const std::string line = info ? info->line() : "Can't read it: " + err;
+        std::string e2;
+        auto pv = R::preview(path, e2);
+        std::optional<Shown> s;
+        if (pv) s = shown_of(*pv, 1100, [&t] { return t.cancelled(); });
+        return [this, path, line, s] {
+            m_raw_job = 0;
+            if (!m_raw_dialog || !m_raw_dialog->get_visible() || m_raw_dialog->path() != path) return;
+            m_raw_dialog->show_info(line);
+            if (s) m_raw_dialog->show_picture(s->w, s->h, s->rgba, "The camera's own preview -- developing…");
+            raw_preview_soon(m_raw_dialog->current());
+        };
+    });
+}
+
+void Shell::raw_preview_soon(const core::raw::Develop& d) {
+    if (m_raw_soon.connected()) m_raw_soon.disconnect();
+    if (!m_raw_dialog) return;
+    const std::string path = m_raw_dialog->path();
+    m_raw_soon = Glib::signal_timeout().connect([this, d, path] {
+        if (m_raw_job) { m_jobs.cancel(m_raw_job); m_raw_job = 0; }
+        m_raw_job = start_job("Develop preview", [this, d, path](core::Jobs::Token& t) -> core::Jobs::Landing {
+            formats::Progress p;
+            p.cancelled = [&t] { return t.cancelled(); };
+            std::string err;
+            auto dev = core::raw::develop(path, d, true, err, p);
+            if (!dev) {
+                if (t.cancelled()) return [] {};
+                return [this, err] { m_raw_job = 0; if (m_raw_dialog) m_raw_dialog->show_info("Can't develop it: " + err); };
+            }
+            auto s = shown_of(dev->pixels, 1100, [&t] { return t.cancelled(); });
+            if (!s) return [] {};
+            return [this, s, d, path] {
+                m_raw_job = 0;
+                if (!m_raw_dialog || !m_raw_dialog->get_visible() || m_raw_dialog->path() != path || !(m_raw_dialog->current() == d)) return;
+                m_raw_dialog->show_picture(s->w, s->h, s->rgba, "Developed at half size -- Open develops it whole");
+            };
+        });
+        return false;
+    }, 150);
 }
 
 // ── s082: smart layers -- File > Place, Layer > Smart Layer ────────────────

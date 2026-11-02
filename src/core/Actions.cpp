@@ -6,6 +6,7 @@
 #include "core/Filter.hpp"
 #include "core/Live.hpp"
 #include "core/RoundTrip.hpp"
+#include "core/Raw.hpp"
 #include "core/Selection.hpp"
 #include "core/Transform.hpp"
 #include "core/Undo.hpp"
@@ -464,6 +465,7 @@ std::vector<std::string> sources(const Batch& b) {
         const auto name = e.path().filename().string();
         if (name.empty() || name[0] == '.') return;
         if (name.size() > 8 && name.compare(name.size() - 8, 8, ".partial") == 0) return;
+        if (raw::is_raw_name(name)) { out.push_back(e.path().string()); return; }   // s085: camera RAW (developed with the last settings)
         const auto k = roundtrip::kind_of(e.path().string());
         if (k == formats::Kind::Unknown || k == formats::Kind::EPS) return;
         if (k == formats::Kind::PDF && !roundtrip::embedded(e.path().string())) return;   // only Klimt's
