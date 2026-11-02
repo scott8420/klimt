@@ -1,5 +1,6 @@
 // core::transfer -- layers from one document into another (s022).
 #include "core/Transfer.hpp"
+#include "core/Smart.hpp"   // s082
 #include "core/Canvas.hpp"   // reframed
 #include "core/Text.hpp"     // s046
 
@@ -127,6 +128,14 @@ std::vector<Id> paste(DocJournal& j, Document& d, const transfer::Bundle& b, con
         if (l.kind == Kind::Text && l.text) {   // s046: the type moves with the rest and stays live
             l.text = std::make_shared<const text::Spec>(text::mapped(*l.text, {1, 0, 0, 1, double(ox), double(oy)}));
             l.pixels = text_pixels(to, *l.text);
+        }
+        if (l.kind == Kind::Smart && l.smart && l.smart->source) {   // s082: the picture goes whole, its map slid, drawn again
+            smart::Smart sm = smart::with_map(*l.smart, xform::Projective(xform::Affine::translate(ox, oy)) * smart::map_of(*l.smart));
+            sm.source = std::make_shared<const pixel::TileMap>(transfer::converted(*sm.source, to.format));
+            auto px = smart::rendered(to, sm);
+            if (!px) return {};
+            l.pixels = *px;
+            l.smart = std::make_shared<const smart::Smart>(std::move(sm));
         }
         if (!l.pixels && l.kind == Kind::Pixel && l0.pixels) return {};
         fitted.emplace_back(id, std::move(l));

@@ -1,4 +1,5 @@
 #include "core/Canvas.hpp"
+#include "core/Smart.hpp"   // s082
 #include "core/Text.hpp"   // s046: type goes with the picture
 #include "core/Selection.hpp"
 #include "formats/Formats.hpp"   // kMaxSide
@@ -628,11 +629,32 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
             typed.emplace_back(id, std::move(v));
             if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
         }
+    // s082: SMART LAYERS too -- the map composed into theirs, drawn again
+    // from their whole picture (crop, size and turns lose nothing of it).
+    // A conversion of the colours (Image > Mode, Convert to Profile) changes
+    // what the numbers mean: the picture isn't converted with them (yet) --
+    // those smart layers become pixel layers of what they drew, converted.
+    const bool recoloured = !(r.image->format == d.image().format) || r.image->icc != d.image().icc;
+    std::vector<Id> unsmart;
+    for (const auto& [id, l] : d.snapshot())
+        if (l.kind == Kind::Smart && l.smart && recoloured) {
+            unsmart.push_back(id);
+            if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+        } else if (l.kind == Kind::Smart && l.smart) {
+            Layer v = l;
+            const xform::Projective pm(xform::Affine{tm[0], tm[1], tm[2], tm[3], tm[4], tm[5]});
+            v.smart = std::make_shared<const smart::Smart>(smart::with_map(*l.smart, pm * smart::map_of(*l.smart)));
+            const auto px = smart::rendered(*r.image, *v.smart);
+            v.pixels = px ? *px : nullptr;
+            typed.emplace_back(id, std::move(v));
+            if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+        }
     return j.run(label, ids, [&] {
         for (const auto& [id, v] : typed) {   // s046 (its mask, filter mask: the loops below, as for any layer)
             auto l = d.get(id);
             if (!l) continue;
             l->text = v.text;
+            l->smart = v.smart;   // s082
             l->pixels = v.pixels;
             d.put(id, *l);
         }
@@ -643,6 +665,13 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
             if (l->hints) l->hints = std::make_shared<const path::Hints>(path::mapped(*l->hints, r.path_map));   // s037: the strokes too
             d.put(id, *l);
         }
+        for (const auto& id : unsmart) {   // s082
+            auto l = d.get(id);
+            if (!l) continue;
+            l->kind = Kind::Pixel;
+            l->smart = nullptr;
+            d.put(id, *l);
+        }
         Layer im;
         im.name = "Image";
         im.image = r.image;
@@ -650,7 +679,8 @@ bool land(DocJournal& j, Document& d, const Before& expect, const Reshape& r, co
         for (const auto& [id, p] : r.pixels) {
             auto l = d.get(id);
             if (!l) continue;
-            l->pixels = p;
+            const bool drawn = std::any_of(typed.begin(), typed.end(), [&](const auto& t) { return t.first == id; });
+            if (!drawn) l->pixels = p;   // s046 / s082: type and smart layers were drawn again above, not resampled
             if (const auto m = r.masks.find(id); m != r.masks.end()) l->mask = m->second;   // s012
             d.put(id, *l);
         }

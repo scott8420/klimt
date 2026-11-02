@@ -1,4 +1,5 @@
 #include "core/Move.hpp"
+#include "core/Smart.hpp"   // s082
 #include "core/Text.hpp"   // s046
 #include "core/Selection.hpp"
 #include "core/Canvas.hpp"
@@ -111,6 +112,7 @@ std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, con
         p.original[id] = l.pixels;
         if (l.mask && l.mask_linked) p.masks[id] = l.mask;   // s059: unlinked, it stays
         if (l.kind == Kind::Text && l.text) { p.texts[id] = l.text; continue; }   // s046: moves whole
+        if (l.kind == Kind::Smart && l.smart) { p.smarts[id] = l.smart; continue; }   // s082: moves whole
         if (p.mask) {
             const pixel::TileMap src = l.pixels ? *l.pixels : d.blank();
             auto c = select::cleared(src, p.mask.get(), background);
@@ -164,10 +166,25 @@ std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function
         r.pixels[id] = text_pixels(im, *moved);
         r.texts[id] = std::move(moved);
     }
+    // s082: a smart layer's map slides; drawn again from its picture.
+    for (const auto& [id, sm] : p.smarts) {
+        if (stop()) return std::nullopt;
+        if (dx == 0 && dy == 0) { r.smarts[id] = sm; r.pixels[id] = p.original.at(id); continue; }
+        auto moved = std::make_shared<const smart::Smart>(
+            smart::with_map(*sm, xform::Projective(xform::Affine::translate(dx, dy)) * smart::map_of(*sm)));
+        Image im;
+        im.width = p.width;
+        im.height = p.height;
+        im.format = p.format;
+        auto px = smart::rendered(im, *moved, cancelled);
+        if (!px) return std::nullopt;
+        r.pixels[id] = *px;
+        r.smarts[id] = std::move(moved);
+    }
     if (!p.mask) {
         for (const auto& id : p.ids) {
             if (stop()) return std::nullopt;
-            if (p.texts.count(id)) continue;   // s046: set above
+            if (p.texts.count(id) || p.smarts.count(id)) continue;   // s046 / s082: set above
             const auto& o = p.original.at(id);
             if (!o) { r.pixels[id] = nullptr; continue; }
             if (dx == 0 && dy == 0) { r.pixels[id] = o; continue; }
@@ -181,6 +198,7 @@ std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function
     }
     if (dx == 0 && dy == 0) {   // back where it started: exactly the original
         for (const auto& id : p.ids) r.pixels[id] = p.original.at(id);
+        for (const auto& [id, sm] : p.smarts) r.smarts[id] = sm;   // s082
         r.mask = p.mask;
         return r;
     }
@@ -192,7 +210,7 @@ std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function
     const pixel::Rect land = pixel::Rect{ext.x + dx, ext.y + dy, ext.w, ext.h}.intersect({0, 0, p.width, p.height});
     for (const auto& id : p.ids) {
         if (stop()) return std::nullopt;
-        if (p.texts.count(id)) continue;   // s046: set above (whole)
+        if (p.texts.count(id) || p.smarts.count(id)) continue;   // s046 / s082: set above (whole)
         const auto& b = p.base.at(id);
         const auto& o = p.original.at(id);
         pixel::TileMap out = b ? *b : blank;
@@ -220,6 +238,7 @@ void put(Document& d, const Plan& p, const Result& r) {
         if (!l || it == r.pixels.end()) continue;
         l->pixels = it->second;
         if (const auto t = r.texts.find(id); t != r.texts.end() && l->kind == Kind::Text) l->text = t->second;   // s046
+        if (const auto sm = r.smarts.find(id); sm != r.smarts.end() && l->kind == Kind::Smart) l->smart = sm->second;   // s082
         if (const auto m = r.masks.find(id); m != r.masks.end()) l->mask = m->second;   // s012
         d.put(id, *l);
     }

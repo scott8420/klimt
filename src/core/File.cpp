@@ -1,5 +1,6 @@
 #include "core/File.hpp"
 #include "core/Clip.hpp"   // s080: TIFF's path resources
+#include "core/Smart.hpp"  // s082: smart layers
 #include "tint/Tint.hpp"   // s071: the preview to sRGB
 #include "core/Patterns.hpp"   // s028 m4
 #include "core/Transfer.hpp"   // s022: converted()
@@ -954,6 +955,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             if (l.contains("tiles")) total += l.at("tiles").size();
             if (l.contains("outside")) total += l.at("outside").size();
             if (l.contains("mask")) total += l.at("mask").size();
+            if (l.contains("smart") && l.at("smart").contains("tiles")) total += l.at("smart").at("tiles").size();   // s082
             if (l.contains("filter_mask")) total += l.at("filter_mask").size();
         }
         // One map's tiles (s012: a layer's pixels, or its mask): the image's
@@ -1032,6 +1034,24 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 L.kind = Kind::Text;
                 L.text = std::make_shared<const text::Spec>(text_from(l.value("text", json::object())));
             }
+            else if (kind == "smart") {   // s082: its picture (own size) and map; its pixels in "tiles"
+                L.kind = Kind::Smart;
+                const json& js = l.at("smart");
+                const int sw = js.value("width", 0), sh = js.value("height", 0);
+                if (sw <= 0 || sh <= 0 || sw > formats::kMaxSide || sh > formats::kMaxSide) { error = "a damaged Klimt file (a smart layer's picture)"; return std::nullopt; }
+                P::TileMap m;
+                if (!read_map(js, "tiles", "outside", f, m, sw, sh)) return std::nullopt;
+                smart::Smart sp;
+                sp.source = std::make_shared<const P::TileMap>(std::move(m));
+                sp.name = js.value("name", std::string());
+                sp.link = js.value("link", std::string());
+                sp.stamp = js.value("stamp", std::int64_t{0});
+                sp.bytes = js.value("bytes", std::uint64_t{0});
+                sp.dpi = js.value("dpi", 72.0);
+                if (js.contains("m") && js["m"].is_array() && js["m"].size() == 9)
+                    for (std::size_t i = 0; i < 9; ++i) sp.m[i] = js["m"][i].get<double>();
+                L.smart = std::make_shared<const smart::Smart>(std::move(sp));
+            }
             else if (kind == "adjustment") {   // s013
                 L.kind = Kind::Adjustment;
                 const auto a = adjust_from(l.at("adjust"));
@@ -1039,7 +1059,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                 L.adjust = *a;
             }
             else { error = "a layer kind this Klimt doesn't know (" + kind + ")"; return std::nullopt; }
-            if (l.contains("filters") && (L.kind == Kind::Pixel || L.kind == Kind::Filter))   // s018: live filters; s030
+            if (l.contains("filters") && (L.kind == Kind::Pixel || L.kind == Kind::Filter || L.kind == Kind::Smart))   // s018: live filters; s030; s082
                 for (const auto& jf : l.at("filters")) {
                     const auto lf = live_from(jf);
                     if (!lf) { error = "a live filter this Klimt doesn't know"; return std::nullopt; }
@@ -1056,7 +1076,7 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
                     L.styles.pattern.user = po.value("user", std::string("Pattern"));
                 }
             }
-            if (l.contains("filter_mask") && L.kind == Kind::Pixel) {   // s018 m3
+            if (l.contains("filter_mask") && (L.kind == Kind::Pixel || L.kind == Kind::Smart)) {   // s018 m3; s082
                 P::TileMap m;
                 if (!read_map(l, "filter_mask", "filter_mask_outside", P::Format{f.depth, P::Mode::Gray, false}, m)) return std::nullopt;
                 L.filter_mask = std::make_shared<const P::TileMap>(std::move(m));
@@ -1096,6 +1116,8 @@ std::optional<Contents> open_klimt(const std::string& path, std::string& error, 
             // Saved WITH them, they are kept as they were -- a font missing on
             // this machine shows as it looked until the type is edited.
             if (L.kind == Kind::Text && !L.pixels && L.text && !L.text->text.empty()) L.pixels = text_pixels(c.image, *L.text);
+            if (L.kind == Kind::Smart && !L.pixels && L.smart)   // s082: drawn again
+                if (auto px = smart::rendered(c.image, *L.smart)) L.pixels = *px;
             // s012: the layer mask (stored as what it hides), and whether it's on.
             if (l.contains("mask")) {   // s024: groups too
                 P::TileMap m;
@@ -1323,7 +1345,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         return true;
     };
     for (const auto& [id, L] : c.layers) {
-        json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : L.kind == Kind::Adjustment ? "adjustment" : L.kind == Kind::Filter ? "filter" : L.kind == Kind::Path ? "path" : L.kind == Kind::Text ? "text" : "pixel"}, {"name", L.name},
+        json l = {{"id", id}, {"kind", L.kind == Kind::Group ? "group" : L.kind == Kind::Adjustment ? "adjustment" : L.kind == Kind::Filter ? "filter" : L.kind == Kind::Path ? "path" : L.kind == Kind::Text ? "text" : L.kind == Kind::Smart ? "smart" : "pixel"}, {"name", L.name},
                   {"parent", L.parent}, {"pos", L.pos}, {"visible", L.visible}, {"locks", L.locks},
                   {"opacity", L.opacity}, {"fill", L.fill}, {"blend", std::string(blend_key(L.blend))},
                   {"clipped", L.clipped}};
@@ -1338,6 +1360,14 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         }
         if (L.pixels && draws_pixels(L.kind) && !write_map(l, *L.pixels, "tiles", "outside")) return false;
         if (L.kind == Kind::Text && L.text) l["text"] = text_json(*L.text);   // s046
+        if (L.kind == Kind::Smart && L.smart && L.smart->source) {   // s082: the picture whole, its map, its link
+            const auto& sp = *L.smart;
+            json js = {{"name", sp.name}, {"width", sp.source->width()}, {"height", sp.source->height()}, {"dpi", sp.dpi},
+                       {"m", json::array({sp.m[0], sp.m[1], sp.m[2], sp.m[3], sp.m[4], sp.m[5], sp.m[6], sp.m[7], sp.m[8]})}};
+            if (!sp.link.empty()) { js["link"] = sp.link; js["stamp"] = sp.stamp; js["bytes"] = sp.bytes; }
+            if (!write_map(js, *sp.source, "tiles", "outside")) return false;
+            l["smart"] = std::move(js);
+        }
         if (L.kind == Kind::Adjustment) l["adjust"] = adjust_json(L.adjust);   // s013
         if (L.kind == Kind::Path && L.path) {   // s035
             l["path"] = path_json(*L.path);
@@ -1353,7 +1383,7 @@ bool save_klimt(const std::string& path, const Contents& c, std::string& error, 
         if ((draws_pixels(L.kind) || L.kind == Kind::Group) && L.styles.any()) l["styles"] = styles_json(L.styles);   // s019; s046: text, and groups' (s024)
         if (L.styles.pattern.on && L.styles.pattern.image && l.contains("styles") && l["styles"].contains("pattern_overlay"))   // s033
             if (!write_map(l["styles"]["pattern_overlay"], *L.styles.pattern.image, "tiles", "outside")) return false;
-        if (L.kind == Kind::Pixel && !L.filters.empty()) {                      // s018: live filters
+        if ((L.kind == Kind::Pixel || L.kind == Kind::Smart) && !L.filters.empty()) {   // s018: live filters; s082: smart filters
             json fs = json::array();
             for (const auto& lf : L.filters) fs.push_back(live_json(lf));
             l["filters"] = std::move(fs);

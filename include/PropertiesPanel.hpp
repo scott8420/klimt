@@ -129,6 +129,10 @@ private:
     // s080: the CLIPPING PATH (core/Clip.hpp) -- this path cuts the picture
     // out where it's placed (EPS, TIFF, PSD); the flatness with it.
     Gtk::CheckButton      m_path_clip{"Clipping path"};
+    // s082: a SMART layer -- its picture, size, scale, link; Update / Replace / Rasterize.
+    Gtk::Box              m_smart_box{Gtk::Orientation::VERTICAL, 6};
+    Gtk::Label            m_smart_info;
+    Gtk::Label            m_smart_link;
     Gtk::SpinButton       m_clip_flat;
     Gtk::Box              m_clip_row{Gtk::Orientation::HORIZONTAL, 6};
     sigc::signal<void(bool)> m_path_outline;

@@ -152,6 +152,11 @@ private:
     // ── files (s007) ───────────────────────────────────────────────────────
     void on_new();                               // category: files: File > New (the dialog)
     void on_open();                              // category: files: File > Open (the file chooser)
+    void on_place(bool linked);                  // category: files: s082 File > Place Embedded / Place Linked (the chooser)
+    void place_path(const std::string& path, bool linked, const std::string& replace_id, const std::string& label);   // category: files: s082 read it (a job), then place / replace
+    void on_smart(const std::string& verb);
+    void check_links();                          // category: files: s082 a linked picture changed / gone -> the rows, Properties, one toast
+    std::map<std::string, std::int64_t> m_link_said;   // s082: the stamps already told of (the file's path -> its stamp)      // category: layers: s082 Layer > Smart Layer > convert / rasterize / replace / update / embed
     void on_save();                              // category: files: Save -- Save As when never saved
     void on_save_as();                           // category: files: Save As (.klimt)
     void on_export();                            // category: files: Export (PNG / JPEG / TIFF)

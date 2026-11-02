@@ -60,6 +60,9 @@ struct Plan {
     // always moves whole (a selection lifts pixels, not letters) and stays
     // live: its Spec slides and is set again, so nothing is lost off the edge.
     std::map<Id, std::shared_ptr<const text::Spec>> texts;
+    // s082: SMART LAYERS among the targets -- their picture and map at the
+    // press. Like type they move whole and stay whole: the map moves.
+    std::map<Id, std::shared_ptr<const smart::Smart>> smarts;
 };
 // nullopt when refused.
 std::optional<Plan> plan(const Document& d, const std::vector<Id>& selected, const pixel::Px& background,
@@ -73,6 +76,7 @@ struct Result {
     MapPtr              mask;
     std::map<Id, MapPtr> masks;      // s012: layer masks that moved (absent: unchanged)
     std::map<Id, std::shared_ptr<const text::Spec>> texts;   // s046: type, slid
+    std::map<Id, std::shared_ptr<const smart::Smart>> smarts;   // s082: smart layers' maps, moved
 };
 std::optional<Result> compute(const Plan& p, int dx, int dy, const std::function<bool()>& cancelled = {});
 

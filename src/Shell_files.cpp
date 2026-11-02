@@ -9,6 +9,7 @@
 #include <gtkmm/filelauncher.h>
 #include "core/Pdf.hpp"        // s051: Export as PDF
 #include "core/Eps.hpp"        // s080: Export as EPS
+#include "core/Smart.hpp"      // s082: Place, smart layers
 #include "core/Psd.hpp"        // s049: Export as OpenRaster
 #include <glibmm/miscutils.h>
 #include "Log.hpp"
@@ -261,6 +262,114 @@ void Shell::on_open() {
             Glib::RefPtr<Gio::File> f;
             try { f = dlg->open_finish(res); } catch (const Glib::Error&) { return; }
             if (f && !f->get_path().empty()) open_path(f->get_path());
+        });
+    }
+}
+
+// ── s082: smart layers -- File > Place, Layer > Smart Layer ────────────────
+namespace L = core::layers;
+
+void Shell::on_place(bool linked) {
+    if (!has_image() || file_job_busy()) return;
+    auto dlg = Gtk::FileDialog::create();
+    dlg->set_title(linked ? "Place Linked" : "Place Embedded");
+    auto filters = Gio::ListStore<Gtk::FileFilter>::create();
+    auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp"});
+    filters->append(all);
+    dlg->set_filters(filters);
+    dlg->set_default_filter(all);
+    if (!m_folder.empty()) dlg->set_initial_folder(Gio::File::create_for_path(m_folder));
+    dlg->open(*this, [this, dlg, linked](Glib::RefPtr<Gio::AsyncResult>& res) {
+        Glib::RefPtr<Gio::File> f;
+        try { f = dlg->open_finish(res); } catch (const Glib::Error&) { return; }
+        if (f && !f->get_path().empty()) place_path(f->get_path(), linked, {}, linked ? "Place Linked" : "Place");
+    });
+}
+
+void Shell::place_path(const std::string& path, bool linked, const std::string& replace_id, const std::string& label) {
+    if (!has_image() || file_job_busy()) return;
+    const std::string name = fs::path(path).filename().string();
+    m_file_job = start_job(label + " " + name, [this, path, linked, replace_id, label, name](core::Jobs::Token& t) -> core::Jobs::Landing {
+        std::string err;
+        auto got = core::smart::load(path, err, progress_of(t));
+        if (!got) {
+            if (t.cancelled()) return [] {};
+            return [this, name, err, label] { toast(label + ": couldn't read \u201c" + name + "\u201d -- " + err); };
+        }
+        return [this, path, linked, replace_id, label, got = std::make_shared<core::smart::Loaded>(std::move(*got))] {
+            const auto why = core::smart::refusal(got->pixels.format(), m_doc.image());
+            if (!why.empty()) { toast(label + ": " + why); return; }
+            const std::string link = linked ? path : std::string{};
+            if (replace_id.empty()) {
+                const auto made = L::place_smart(m_journal, m_doc, got->pixels, got->name, got->dpi, link, got->stamp, got->bytes, m_layers.primary());
+                if (made.empty()) { toast(label + ": refused"); return; }
+                m_layers.select({made}, false);
+                on_selection();
+                toast(label + " \u201c" + got->name + "\u201d -- a smart layer: transform it freely, it stays whole", true);
+            } else if (L::replace_smart(m_journal, m_doc, replace_id, got->pixels, got->name, got->dpi, link, got->stamp, got->bytes, label)) {
+                toast(m_journal.undo_label(), true);
+            } else {
+                toast(label + ": nothing changed");
+            }
+            if (auto lg = log::get(log::Area::Shell)) lg->info("smart: {} {} ({} x {}, {})", label, got->name, got->pixels.width(), got->pixels.height(), linked ? "linked" : "embedded");
+        };
+    });
+}
+
+void Shell::check_links() {
+    if (!has_image()) return;
+    std::string said;
+    bool any = false;
+    for (const auto& id : m_doc.walk()) {
+        const auto l = m_doc.get(id);
+        if (!l || l->kind != core::Kind::Smart || !l->smart || l->smart->link.empty()) continue;
+        any = true;
+        const auto now = core::smart::stamp_of(l->smart->link);
+        if (core::smart::status(*l->smart) != core::smart::Link::Modified) continue;
+        auto& seen = m_link_said[l->smart->link];
+        if (seen == now.stamp) continue;   // told already
+        seen = now.stamp;
+        said = "\u201c" + l->smart->name + "\u201d has changed -- Layer > Smart Layer > Update Modified Content";
+    }
+    if (!any) return;
+    m_layers.queue_repaint();
+    on_selection();   // Properties' link line
+    if (!said.empty()) toast(said);
+}
+
+void Shell::on_smart(const std::string& verb) {
+    const auto id = m_layers.primary();
+    const auto l = id.empty() ? std::nullopt : m_doc.get(id);
+    if (!l) { toast("Pick a layer first"); return; }
+    if (verb == "convert") {
+        if (!L::to_smart(m_journal, m_doc, id)) toast("Convert to Smart Layer: " + (l->kind == core::Kind::Pixel ? std::string("the layer is empty or locked") : L::not_pixels(m_doc, id)));
+        return;
+    }
+    if (l->kind != core::Kind::Smart || !l->smart) { toast("\u201c" + l->name + "\u201d isn't a smart layer"); return; }
+    if (verb == "rasterize") { L::rasterize_smart(m_journal, m_doc, id); return; }
+    if (verb == "embed") { if (!L::embed_smart(m_journal, m_doc, id)) toast("Embed Linked: it's embedded already"); return; }
+    if (verb == "update") {
+        const auto st = core::smart::status(*l->smart);
+        if (st == core::smart::Link::Embedded) { toast("Update: it's embedded -- there's no file to read"); return; }
+        if (st == core::smart::Link::Missing) { toast("Update: \u201c" + l->smart->link + "\u201d isn't there -- Replace Contents to point it at another file"); return; }
+        if (st == core::smart::Link::Current) { toast("Update: the file hasn't changed"); return; }
+        place_path(l->smart->link, true, id, "Update Modified Content");
+        return;
+    }
+    if (verb == "replace") {
+        const bool linked = !l->smart->link.empty();
+        auto dlg = Gtk::FileDialog::create();
+        dlg->set_title("Replace Contents");
+        auto filters = Gio::ListStore<Gtk::FileFilter>::create();
+        auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp"});
+        filters->append(all);
+        dlg->set_filters(filters);
+        dlg->set_default_filter(all);
+        if (!m_folder.empty()) dlg->set_initial_folder(Gio::File::create_for_path(m_folder));
+        dlg->open(*this, [this, dlg, linked, id](Glib::RefPtr<Gio::AsyncResult>& res) {
+            Glib::RefPtr<Gio::File> f;
+            try { f = dlg->open_finish(res); } catch (const Glib::Error&) { return; }
+            if (f && !f->get_path().empty()) place_path(f->get_path(), linked, id, "Replace Contents");
         });
     }
 }

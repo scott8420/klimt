@@ -52,6 +52,8 @@ void Shell::build_ui() {
     bind_actions();    // bindings
     on_tool(m_rail.tool());
     update_summary();
+    // s082: back to Klimt -- a linked picture's file may have changed meanwhile.
+    property_is_active().signal_changed().connect([this] { if (is_active()) check_links(); });
     if (auto lg = log::get(log::Area::Shell)) lg->info("ready");
 }
 

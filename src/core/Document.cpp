@@ -1,6 +1,7 @@
 #include "core/Document.hpp"
 #include "core/Paths.hpp"   // s035: the verb table
 #include "core/Clip.hpp"    // s080: the clipping path
+#include "core/Smart.hpp"   // s082: smart layers
 #include "core/Fade.hpp"   // s020: the verb table's fade
 #include "core/Transfer.hpp"   // s022: the verb table's paste
 #include "core/ColourRange.hpp"   // s024
@@ -323,6 +324,8 @@ std::string Document::check() const {
             return id + ": an adjustment out of range (" + adjust::refusal(l.adjust) + ")";
         if ((l.kind == Kind::Text) != (l.text != nullptr))   // s046
             return id + ": type where there is no text layer, or none where there is";
+        if ((l.kind == Kind::Smart) != (l.smart != nullptr && l.smart->source != nullptr))   // s082
+            return id + ": a placed picture where there is no smart layer, or none where there is";
         if (l.text && !text::refusal(*l.text).empty())
             return id + ": type out of range (" + text::refusal(*l.text) + ")";
         if (l.pixels) {
@@ -558,6 +561,12 @@ bool add_path_stroke(DocJournal& j, Document& d, const Id& id, const path::Strok
     return set_path_hints(j, d, id, h, s.figure ? "Figure Stroke" : "Background Stroke");
 }
 
+// s082: a new layer of any kind, set up by `extra` -- core/Smart.cpp's door.
+Id add_layer_of(DocJournal& j, Document& d, Kind kind, const std::string& name, const Id& above,
+                const std::function<void(Layer&)>& extra, const std::string& label) {
+    return add_kind(j, d, kind, name, above, extra, label);
+}
+
 // s046: a TEXT LAYER, set, as one step (core/Text.hpp).
 Id add_text(DocJournal& j, Document& d, const text::Spec& s, const Id& above, const std::string& label) {
     if (!text::refusal(s).empty()) return {};
@@ -637,6 +646,7 @@ std::string not_pixels(const Document& d, const Id& id) {
     if (l->kind == Kind::Filter) return q + " is a filter layer -- it has no pixels";   // s030
     if (l->kind == Kind::Path) return q + " is a path layer -- edit it with the Pen (P); it has no pixels";   // s035
     if (l->kind == Kind::Text) return q + " is a text layer -- edit it with the Text tool (T), or Layer > Rasterize Type to paint on it";   // s046
+    if (l->kind == Kind::Smart) return q + " is a smart layer -- its picture stays whole; Layer > Smart Layer > Rasterize to paint on it";   // s082
     return {};
 }
 
@@ -945,7 +955,7 @@ bool set_fill(DocJournal& j, Document& d, const Id& id, int percent) {
 }
 
 bool blend_if_allowed(const Layer& l) {
-    return l.kind == Kind::Pixel || l.kind == Kind::Text || l.kind == Kind::Adjustment ||
+    return l.kind == Kind::Pixel || l.kind == Kind::Text || l.kind == Kind::Smart || l.kind == Kind::Adjustment ||
            (l.kind == Kind::Group && l.blend != Blend::PassThrough);
 }
 
@@ -1592,6 +1602,32 @@ const std::vector<Verb>& verbs() {
              [](Document& d) { load_text_layer(d, "Hope", 60, false); }},
         {"text_turn",       [](DocJournal& j, Document& d) { xform::turn(j, d, xform::Turn::Clockwise); },
              [](Document& d) { load_text_layer(d, "Judith", 48, false); }},
+        // s082: smart layers.
+        {"smart_place", [](DocJournal& j, Document& d) {
+             place_smart(j, d, pixel::TileMap(pixel::Format{pixel::Depth::U8, pixel::Mode::RGB, true}, 60, 40).fill({0, 0, 60, 40}, pixel::rgba(0, 0.5f, 1)), "p.png", 72, {}, 0, 0, "L4"); }},
+        {"smart_convert", [](DocJournal& j, Document& d) { to_smart(j, d, "L4"); }},
+        {"smart_rasterize", [](DocJournal& j, Document& d) { rasterize_smart(j, d, "L6"); },
+             [](Document& d) { load_smart_layer(d, pixel::TileMap(d.image().format, 50, 30).fill({0, 0, 50, 30}, pixel::rgba(1, 0, 1)), xform::Affine::translate(100, 90)); }},
+        {"smart_replace", [](DocJournal& j, Document& d) {
+             replace_smart(j, d, "L6", pixel::TileMap(d.image().format, 30, 30).fill({0, 0, 30, 30}, pixel::rgba(0, 1, 0)), "q.png", 72, {}, 0, 0, "Replace Contents"); },
+             [](Document& d) { load_smart_layer(d, pixel::TileMap(d.image().format, 50, 30).fill({0, 0, 50, 30}, pixel::rgba(1, 0, 1)), xform::Affine::translate(100, 90)); }},
+        {"smart_scale", [](DocJournal& j, Document& d) { set_smart_map(j, d, "L6", xform::Affine{2, 0, 0, 2, 100, 90}, "Scale"); },
+             [](Document& d) { load_smart_layer(d, pixel::TileMap(d.image().format, 50, 30).fill({0, 0, 50, 30}, pixel::rgba(1, 0, 1)), xform::Affine::translate(100, 90)); }},
+        {"smart_transform", [](DocJournal& j, Document& d) { xform::rotate(j, d, {"L6"}, 90, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_smart_layer(d, pixel::TileMap(d.image().format, 50, 30).fill({0, 0, 50, 30}, pixel::rgba(1, 0, 1)), xform::Affine::translate(100, 90)); }},
+        {"smart_embed", [](DocJournal& j, Document& d) { embed_smart(j, d, "L6"); },
+             [](Document& d) {
+                 load_smart_layer(d, pixel::TileMap(d.image().format, 50, 30).fill({0, 0, 50, 30}, pixel::rgba(1, 0, 1)), xform::Affine::translate(100, 90));
+                 Document::Loading load(d);
+                 auto l = *d.get("L6");
+                 auto s = *l.smart;
+                 s.link = "/nowhere/p.png";
+                 s.stamp = 1;
+                 l.smart = std::make_shared<const smart::Smart>(s);
+                 d.put("L6", l);
+             }},
+        {"smart_crop", [](DocJournal& j, Document& d) { canvas::crop(j, d, {20, 20, 400, 300}, pixel::rgba(1, 1, 1, 1)); },
+             [](Document& d) { load_smart_layer(d, pixel::TileMap(d.image().format, 50, 30).fill({0, 0, 50, 30}, pixel::rgba(1, 0, 1)), xform::Affine::translate(100, 90)); }},
         // s080: the clipping path.
         {"clip_path_set", [](DocJournal& j, Document& d) { clip::set(j, d, "L6", 2); },
              [](Document& d) { load_path_layer(d, paths::rect_path(40, 30, 300, 200)); }},

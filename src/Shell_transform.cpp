@@ -87,6 +87,11 @@ void Shell::on_xform_change(const std::array<double, 9>& m) {
 
 void Shell::on_warp_change(const std::array<double, 32>& m) {   // s074
     if (!m_xform.active || m_xform.committing) return;
+    if (!m_xform.warp && m_xform.plan && !Xf::warp_refusal(*m_xform.plan).empty()) {   // s082: a smart layer isn't warped
+        toast("Warp: " + Xf::warp_refusal(*m_xform.plan));
+        xform_cancel();
+        return;
+    }
     if (!m_xform.warp) m_strip.show_warp_options(true);   // s075: the Style row comes with the mesh
     else if (!m_xform.presetting) m_strip.set_warp_style(0);   // a dragged point: Custom
     m_xform.warp = true;

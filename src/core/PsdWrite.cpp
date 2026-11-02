@@ -248,7 +248,7 @@ void empty_channels(Rec& r) {
 struct Rules {
     int n_live = 0;                  // s053: adjustment layers that cross live
     int n_fx_live = 0;               // s053 m2: layers / groups whose styles cross live
-    int n_adjust = 0, n_filterlayer = 0, n_paths = 0, n_group_fx = 0, n_filters = 0, n_styles = 0, n_text = 0, n_edges = 0;
+    int n_adjust = 0, n_filterlayer = 0, n_paths = 0, n_group_fx = 0, n_filters = 0, n_styles = 0, n_text = 0, n_edges = 0, n_smart = 0;
     int n_outside = 0;
     int n_duotone = 0;
     int n_lookup = 0;                // s066: Colour Lookup layers -- left out               // s065: Duotone layers -- as Gradient Maps
@@ -284,6 +284,7 @@ Rules rules(const Image& im, const std::map<Document::Id, Layer>& layers) {
         if (!draws_pixels(L.kind)) { ++r.n_paths; continue; }
         if (fx_live(L, r.rgb)) ++r.n_fx_live;
         if (L.kind == Kind::Text) ++r.n_text;
+        if (L.kind == Kind::Smart) ++r.n_smart;   // s082
         else {
             if (!L.filters.empty()) ++r.n_filters;
             if (L.styles.any() && !fx_live(L, r.rgb)) ++r.n_styles;
@@ -300,6 +301,7 @@ Plan plan(const Image& im, const std::map<Document::Id, Layer>& layers) {
     const Rules r = rules(im, layers);
     Plan pl;
     if (r.n_text) pl.baked.push_back(plural(r.n_text, "text layer", "text layers") + " as pixels (named, not live type)");
+    if (r.n_smart) pl.baked.push_back(plural(r.n_smart, "smart layer", "smart layers") + " as pixel layers (what they draw; the whole picture stays in your .klimt)");   // s082
     if (r.n_filters) pl.baked.push_back(plural(r.n_filters, "layer's live filters", "layers' live filters"));
     if (r.n_styles) pl.baked.push_back(plural(r.n_styles, "layer's styles", "layers' styles") + " (a pattern overlay can't go live)");
     if (r.n_edges) pl.baked.push_back(plural(r.n_edges, "mask's Density / Feather", "masks' Density / Feather") + " into the mask");

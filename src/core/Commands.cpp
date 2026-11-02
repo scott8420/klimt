@@ -197,6 +197,13 @@ const std::vector<Command>& commands() {
             {"Load Path as Selection", "Select", "win.path-selection", "", "path pen bezier curve selection outline", "Ctrl+Enter"},
             {"Show / Hide Path Outline", "View", "win.path-outline", "", "path outline hide show nodes anchors extras mask effect", "Ctrl+Shift+H"},
             {"Make Path from Selection", "Select", "win.path-make-work", "", "path pen bezier trace outline vector selection to path work path layer", ""},
+            {"Place Embedded\u2026", "File", "win.place-embedded", "", "place import smart object layer embed picture file", ""},   // s082
+            {"Place Linked\u2026", "File", "win.place-linked", "", "place import smart object layer link linked file", ""},
+            {"Convert to Smart Layer", "Layer", "win.smart-convert", "", "smart object layer convert keep whole lossless", ""},
+            {"Replace Contents\u2026", "Layer", "win.smart-replace", "", "smart object layer replace contents picture file", ""},
+            {"Update Modified Content", "Layer", "win.smart-update", "", "smart object linked update refresh reload file changed", ""},
+            {"Embed Linked", "Layer", "win.smart-embed", "", "smart object linked embed", ""},
+            {"Rasterize Smart Layer", "Layer", "win.smart-rasterize", "", "smart object layer rasterize pixels flatten", ""},
             {"Make Path\u2026", "Select", "win.path-make", "", "path trace tracer streamline outline vector mask transparency channel tolerance bezier", ""},   // s081
             {"Make Path from Layer Mask", "Layer", "win.path-from-mask", "", "path trace mask outline vector bezier", ""},
             {"Make Path from Transparency", "Layer", "win.path-from-transparency", "", "path trace alpha transparency cut out outline vector bezier", ""},

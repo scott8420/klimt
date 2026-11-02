@@ -1,4 +1,5 @@
 #include "core/Transform.hpp"
+#include "core/Smart.hpp"   // s082
 #include "core/Text.hpp"   // s046: type transforms as type
 #include "core/Canvas.hpp"
 
@@ -791,6 +792,12 @@ std::string projective_refusal(const Plan& p) {
     return {};
 }
 
+std::string warp_refusal(const Plan& p) {   // s082
+    if (const auto t = projective_refusal(p); !t.empty()) return t;
+    if (!p.p.smarts.empty()) return "a smart layer keeps its picture whole -- Layer > Smart Layer > Rasterize to warp it (Distort and Perspective keep it smart)";
+    return {};
+}
+
 namespace {
 // s074: the layers, their masks and the selection under any map `xf` (the
 // projective resample, or a warp's). `type_map`: what type is mapped by --
@@ -801,7 +808,8 @@ namespace {
 using XfFn = std::function<std::optional<pixel::TileMap>(const pixel::TileMap&, const pixel::TileMap&, const pixel::TileMap*,
                                                          const pixel::Rect&, Quality)>;
 std::optional<move::Result> compute_with(const Plan& pl, bool identity, const Affine* type_map, Quality q,
-                                         const std::function<bool()>& cancelled, const XfFn& xf, bool mask_extent) {
+                                         const std::function<bool()>& cancelled, const XfFn& xf, bool mask_extent,
+                                         const Projective* smart_map = nullptr) {
     const auto& p = pl.p;
     move::Result r;
     const bool flat = type_map != nullptr;
@@ -809,6 +817,7 @@ std::optional<move::Result> compute_with(const Plan& pl, bool identity, const Af
     if (identity) {
         for (const auto& id : p.ids) r.pixels[id] = p.original.at(id);
         for (const auto& [id, t] : p.texts) r.texts[id] = t;   // s046
+        for (const auto& [id, sm] : p.smarts) r.smarts[id] = sm;   // s082
         r.mask = p.mask;
         return r;
     }
@@ -834,8 +843,26 @@ std::optional<move::Result> compute_with(const Plan& pl, bool identity, const Af
         r.pixels[id] = text_pixels(im, *mapped);
         r.texts[id] = std::move(mapped);
     }
+    // s082: a SMART layer's map composed with the transform (any projective
+    // map -- skew, distort, perspective too) and drawn again from its whole
+    // picture; a warp leaves it as it was (warp_refusal says so first).
+    {
+        Image im;
+        im.width = p.width;
+        im.height = p.height;
+        im.format = p.format;
+        for (const auto& [id, sm] : p.smarts) {
+            if (cancelled && cancelled()) return std::nullopt;
+            if (!smart_map) { r.pixels[id] = p.original.at(id); r.smarts[id] = sm; continue; }
+            auto mapped = std::make_shared<const smart::Smart>(smart::with_map(*sm, *smart_map * smart::map_of(*sm)));
+            auto px = smart::rendered(im, *mapped, cancelled);
+            if (!px) return std::nullopt;
+            r.pixels[id] = *px;
+            r.smarts[id] = std::move(mapped);
+        }
+    }
     for (const auto& id : p.ids) {
-        if (p.texts.count(id)) continue;   // s046: above
+        if (p.texts.count(id) || p.smarts.count(id)) continue;   // s046 / s082: above
         const auto& o = p.original.at(id);
         if (!o) { r.pixels[id] = p.mask ? p.base.at(id) : nullptr; continue; }
         pixel::TileMap base = blank;
@@ -876,7 +903,7 @@ std::optional<move::Result> compute(const Plan& pl, const Projective& pm, Qualit
     return compute_with(pl, pm.identity(), pm.affine() ? &am : nullptr, q, cancelled,
                         [&](const pixel::TileMap& base, const pixel::TileMap& src, const pixel::TileMap* mask, const pixel::Rect& box, Quality qq) {
                             return over_transformed(base, src, mask, box, pm, qq, cancelled);
-                        }, true);
+                        }, true, &pm);
 }
 
 std::optional<move::Result> compute_warp(const Plan& pl, const Mesh& mesh, Quality q, const std::function<bool()>& cancelled) {
@@ -909,7 +936,7 @@ bool distort(DocJournal& j, Document& d, const std::vector<Document::Id>& select
 bool warp(DocJournal& j, Document& d, const std::vector<Document::Id>& selected,
           const std::function<Mesh(const pixel::Rect&)>& bend, const std::string& label, const pixel::Px& background) {
     const auto p = plan(d, selected, background);
-    if (!p || !projective_refusal(*p).empty()) return false;
+    if (!p || !warp_refusal(*p).empty()) return false;
     const Mesh m = bend(p->box);
     if (m.identity_for(p->box)) return false;
     const auto r = compute_warp(*p, m, Quality::Best);

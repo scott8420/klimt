@@ -142,7 +142,7 @@ void Shell::update_layer_actions() {
             if (core::filter::livable(fk)) on(("filter-layer-" + std::string(core::filter::key(fk))).c_str(), img && m_doc.image().format.mode == pixel::Mode::RGB);
         }
         // s014: the Filter menu wants a pixel layer with pixels (Last Filter: one run before).
-        const bool filterable = img && pixel_layer && pl->pixels;
+        const bool filterable = img && pl && (pixel_layer || pl->kind == core::Kind::Smart) && pl->pixels;   // s082: smart filters
         for (const auto k : core::filter::kinds())   // s043: Clouds and Fibers fill an empty layer too
             on(("filter-" + std::string(core::filter::key(k))).c_str(), filterable || (img && pixel_layer && core::filter::fills(k)));
         on("filter-last", m_last_filter && (filterable || (img && pixel_layer && core::filter::fills(m_last_filter->kind))));
@@ -150,6 +150,16 @@ void Shell::update_layer_actions() {
         // s024: groups take styles too (Rasterize: pixel layers only).
         const bool styleable = pl && (core::draws_pixels(pl->kind) || pl->kind == core::Kind::Group);   // s046: type too
         on("text-rasterize", img && pl && pl->kind == core::Kind::Text);   // s046
+        {   // s082: smart layers
+            const bool sl = img && pl && pl->kind == core::Kind::Smart && pl->smart;
+            on("smart-convert", img && pixel_layer && pl->pixels);
+            on("smart-rasterize", sl);
+            on("smart-replace", sl);
+            on("smart-update", sl && !pl->smart->link.empty());
+            on("smart-embed", sl && !pl->smart->link.empty());
+            on("place-embedded", img);
+            on("place-linked", img);
+        }
         for (const char* v : {"style-drop-shadow", "style-outer-glow", "style-inner-shadow", "style-inner-glow", "style-satin", "style-pattern-overlay", "style-gradient-overlay", "style-bevel-emboss", "style-colour-overlay", "style-stroke", "style-copy", "style-clear"})
             on(v, img && styleable);
         on("style-rasterize", img && pixel_layer);

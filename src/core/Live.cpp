@@ -561,7 +561,7 @@ std::shared_ptr<const pixel::TileMap> edged_mask(const std::shared_ptr<const pix
 // out at its mask's edge (core/matte). Made once per (pixels, acting mask,
 // width) -- tiles that ask at once wait for the one computation.
 std::shared_ptr<const pixel::TileMap> defringed_pixels(const Layer& l) {
-    if (l.kind != Kind::Pixel || !l.pixels || !l.mask || !l.mask_on || l.edges.defringe <= 0) return l.pixels;
+    if ((l.kind != Kind::Pixel && l.kind != Kind::Smart) || !l.pixels || !l.mask || !l.mask_on || l.edges.defringe <= 0) return l.pixels;
     const auto hide = edged_mask(l.mask, l.edges);
     using Ptr = std::shared_ptr<const pixel::TileMap>;
     struct Entry { Ptr px, hide; double width; std::shared_future<Ptr> out; };
@@ -725,7 +725,7 @@ namespace klimt::core::layers {
 namespace {
 std::optional<Layer> stack_layer(const Document& d, const Id& id) {
     const auto l = d.get(id);
-    if (!l || l->kind != Kind::Pixel || d.locked_all(id) || (l->locks & lock::Pixels)) return std::nullopt;
+    if (!l || (l->kind != Kind::Pixel && l->kind != Kind::Smart) || d.locked_all(id) || (l->locks & lock::Pixels)) return std::nullopt;   // s082: smart filters
     return l;
 }
 std::string named(const Layer& l, const char* what) { return std::string(what) + " on “" + l.name + "”"; }

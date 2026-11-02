@@ -132,6 +132,7 @@ std::string refusal(const Document& d, const Document::Id& id) {
     const auto l = d.get(id);
     if (!l) return "pick a layer";
     if (l->kind == Kind::Text) return "type stays type -- Layer > Rasterize Type to liquify it";
+    if (l->kind == Kind::Smart) return "a smart layer keeps its picture whole -- Layer > Smart Layer > Rasterize to liquify it";   // s082
     if (l->kind != Kind::Pixel) return "pick a pixel layer";
     if (!l->pixels) return "the layer is empty";
     if ((l->locks & (lock::Pixels | lock::All)) || d.locked_all(id)) return "the layer's pixels are locked";

@@ -1,6 +1,7 @@
 #include "LayersPanel.hpp"
 #include "Log.hpp"
 #include "core/Clip.hpp"   // s080: the clipping path tag
+#include "core/Smart.hpp"  // s082: the smart badge
 
 #include <gtkmm/entry.h>
 #include <gtkmm/eventcontrollerfocus.h>
@@ -351,8 +352,12 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
     const Id target = mask_target();
     const bool pth = l.kind == core::Kind::Path;   // s035
     const bool txt = l.kind == core::Kind::Text;   // s046
+    const bool smt = l.kind == core::Kind::Smart && l.smart;   // s082
     kind->set_from_icon_name(group ? "folder-symbolic" : pth ? "klimt-tool-pen-symbolic" : flt ? "klimt-filter-layer-symbolic"
-                             : adj ? "klimt-adjustment-symbolic" : txt ? "klimt-tool-text-symbolic" : "image-x-generic-symbolic");
+                             : adj ? "klimt-adjustment-symbolic" : txt ? "klimt-tool-text-symbolic"
+                             : smt ? (l.smart->link.empty() ? "insert-image-symbolic" : "insert-link-symbolic") : "image-x-generic-symbolic");
+    if (smt) kind->set_tooltip_text("A smart layer -- “" + l.smart->name + "”, kept whole (" + core::smart::link_label(core::smart::status(*l.smart)) +
+                                    "): transform it as often as you like; filters on it stay live. Layer > Smart Layer for the rest");
     if (txt) kind->set_tooltip_text("A text layer -- live type: the Text tool (T) edits it; Layer > Rasterize Type makes it pixels");
     if (pth) kind->set_tooltip_text("A path layer -- the Pen (P) edits it; in Properties: mask what's below it in its group, "
                                     "be the selection, Isolate what it goes round");
@@ -468,12 +473,17 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
         if (l.path_select) info += std::string(info.empty() ? "" : " · ") + "selection";
         if (m_doc.image().clip_path == id && core::clip::of(m_doc) == id) info += std::string(info.empty() ? "" : " · ") + "clipping path";   // s080
     }
+    if (l.kind == core::Kind::Smart && l.smart) {   // s082: linked and changed / missing said on the row
+        const auto st = core::smart::status(*l.smart);
+        if (st == core::smart::Link::Modified) info += std::string(info.empty() ? "" : " · ") + "changed";
+        else if (st == core::smart::Link::Missing) info += std::string(info.empty() ? "" : " · ") + "missing";
+    }
     if (l.blend != core::Blend::Normal && l.blend != core::Blend::PassThrough)
         info += std::string(core::blend_label(l.blend));
     if (l.opacity < 100) info += (info.empty() ? "" : " · ") + std::to_string(l.opacity) + "%";
     if (l.fill < 100) info += (info.empty() ? "" : " · ") + std::string("fill ") + std::to_string(l.fill) + "%";
     if (l.styles.any()) info += (info.empty() ? "" : " · ") + std::string("styles");   // s019
-    if (!l.filters.empty() && l.kind == core::Kind::Pixel) {   // s018: live filters under it (s030: not a filter layer's own)
+    if (!l.filters.empty() && (l.kind == core::Kind::Pixel || l.kind == core::Kind::Smart)) {   // s082   // s018: live filters under it (s030: not a filter layer's own)
         int on = 0;
         for (const auto& f : l.filters) on += f.on;
         info += (info.empty() ? "" : " · ") + std::string("fx ") + std::to_string(on) + (on == static_cast<int>(l.filters.size()) ? "" : "/" + std::to_string(l.filters.size()));

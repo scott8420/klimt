@@ -333,6 +333,11 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["path-make-work"] = add_action("path-make-work", [this] { on_path_make_work(); });
     m_layer_acts["clipping-path"] = add_action("clipping-path", [this] { on_clipping_path(); });   // s080
     m_layer_acts["path-make"] = add_action("path-make", [this] { on_make_path_dialog(); });   // s081
+    // s082: smart layers.
+    m_layer_acts["place-embedded"] = add_action("place-embedded", [this] { on_place(false); });
+    m_layer_acts["place-linked"]   = add_action("place-linked",   [this] { on_place(true); });
+    for (const char* v : {"convert", "rasterize", "replace", "update", "embed"})
+        m_layer_acts[std::string("smart-") + v] = add_action(std::string("smart-") + v, [this, v] { on_smart(v); });
     m_layer_acts["path-from-mask"] = add_action("path-from-mask", [this] { on_path_from_layer(core::paths::Source::LayerMask); });
     m_layer_acts["path-from-transparency"] = add_action("path-from-transparency", [this] { on_path_from_layer(core::paths::Source::Transparency); });
     m_canvas.signal_guide_moved().connect([this](int i, double at) {

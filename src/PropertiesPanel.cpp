@@ -3,6 +3,8 @@
 #include "core/Live.hpp"   // s018
 #include "core/Paths.hpp"  // s035: what a path masks
 #include "core/Clip.hpp"   // s080: the clipping path
+#include "core/Smart.hpp"  // s082
+#include <tuple>
 #include <glibmm/main.h>
 #include <gtkmm/button.h>
 #include <gtkmm/checkbutton.h>
@@ -382,6 +384,43 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
         m_path_box.append(*crow);
         m_stroke_row = crow;   // s038: only while the layer still holds s037's strokes
         m_fields.append(m_path_box);
+        {   // s082: a smart layer
+            m_smart_box.set_name("properties.smart");
+            m_smart_box.set_visible(false);
+            auto head = Gtk::make_managed<Gtk::Label>();
+            head->set_markup("<b>Smart layer</b>");
+            head->set_xalign(0.0f);
+            m_smart_box.append(*head);
+            m_smart_info.set_xalign(0.0f);
+            m_smart_info.set_wrap(true);
+            m_smart_box.append(m_smart_info);
+            m_smart_link.set_xalign(0.0f);
+            m_smart_link.set_wrap(true);
+            m_smart_link.set_wrap_mode(Pango::WrapMode::WORD_CHAR);
+            m_smart_link.add_css_class("dim-label");
+            m_smart_link.add_css_class("caption");
+            m_smart_box.append(m_smart_link);
+            auto note = Gtk::make_managed<Gtk::Label>("Kept whole: scale, turn or distort it as often as you like -- it is drawn fresh from "
+                                                      "the picture each time. Filters on it stay live.");
+            note->set_wrap(true);
+            note->set_xalign(0.0f);
+            note->add_css_class("dim-label");
+            note->add_css_class("caption");
+            m_smart_box.append(*note);
+            auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            for (const auto& [label, action, tip] : {std::tuple<const char*, const char*, const char*>
+                     {"Update", "win.smart-update", "Read the linked file again (it has changed)"},
+                     {"Replace…", "win.smart-replace", "Another picture in its place -- the same transform"},
+                     {"Rasterize", "win.smart-rasterize", "Make it a pixel layer of what it draws (to paint on it)"}}) {
+                auto b = Gtk::make_managed<Gtk::Button>(label);
+                b->set_action_name(action);
+                b->set_tooltip_text(tip);
+                b->set_hexpand(true);
+                row->append(*b);
+            }
+            m_smart_box.append(*row);
+            m_fields.append(m_smart_box);
+        }
     }
     build_edges();   // s036
 
@@ -468,6 +507,7 @@ void PropertiesPanel::paint() {
                     : l->kind == core::Kind::Filter ? std::string("filter layer")   // s030
                     : l->kind == core::Kind::Path ? std::string("path layer")       // s035
                     : l->kind == core::Kind::Text ? std::string("text layer")       // s046
+                    : l->kind == core::Kind::Smart ? std::string("smart layer")     // s082
                     : std::string("pixel layer");
     if (m_sel.size() > 1) sub += " · +" + std::to_string(m_sel.size() - 1) + " more";
     m_subtitle.set_text(sub);
@@ -501,6 +541,21 @@ void PropertiesPanel::paint() {
     // s035: one path layer picked: its switches and actions.
     const bool pth = l->kind == core::Kind::Path && m_sel.size() == 1 && l->path;
     m_path_box.set_visible(pth);
+    {   // s082: one smart layer picked
+        const bool sm = l->kind == core::Kind::Smart && l->smart && l->smart->source && m_sel.size() == 1;
+        m_smart_box.set_visible(sm);
+        if (sm) {
+            const auto& s = *l->smart;
+            char pct[32];
+            std::snprintf(pct, sizeof pct, "%.4g", core::smart::scale_of(s) * 100);
+            m_smart_info.set_text("\u201c" + s.name + "\u201d \u2014 " + std::to_string(s.source->width()) + " \u00d7 " +
+                                  std::to_string(s.source->height()) + " px, shown at " + pct + " %" +
+                                  (core::xform::Projective(core::smart::map_of(s)).affine() ? std::string() : std::string(", in perspective")));
+            const auto st = core::smart::status(s);
+            m_smart_link.set_text(st == core::smart::Link::Embedded ? std::string("Embedded -- the .klimt carries it")
+                                  : std::string(core::smart::link_label(st)) + ": " + s.link);
+        }
+    }
     if (m_path_id != (pth ? primary() : Id{})) Glib::signal_idle().connect_once([this] { stop_strokes(); });   // s037: another layer -- painting strokes stops
     m_path_id = pth ? primary() : Id{};
     if (pth) {
@@ -690,7 +745,7 @@ void PropertiesPanel::paint_edges(const core::Layer& l) {
 // value, up / down, delete; double-click the name to edit it. Rasterize below.
 void PropertiesPanel::paint_live(const core::Layer& l) {
     namespace F = core::filter;
-    const bool show = l.kind == core::Kind::Pixel && m_sel.size() == 1 && !l.filters.empty();
+    const bool show = (l.kind == core::Kind::Pixel || l.kind == core::Kind::Smart) && m_sel.size() == 1 && !l.filters.empty();   // s082: smart filters
     m_live.set_visible(show);
     m_later.set_visible(m_later.get_visible() && !show);   // the stack says it better
     if (!m_fmask_target.empty() && (!show || primary() != m_fmask_target)) {   // m4: another layer -- let go

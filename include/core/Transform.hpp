@@ -143,6 +143,8 @@ std::optional<move::Result> compute(const Plan& p, const Projective& m, Quality 
                                     const std::function<bool()>& cancelled = {});
 // s073: "" a non-affine map is fine for this plan, else why not (a type layer).
 std::string projective_refusal(const Plan& p);
+// s082: "" a warp is fine for this plan, else why not (a type or a smart layer).
+std::string warp_refusal(const Plan& p);
 // s074: the layers under a warp (the mesh over p.box). Type is left as it was
 // (projective_refusal says so first). A whole layer's mask is warped over the
 // box (beyond it the mask shows all). Pure.

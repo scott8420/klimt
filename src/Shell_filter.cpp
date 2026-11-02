@@ -22,7 +22,7 @@ bool Shell::filter_layer_ok(const std::string& verb, bool may_be_empty) {
     const auto id = m_layers.primary();
     const auto l = m_doc.get(id);
     if (!l) { toast(verb + ": select a layer first"); return false; }
-    if (l->kind != core::Kind::Pixel) { toast(verb + ": " + L::not_pixels(m_doc, id)); return false; }
+    if (l->kind != core::Kind::Pixel && l->kind != core::Kind::Smart) { toast(verb + ": " + L::not_pixels(m_doc, id)); return false; }   // s082: smart filters
     if (m_doc.locked_all(id) || (l->locks & core::lock::Pixels)) { toast(verb + ": “" + l->name + "” is locked"); return false; }
     if (!l->pixels && !may_be_empty) { toast(verb + ": “" + l->name + "” is empty"); return false; }   // s043: Clouds, Fibers may
     const auto mode = m_doc.image().format.mode;
@@ -43,6 +43,14 @@ void Shell::filter_run(const core::Filter& f) {
     const bool from_dialog = m_filter_dialog && m_filter_dialog->get_visible();
     if (from_dialog && m_filter_dialog->editing()) {
         if (m_filter_edit) L::set_live(m_journal, m_doc, target, *m_filter_edit, f);
+        if (m_preview.erase(target)) queue_render();
+        return;
+    }
+    if (cur->kind == core::Kind::Smart) {   // s082: on a smart layer a filter is always live -- a smart filter
+        if (!F::livable(f.kind)) { toast(std::string(F::label(f.kind)) + ": it can't run live -- on a smart layer filters stay live (Layer > Smart Layer > Rasterize first)"); return; }
+        m_last_filter = f;
+        update_layer_actions();
+        if (!L::add_live(m_journal, m_doc, target, f)) toast(std::string(F::label(f.kind)) + ": refused");
         if (m_preview.erase(target)) queue_render();
         return;
     }

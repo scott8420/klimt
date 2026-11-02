@@ -308,6 +308,8 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     m_recents = core::load_recents(m_recents_file);
     sync_recents();
     file->append_submenu("Open Recent", m_recent_menu);
+    file->append("Place Embedded…", "win.place-embedded");   // s082: a smart layer
+    file->append("Place Linked…", "win.place-linked");
     file->append("Save", "win.save");
     file->append("Save As…", "win.save-as");
     file->append("Export…", "win.export");
@@ -401,6 +403,13 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
         layer->append_section(ty);
         auto pm = Gio::Menu::create();   // s081: the picked layer's outline as a path
         pm->append("Make Path from Layer Mask", "win.path-from-mask");
+        auto sl = Gio::Menu::create();   // s082: smart layers
+        sl->append("Convert to Smart Layer", "win.smart-convert");
+        sl->append("Replace Contents…", "win.smart-replace");
+        sl->append("Update Modified Content", "win.smart-update");
+        sl->append("Embed Linked", "win.smart-embed");
+        sl->append("Rasterize", "win.smart-rasterize");
+        layer->append_submenu("Smart Layer", sl);
         pm->append("Make Path from Transparency", "win.path-from-transparency");
         layer->append_section(pm);
     }
