@@ -336,6 +336,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto edit = Gio::Menu::create();
     edit->append("Fill with Foreground", "win.fill-fg");
     edit->append("Fill with Background", "win.fill-bg");
+    edit->append("Content-Aware Fill", "win.fill-content-aware");   // s088: LaMa, a new layer
     edit->append("Delete Selected Pixels", "win.delete-selection");
     // s011: transforms -- the selection's pixels, or the whole layer.
     edit->append("Free Transform", "win.free-transform");

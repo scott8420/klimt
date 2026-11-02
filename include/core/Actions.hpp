@@ -74,7 +74,8 @@ Act select_all();
 Act select_none();
 Act select_invert();
 Act select_subject();
-Act remove_background();   // s087: the picked layer's mask from the model   // s086: the local model (libs/seg) -- inside the selection when there is one
+Act remove_background();
+Act content_aware_fill();   // s088: LaMa through the selection, a new layer above the picked one   // s087: the picked layer's mask from the model   // s086: the local model (libs/seg) -- inside the selection when there is one
 Act feather(double radius);
 Act fill_selection(const pixel::Px& colour);   // straight, in the document's channels
 Act new_layer(const std::string& name);

@@ -8,6 +8,7 @@
 #include "core/RoundTrip.hpp"
 #include "core/Raw.hpp"
 #include "core/Subject.hpp"
+#include "core/Fill.hpp"
 #include "seg/Seg.hpp"
 #include "core/Selection.hpp"
 #include "core/Transform.hpp"
@@ -94,6 +95,7 @@ const std::vector<Verb>& verbs() {
         {"select.all", "Select All"},          {"select.none", "Deselect"},
         {"select.invert", "Inverse"},          {"select.feather", "Feather"},
         {"select.subject", "Select Subject"},  {"layer.remove_bg", "Remove Background"},
+        {"edit.fill_ca", "Content-Aware Fill"},
         {"select.fill", "Fill"},               {"layer.new", "New Layer"},
         {"layer.duplicate", "Duplicate Layer"}, {"layer.delete", "Delete Layer"},
         {"layer.mask", "Add Mask"},            {"layer.opacity", "Opacity"},
@@ -148,6 +150,7 @@ Act select_none() { return make("select.none", json::object(), "Deselect"); }
 Act select_invert() { return make("select.invert", json::object(), "Inverse"); }
 Act select_subject() { return make("select.subject", json::object(), "Select Subject"); }
 Act remove_background() { return make("layer.remove_bg", json::object(), "Remove Background"); }
+Act content_aware_fill() { return make("edit.fill_ca", json::object(), "Content-Aware Fill"); }
 Act feather(double r) { return make("select.feather", {{"radius", r}}, "Feather  " + num(r) + " px"); }
 Act fill_selection(const P::Px& c) { return make("select.fill", {{"colour", colour_json(c)}}, "Fill"); }
 Act new_layer(const std::string& name) { return make("layer.new", {{"name", name}}, "New Layer “" + name + "”"); }
@@ -286,6 +289,27 @@ bool run(DocJournal& j, Document& d, Document::Id& picked, const Act& act, std::
         if (v == "select.all") { select::all(j, d); return true; }
         if (v == "select.none") { select::none(j, d); return true; }
         if (v == "select.invert") { select::invert(j, d); return true; }
+        if (v == "edit.fill_ca") {   // s088
+            if (!seg::available()) { error = "Klimt was built without ONNX Runtime"; return false; }
+            if (!d.selection()) { error = "nothing is selected"; return false; }
+            if (im.format.mode != pixel::Mode::RGB) { error = "RGB documents only"; return false; }
+            const std::string dir = seg::default_dir();
+            const auto* m = seg::model("fill");
+            if (const auto st = m ? seg::check(*m, dir) : seg::State::Missing; st != seg::State::Ready) {
+                error = m ? seg::state_words(*m, st, dir) : "no model";
+                return false;
+            }
+            const auto flat = file::flatten(im, d.snapshot());
+            if (!flat) { error = "cancelled"; return false; }
+            auto px = fill::content_aware(*flat, *d.selection_ptr(), im.format, *m, seg::path_of(*m, dir), error, cancelled);
+            if (!px) return false;
+            auto shared = std::make_shared<const pixel::TileMap>(std::move(*px));
+            const auto id = layers::add_layer_of(j, d, Kind::Pixel, "Content-Aware Fill", picked,
+                                                 [&](Layer& l) { l.pixels = shared; }, "Content-Aware Fill");
+            if (id.empty()) { error = "refused"; return false; }
+            picked = id;
+            return true;
+        }
         if (v == "layer.remove_bg") {   // s087
             if (!seg::available()) { error = "Klimt was built without ONNX Runtime"; return false; }
             if (!layer_ok()) return false;

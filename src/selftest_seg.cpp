@@ -3,6 +3,7 @@
 // when ONNX Runtime is built in AND the model is in the store (Scott's
 // machine may have neither yet -- then those checks are skipped, said).
 #include "core/Subject.hpp"
+#include "core/Fill.hpp"
 #include "core/Document.hpp"
 #include "core/Undo.hpp"
 #include "pixel/Pixel.hpp"
@@ -80,6 +81,15 @@ void selftest_seg(const Check& check) {
         j.undo(); j.undo();
         check("seg: undone -- no mask", !d.get("L1")->mask, "");
     }
+    {   // s088: the context LaMa sees
+        const auto b = klimt::core::fill::context_box({200, 150, 40, 20}, 600, 400);
+        check("seg: Content-Aware Fill's context -- the hole grown by its size (32 px at least) each way, on the picture",
+              b.x == 160 && b.y == 110 && b.w == 120 && b.h == 100, std::to_string(b.x) + "," + std::to_string(b.y) + " " + std::to_string(b.w) + "x" + std::to_string(b.h));
+        const auto e = klimt::core::fill::context_box({0, 0, 100, 50}, 300, 200);
+        check("seg: ... kept on the picture at its edge", e.x == 0 && e.y == 0 && e.w == 200 && e.h == 150, "");
+        const auto* f = seg::model("fill");
+        check("seg: the catalog's fill model (LaMa, 512 square)", f && f->side == 512 && std::string(f->file) == "lama_fp32.onnx", "");
+    }
     {   // where the model looks
         P::TileMap sel(P::Format{P::Depth::U8, P::Mode::Gray, false}, 400, 300);
         sel = sel.fill({200, 100, 100, 100}, P::Px{{1, 0, 0, 0}});
@@ -135,4 +145,25 @@ void selftest_seg(const Check& check) {
     const auto hide = sub::background_mask(pic, nullptr, mf, *fine, seg::path_of(*fine, dir), sub::edge_for(400, 300), err);
     check("seg: Remove Background's mask -- hides the ground, shows the disc, a soft edge at its rim",
           hide && hide->format() == mf && hide->get(10, 10).c[0] > 0.9f && hide->get(150, 160).c[0] < 0.1f, err);
+    // s088: Content-Aware Fill -- stripes, a square hole: the stripes go on through it.
+    const auto* lama = seg::model("fill");
+    if (!lama || seg::check(*lama, dir) != seg::State::Ready) {
+        check("seg: (skipped -- lama_fp32.onnx isn't in " + dir + ")", true, "");
+        return;
+    }
+    const P::TileMap stripes = P::TileMap(f8, 400, 300).paint({0, 0, 400, 300}, [](int, int y, const P::Px&) {
+        return (y / 24) % 2 ? P::rgba(0.9f, 0.15f, 0.1f) : P::rgba(0.1f, 0.2f, 0.9f);
+    });
+    P::TileMap hole(mf, 400, 300);
+    hole = hole.fill({170, 110, 60, 80}, P::Px{{1, 0, 0, 0}});
+    const auto filled = klimt::core::fill::content_aware(stripes, hole, f8, *lama, seg::path_of(*lama, dir), err);
+    const auto red_row = [&](int y) { const auto p = filled->get(200, y); return p.c[0] > 0.6f && p.c[2] < 0.4f; };
+    const auto blue_row = [&](int y) { const auto p = filled->get(200, y); return p.c[2] > 0.6f && p.c[0] < 0.4f; };
+    check("seg: Content-Aware Fill -- the hole filled, the stripes carried through it (red rows red, blue rows blue)",
+          filled && filled->get(200, 150).c[3] > 0.99f && red_row(130) && blue_row(155) && red_row(175), err);
+    check("seg: ... transparent away from the hole (a layer of the fill alone)", filled && filled->get(20, 20).c[3] == 0.f &&
+              filled->get(200, 50).c[3] == 0.f, "");
+    std::string e2;
+    check("seg: ... nothing selected -- said", !klimt::core::fill::content_aware(stripes, P::TileMap(mf, 400, 300), f8, *lama,
+                                                                                 seg::path_of(*lama, dir), e2) && e2 == "nothing is selected", e2);
 }

@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s087")
+set(KLIMT_BUILD "s088")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -153,6 +153,7 @@ add_library(klimt_core STATIC
     src/core/Actions.cpp      # s084: actions and batch
     src/core/Raw.cpp          # s085: camera RAW (LibRaw)
     src/core/Subject.cpp      # s086: Select > Subject (libs/seg)
+    src/core/Fill.cpp         # s088: Content-Aware Fill (LaMa)
 )
 target_include_directories(klimt_core PUBLIC include)
 target_link_libraries(klimt_core PUBLIC klimt_pixel klimt_formats klimt_text klimt_tint klimt_seg)

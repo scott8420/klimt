@@ -63,4 +63,11 @@ std::string sha256(const std::uint8_t* data, std::size_t n);
 std::optional<std::vector<float>> salient(const Model& m, const std::string& model_path, const std::uint8_t* rgb, int w, int h,
                                           std::string& error, const std::function<bool()>& cancelled = {});
 
+// s088: INPAINTING (LaMa): `rgb` side x side x 3 floats 0..1 (the hole's
+// pixels anything -- they're blanked), `hole` side x side 0 / 1. Back: the
+// picture side x side x 3 floats 0..1, the hole filled from around it.
+std::optional<std::vector<float>> inpaint(const Model& m, const std::string& model_path, const std::vector<float>& rgb,
+                                          const std::vector<float>& hole, std::string& error,
+                                          const std::function<bool()>& cancelled = {});
+
 }  // namespace klimt::seg

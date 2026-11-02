@@ -67,6 +67,7 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["select-invert"]  = add_action("select-invert", sigc::mem_fun(*this, &Shell::on_select_invert));
     m_layer_acts["select-subject"] = add_action("select-subject", sigc::mem_fun(*this, &Shell::on_select_subject));   // s086
     m_layer_acts["remove-background"] = add_action("remove-background", sigc::mem_fun(*this, &Shell::on_remove_background));   // s087
+    m_layer_acts["fill-content-aware"] = add_action("fill-content-aware", sigc::mem_fun(*this, &Shell::on_content_aware_fill));   // s088
     m_layer_acts["fill-fg"]        = add_action("fill-fg", [this] { on_fill(true); });
     m_layer_acts["fill-bg"]        = add_action("fill-bg", [this] { on_fill(false); });
     m_layer_acts["delete-selection"] = add_action("delete-selection", sigc::mem_fun(*this, &Shell::on_delete_selection));

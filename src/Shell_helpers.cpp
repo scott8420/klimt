@@ -115,6 +115,7 @@ void Shell::update_layer_actions() {
     on("guides-clear", img && !m_doc.image().guides.empty());   // s032
     on("action-play", img && m_recording < 0 && !m_action_playing);   // s084
     on("select-subject", img);   // s086
+    on("fill-content-aware", img && m_doc.selection());   // s088
     {   // s087: a layer with a picture of its own
         const auto pk = m_layers.primary();
         const auto pl2 = pk.empty() ? std::nullopt : m_doc.get(pk);

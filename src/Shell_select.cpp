@@ -1,6 +1,7 @@
 #include "AdjustDialog.hpp"   // s064: the eyedroppers
 #include "Shell.hpp"
 #include "core/Subject.hpp"   // s086
+#include "core/Fill.hpp"      // s088
 #include "seg/Seg.hpp"
 #include "Log.hpp"
 #include <gtkmm/alertdialog.h>
@@ -438,6 +439,55 @@ void Shell::on_remove_background() {
             on_selection();
             if (auto lg = log::get(log::Area::Shell)) lg->info("remove background: landed ({})", which);
             toast(verb + " -- a layer mask (" + which + "); paint it to mend, Properties' Defringe for a colour halo", true);
+        };
+    });
+}
+
+// ── s088: Edit > Content-Aware Fill ─────────────────────────────────────────
+// The selection filled from what's around it (LaMa, libs/seg), on a NEW
+// layer above the picked one -- the picture under it untouched (hide it,
+// mask it, lower its opacity). What the eye sees is what it borrows from.
+// ONE step; the selection stays.
+void Shell::on_content_aware_fill() {
+    const std::string verb = "Content-Aware Fill";
+    if (!has_image()) { toast(verb + ": no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
+    if (!m_doc.selection()) { toast(verb + ": select what to fill first (a rough Lasso round it is enough)"); return; }
+    if (!seg::available()) { toast(verb + ": Klimt was built without ONNX Runtime -- install onnxruntime-devel and build again"); return; }
+    if (m_doc.image().format.mode != pixel::Mode::RGB) { toast(verb + ": RGB documents only, for now"); return; }
+    const core::Image im = m_doc.image();
+    const auto layers = m_doc.snapshot();
+    const auto sel = m_doc.selection_ptr();
+    const auto mark = m_journal.mark();
+    const auto above = m_layers.primary();
+    const std::string dir = seg::default_dir();
+    rec(core::actions::content_aware_fill());
+    start_job(verb, [this, im, layers, sel, mark, above, dir, verb](core::Jobs::Token& t) -> core::Jobs::Landing {
+        const auto* m = seg::model("fill");
+        if (const auto st = seg::check(*m, dir); st != seg::State::Ready) {
+            const auto words = seg::state_words(*m, st, dir);
+            return [this, verb, words] { say_model_missing(verb, "fill", words); };
+        }
+        formats::Progress cancel_only;
+        cancel_only.cancelled = [&t] { return t.cancelled(); };
+        auto flat = core::file::flatten(im, layers, cancel_only);
+        if (!flat) return [] {};
+        t.progress(0.15);
+        std::string err;
+        auto px = core::fill::content_aware(*flat, *sel, im.format, *m, seg::path_of(*m, dir), err, [&t] { return t.cancelled(); });
+        if (!px) {
+            if (t.cancelled()) return [] {};
+            return [this, verb, err] { toast(verb + ": " + err); };
+        }
+        auto shared = std::make_shared<const pixel::TileMap>(std::move(*px));
+        return [this, verb, mark, above, sel, shared] {
+            if (m_journal.mark() != mark || m_doc.selection_ptr() != sel) { toast(verb + ": the image changed meanwhile -- nothing done"); return; }
+            const auto id = core::layers::add_layer_of(m_journal, m_doc, core::Kind::Pixel, verb, m_doc.get(above) ? above : std::string{},
+                                                       [&](core::Layer& l) { l.pixels = shared; }, verb);
+            if (id.empty()) { toast(verb + ": refused"); return; }
+            m_journal.reselect({id});
+            m_layers.select({id}, false);
+            if (auto lg = log::get(log::Area::Shell)) lg->info("content-aware fill: landed as {}", id);
+            toast(verb + " -- on a layer of its own above; the picture under it is untouched", true);
         };
     });
 }

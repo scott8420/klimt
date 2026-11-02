@@ -27,6 +27,10 @@ const std::vector<Model>& catalog() {
         {"subject-fine", "isnet-general-use.onnx", 178648008, "60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a",
          "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
          "Remove Background and fine Select Subject -- ISNet (general use): hair, fur, fine edges", 1024, {0.5f, 0.5f, 0.5f}, {1.f, 1.f, 1.f}},
+        // s088: Content-Aware Fill -- LaMa (big-mask inpainting), 512 square, 0..1 in, 0..255 out.
+        {"fill", "lama_fp32.onnx", 208044816, "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
+         "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
+         "Content-Aware Fill -- LaMa: a hole filled from what's around it", 512, {0.f, 0.f, 0.f}, {1.f, 1.f, 1.f}},
     };
     return c;
 }
@@ -200,12 +204,53 @@ std::optional<std::vector<float>> salient(const Model& model, const std::string&
     return out;
 }
 
+std::optional<std::vector<float>> inpaint(const Model& model, const std::string& model_path, const std::vector<float>& rgb,
+                                          const std::vector<float>& hole, std::string& error, const std::function<bool()>& cancelled) {
+    const int S = model.side;
+    const std::size_t n = static_cast<std::size_t>(S) * S;
+    if (rgb.size() != n * 3 || hole.size() != n) { error = "the picture isn't the model's square"; return std::nullopt; }
+    // Planar, the hole blanked (as LaMa was trained).
+    std::vector<float> img(n * 3), m(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        m[i] = hole[i] > 0.5f ? 1.f : 0.f;
+        for (int c = 0; c < 3; ++c) img[static_cast<std::size_t>(c) * n + i] = m[i] > 0 ? 0.f : std::clamp(rgb[i * 3 + c], 0.f, 1.f);
+    }
+    if (cancelled && cancelled()) { error = "cancelled"; return std::nullopt; }
+    std::vector<float> out(n * 3);
+    try {
+        auto s = session(model_path);
+        Ort::AllocatorWithDefaultOptions a;
+        auto n0 = s->GetInputNameAllocated(0, a), n1 = s->GetInputNameAllocated(1, a), o0 = s->GetOutputNameAllocated(0, a);
+        const std::int64_t s1[4] = {1, 3, S, S}, s2[4] = {1, 1, S, S};
+        auto mi = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        Ort::Value ins[2] = {Ort::Value::CreateTensor<float>(mi, img.data(), img.size(), s1, 4),
+                             Ort::Value::CreateTensor<float>(mi, m.data(), m.size(), s2, 4)};
+        const char* in_names[] = {n0.get(), n1.get()};
+        const char* out_names[] = {o0.get()};
+        auto r = s->Run(Ort::RunOptions{nullptr}, in_names, ins, 2, out_names, 1);
+        if (r[0].GetTensorTypeAndShapeInfo().GetElementCount() != n * 3) { error = "the model gave back an unexpected shape"; return std::nullopt; }
+        const float* o = r[0].GetTensorData<float>();
+        for (std::size_t i = 0; i < n; ++i)
+            for (int c = 0; c < 3; ++c) out[i * 3 + c] = std::clamp(o[static_cast<std::size_t>(c) * n + i] / 255.f, 0.f, 1.f);
+    } catch (const Ort::Exception& e) {
+        error = std::string("ONNX Runtime: ") + e.what();
+        return std::nullopt;
+    }
+    if (cancelled && cancelled()) { error = "cancelled"; return std::nullopt; }
+    return out;
+}
+
 #else
 
 bool available() { return false; }
 std::string version() { return {}; }
 std::optional<std::vector<float>> salient(const Model&, const std::string&, const std::uint8_t*, int, int, std::string& error,
                                           const std::function<bool()>&) {
+    error = "Klimt was built without ONNX Runtime -- install onnxruntime-devel and build again";
+    return std::nullopt;
+}
+std::optional<std::vector<float>> inpaint(const Model&, const std::string&, const std::vector<float>&, const std::vector<float>&,
+                                          std::string& error, const std::function<bool()>&) {
     error = "Klimt was built without ONNX Runtime -- install onnxruntime-devel and build again";
     return std::nullopt;
 }
