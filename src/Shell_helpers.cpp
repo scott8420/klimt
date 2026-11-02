@@ -113,6 +113,7 @@ void Shell::update_layer_actions() {
     // s009: with no image, the verbs that need one grey.
     const bool img = has_image();
     on("guides-clear", img && !m_doc.image().guides.empty());   // s032
+    on("action-play", img && m_recording < 0 && !m_action_playing);   // s084
     for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save", "select-range", "refine-edges",
                           "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
                           "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate",
@@ -154,6 +155,7 @@ void Shell::update_layer_actions() {
             const bool sl = img && pl && pl->kind == core::Kind::Smart && pl->smart;
             on("smart-convert", img && pixel_layer && pl->pixels);
             on("smart-rasterize", sl);
+            on("smart-edit", sl && pl->smart->source);   // s083
             on("smart-replace", sl);
             on("smart-update", sl && !pl->smart->link.empty());
             on("smart-embed", sl && !pl->smart->link.empty());
@@ -209,6 +211,7 @@ void Shell::update_summary() {   // s012: says when the mask is what's painted
     for (const auto& id : m_doc.walk()) (m_doc.is_group(id) ? groups : layers)++;
     std::string s = std::to_string(layers) + (layers == 1 ? " layer" : " layers");
     if (groups) s += ", " + std::to_string(groups) + (groups == 1 ? " group" : " groups");
+    if (const auto b = back_line(m_tabs.live()); !b.empty()) s += "  ·  " + b;   // s083: where Save goes
     if (m_title) adw_window_title_set_subtitle(m_title, s.c_str());
     const auto n = m_layers.selection().size();
     const auto& im = m_doc.image();

@@ -18,6 +18,7 @@
 // a tab (a save) finds it by key, wherever it is now and whether or not it is
 // the live one.
 #include "core/Document.hpp"
+#include "formats/Formats.hpp"   // s083: the kind Save writes back
 
 #include <cstdint>
 #include <optional>
@@ -34,6 +35,15 @@ public:
         std::string   source;          // s023: the file it was opened from (an image or a .klimt); "" = none
         std::string   name = "No Image";
         std::uint64_t saved_mark = 0;  // its journal's mark when it last matched a file
+        // s083: SAVE WRITES BACK (core/RoundTrip.hpp) -- the file another app
+        // handed us (Composix's Edit Original), written in its own format.
+        std::string   back;                                // "" = none
+        formats::Kind back_kind = formats::Kind::Unknown;
+        std::string   from;                                // who asked: "Composix" -- the tab's mark
+        // s083 m3: EDIT CONTENTS -- the smart layer (in tab `owner_key`) this
+        // tab's picture goes back into on Save; 0 = none.
+        std::uint64_t owner_key = 0;
+        Document::Id  owner_layer;
     };
 
     // Tab 0 is the live document as it stands.

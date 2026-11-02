@@ -22,7 +22,7 @@
 
 namespace klimt::formats {
 
-enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA, PSD, PDF, EPS };   // s049: WebP, OpenRaster; s050: Photoshop; s051: PDF (written only, never sniffed)
+enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA, PSD, PDF, EPS };   // s049: WebP, OpenRaster; s050: Photoshop; s051: PDF (s083: sniffed -- Klimt opens the PDFs it wrote)
 // By the file's first bytes, not its name (a .png that is a JPEG opens).
 Kind sniff(const std::string& path);
 // s051 (Scott: changing the chooser's format didn't change the name's
@@ -94,6 +94,9 @@ struct WriteOptions {
     bool eps_cmyk = false;
     bool eps_preview = true;
     bool eps_flate = false;
+    // s083: PDF -- the Klimt document kept inside it (core/RoundTrip.hpp), so
+    // Composix's Edit Original (or Open here) gets every layer back.
+    bool pdf_layers = true;
     bool operator==(const WriteOptions&) const = default;
 };
 bool write_png (const std::string& path, const Raster& r, std::string& error, const Progress& p = {},

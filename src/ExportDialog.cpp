@@ -82,6 +82,7 @@ ExportDialog::ExportDialog(Gtk::Window& parent)
       m_webp_lossless("export.webp.lossless"),
       m_tiff_compression("export.tiff.compression"),
       m_ora_list("export.ora.list", Gtk::Orientation::VERTICAL, 6),
+      m_pdf_layers("export.pdf.layers"),
       m_eps_colour("export.eps.colour"),
       m_eps_encoding("export.eps.encoding"),
       m_eps_preview("export.eps.preview"),
@@ -241,6 +242,12 @@ void ExportDialog::fill_ora(const core::ora::Plan& plan, formats::Kind kind) {
         if (plan.kept.empty() && plan.baked.empty()) section("The picture", {"Every layer as Klimt shows it, one page at the image's size."});
         if (!plan.left_out.empty()) section("Not in the file", plan.left_out);
         m_ora_list.append(*dim("One page the picture's size at its resolution. Type stays type where nothing above it blends -- Composix and any PDF reader keep it sharp.", true));
+        // s083: the round-trip -- the document inside, for Edit Original.
+        m_pdf_layers.set_label("Keep Klimt's layers inside it");
+        m_pdf_layers.set_tooltip_text("Composix's Edit Original (or Open here) gets every layer, live type and smart layer back. "
+                                      "Readers and Composix's page see only the picture; the file is bigger by about a .klimt.");
+        m_pdf_layers.set_margin_top(6);
+        m_ora_list.append(m_pdf_layers);
         return;
     }
     if (plan.baked.empty() && plan.left_out.empty()) {
@@ -326,6 +333,7 @@ void ExportDialog::ask(formats::Kind kind, const std::string& path, const std::s
     m_eps_colour.set_selected(o.eps_cmyk ? 1 : 0);   // s080
     m_eps_encoding.set_selected(o.eps_flate ? 1 : 0);
     m_eps_preview.set_selected(o.eps_preview ? 0 : 1);
+    m_pdf_layers.set_active(o.pdf_layers);   // s083
     show_kind(kind);
     present();
     m_ok_button.grab_focus();
@@ -341,6 +349,7 @@ formats::WriteOptions ExportDialog::read() const {
             break;
         case formats::Kind::PNG:  o.png_level = as_int(m_png_level); break;
         case formats::Kind::TIFF: o.tiff_deflate = m_tiff_compression.get_selected() == 0; break;
+        case formats::Kind::PDF: o.pdf_layers = m_pdf_layers.get_active(); break;   // s083
         case formats::Kind::EPS:   // s080
             o.eps_cmyk = m_eps_colour.get_selected() == 1;
             o.eps_flate = m_eps_encoding.get_selected() == 1;

@@ -90,13 +90,14 @@ void Shell::on_shape(const CanvasView::Shape& shape) {
     });
 }
 
-void Shell::on_select_all() { S::all(m_journal, m_doc); }
-void Shell::on_deselect() { S::none(m_journal, m_doc); }
+void Shell::on_select_all() { S::all(m_journal, m_doc); rec(core::actions::select_all()); }
+void Shell::on_deselect() { S::none(m_journal, m_doc); rec(core::actions::select_none()); }
 
 void Shell::on_select_invert() {
     const auto im = m_doc.image();
     const auto mf = m_doc.mask_format();
     const auto old = m_doc.selection_ptr();
+    rec(core::actions::select_invert());   // s084
     start_job("Invert Selection", [this, im, mf, old](core::Jobs::Token&) -> core::Jobs::Landing {
         auto next = std::make_shared<pixel::TileMap>(S::inverted(old.get(), mf, im.width, im.height));
         return [this, old, next] { S::set_if(m_journal, m_doc, old, std::move(*next), "Invert Selection"); };
@@ -142,6 +143,7 @@ void Shell::run_pixel_job(const std::string& verb, bool fill, ToolRail::RGB colo
     const auto blank = m_doc.blank();
     const pixel::Px px = core::from_srgb(m_doc.image(), colour.r, colour.g, colour.b);
     const std::string label = (fill ? "Fill “" : "Delete in “") + l->name + "”";
+    if (fill) rec(core::actions::fill_selection(px));   // s084
     start_job(label, [this, id, before, mask, blank, px, fill, alpha_lock, label](core::Jobs::Token& t) -> core::Jobs::Landing {
         const pixel::TileMap& src = before ? *before : blank;
         auto after = std::make_shared<pixel::TileMap>(fill ? S::filled(src, mask.get(), px, alpha_lock)
@@ -204,6 +206,7 @@ void Shell::on_feather() {
         m_feather->signal_ok().connect([this](double r) {
             const auto old = m_doc.selection_ptr();
             if (!old) return;
+            rec(core::actions::feather(r));   // s084
             char label[48];
             std::snprintf(label, sizeof label, "Feather %g px", r);
             start_job(label, [this, old, r, label = std::string(label)](core::Jobs::Token& t) -> core::Jobs::Landing {

@@ -1,4 +1,5 @@
 #include "core/File.hpp"
+#include "core/RoundTrip.hpp"   // s083
 #include "core/Clip.hpp"   // s080: TIFF's path resources
 #include "core/Smart.hpp"  // s082: smart layers
 #include "tint/Tint.hpp"   // s071: the preview to sRGB
@@ -1235,6 +1236,7 @@ std::optional<Contents> open(const std::string& path, std::string& error, const 
     }
     if (kind == formats::Kind::ORA) return ora::open(path, error, p);   // s049
     if (kind == formats::Kind::PSD) return psd::open(path, error, p);   // s050
+    if (kind == formats::Kind::PDF) return roundtrip::open_pdf(path, error, p);   // s083: the document a Klimt PDF carries
     auto r = formats::read_image(path, error, p);
     if (!r) return std::nullopt;
     Contents c;
@@ -1618,6 +1620,19 @@ bool export_image(const std::string& path, formats::Kind kind, const Image& im,
 
 // s065
 std::string adjust_text(const Adjust& a) { return adjust_json(adjust::normalised(a)).dump(); }
+std::string filter_text(const Filter& f) {
+    LiveFilter lf;
+    lf.f = f;
+    return live_json(lf).dump();
+}
+std::optional<Filter> filter_parse(const std::string& text) {
+    const json j = json::parse(text, nullptr, false);
+    if (j.is_discarded() || !j.is_object() || !j.contains("kind")) return std::nullopt;
+    try {
+        if (auto lf = live_from(j)) return lf->f;
+    } catch (const std::exception&) {}
+    return std::nullopt;
+}
 std::optional<Adjust> adjust_parse(const std::string& text) {
     try {
         const auto a = adjust_from(json::parse(text));

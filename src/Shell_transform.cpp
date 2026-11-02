@@ -193,6 +193,7 @@ void Shell::run_xform(const std::string& label, std::function<Xf::Affine(const p
 // ── the whole canvas (s011 m3) ──────────────────────────────────────────────
 void Shell::on_turn(core::xform::Turn t) {
     if (m_xform.active) return;
+    rec(core::actions::turn(static_cast<int>(t)));   // s084
     run_canvas_job(Xf::turn_label(t), [t](const core::canvas::Before& b, core::Jobs::Token& tok) {
         return Xf::turn_plan(b, t, [&tok] { return tok.cancelled(); });
     });
@@ -206,6 +207,7 @@ void Shell::on_rotate_canvas() {
                                                          "Angle (clockwise)", "°", -359.9, 359.9, 15, 1);
         m_rotate_dialog->signal_ok().connect([this](double deg) {
             const auto bg = background_px();
+            rec(core::actions::rotate_canvas(deg));   // s084
             run_canvas_job("Rotate Canvas", [deg, bg](const core::canvas::Before& b, core::Jobs::Token& tok) {
                 return Xf::rotate_plan(b, deg, bg, [&tok] { return tok.cancelled(); });
             });

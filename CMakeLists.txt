@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s082")
+set(KLIMT_BUILD "s084")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -148,6 +148,8 @@ add_library(klimt_core STATIC
     src/core/Eps.cpp          # s080: Export as EPS
     src/core/Trace.cpp        # s081: the tracer (mask -> fewest Beziers)
     src/core/Smart.cpp        # s082: smart layers
+    src/core/RoundTrip.cpp    # s083: the Composix round-trip
+    src/core/Actions.cpp      # s084: actions and batch
 )
 target_include_directories(klimt_core PUBLIC include)
 target_link_libraries(klimt_core PUBLIC klimt_pixel klimt_formats klimt_text klimt_tint)
@@ -187,7 +189,7 @@ add_executable(klimt-thumbnailer src/thumbnailer.cpp)
 target_link_libraries(klimt-thumbnailer PRIVATE klimt_formats PkgConfig::LIBZIP)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_liquify.cpp src/selftest_snapshot.cpp src/selftest_magnetic.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp src/selftest_psd.cpp src/selftest_psdadjust.cpp src/selftest_pdf.cpp src/selftest_colour.cpp src/selftest_clip.cpp src/selftest_trace.cpp src/selftest_smart.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_liquify.cpp src/selftest_snapshot.cpp src/selftest_magnetic.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp src/selftest_psd.cpp src/selftest_psdadjust.cpp src/selftest_pdf.cpp src/selftest_colour.cpp src/selftest_clip.cpp src/selftest_trace.cpp src/selftest_smart.cpp src/selftest_roundtrip.cpp src/selftest_actions.cpp)
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads PkgConfig::LIBZIP ZLIB::ZLIB)   # s049: reads the zips it writes
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
@@ -242,6 +244,7 @@ add_executable(klimt
     src/Shell_transform.cpp
     src/Shell_liquify.cpp
     src/Shell_history.cpp
+    src/Shell_actions.cpp
     src/Shell_masks.cpp
     src/Shell_tabs.cpp
     src/Shell_adjust.cpp      # s013: adjustment layers, Image > Adjustments
@@ -280,6 +283,7 @@ add_executable(klimt
     src/StylesEditor.cpp      # s019: layer styles in Properties
     src/StatusLine.cpp
     src/HistoryPanel.cpp
+    src/ActionsPanel.cpp
     src/CommandPalette.cpp
     src/EdgeTab.cpp
     src/Registry.cpp

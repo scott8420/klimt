@@ -122,7 +122,21 @@ void Shell::sync_tabs() {
         }
         const std::string title = (m_tabs.dirty(i) ? "• " : "") + info.name;
         adw_tab_page_set_title(page, title.c_str());
-        adw_tab_page_set_tooltip(page, info.path.empty() ? info.name.c_str() : info.path.c_str());
+        // s083: a tab that saves back somewhere -- Composix's file, or a smart
+        // layer's picture -- wears a mark, and its tooltip says where.
+        const std::string back = back_line(i);
+        const std::string tip = back.empty() ? (info.path.empty() ? info.name : info.path)
+                                             : (info.back.empty() ? info.name : info.back) + "\n" + back;
+        adw_tab_page_set_tooltip(page, tip.c_str());
+        if (!back.empty()) {
+            GIcon* icon = g_themed_icon_new(info.owner_key && info.back.empty() ? "image-x-generic-symbolic" : "send-to-symbolic");
+            adw_tab_page_set_indicator_icon(page, icon);
+            g_object_unref(icon);
+            adw_tab_page_set_indicator_tooltip(page, back.c_str());
+            adw_tab_page_set_indicator_activatable(page, FALSE);
+        } else {
+            adw_tab_page_set_indicator_icon(page, nullptr);
+        }
     }
     if (auto* live = page_of(m_tabs.live_info().key)) adw_tab_view_set_selected_page(m_tab_view, live);
     m_tab_sync = false;

@@ -74,6 +74,8 @@ void Shell::on_image_size() {
     if (!m_image_size) {
         m_image_size = std::make_unique<SizeDialog>(*this, SizeDialog::Mode::Image);
         m_image_size->signal_ok().connect([this](const SizeDialog::Answer& a) {
+            const auto& im = m_doc.image();
+            rec(core::actions::image_size(a.width, a.height, a.dpi, a.filter, im.width, im.height));   // s084
             run_canvas_job("Image Size", [a](const Cv::Before& b, core::Jobs::Token& t) {
                 return Cv::size_plan(b, a.width, a.height, a.dpi, a.filter, [&t] { return t.cancelled(); },
                                      [&t](double p) { t.progress(p); });
@@ -251,6 +253,7 @@ void Shell::on_canvas_size() {
         m_canvas_size = std::make_unique<SizeDialog>(*this, SizeDialog::Mode::Canvas);
         m_canvas_size->signal_ok().connect([this](const SizeDialog::Answer& a) {
             const auto bg = background_px();
+            rec(core::actions::canvas_size(a.width, a.height, a.anchor_x, a.anchor_y, m_doc.image().width, m_doc.image().height));   // s084
             run_canvas_job("Canvas Size", [a, bg](const Cv::Before& b, core::Jobs::Token&) {
                 return Cv::canvas_plan(b, a.width, a.height, a.anchor_x, a.anchor_y, bg);
             });

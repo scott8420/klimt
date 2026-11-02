@@ -336,7 +336,7 @@ void Shell::bind_actions() {  // bindings
     // s082: smart layers.
     m_layer_acts["place-embedded"] = add_action("place-embedded", [this] { on_place(false); });
     m_layer_acts["place-linked"]   = add_action("place-linked",   [this] { on_place(true); });
-    for (const char* v : {"convert", "rasterize", "replace", "update", "embed"})
+    for (const char* v : {"convert", "rasterize", "replace", "update", "embed", "edit"})
         m_layer_acts[std::string("smart-") + v] = add_action(std::string("smart-") + v, [this, v] { on_smart(v); });
     m_layer_acts["path-from-mask"] = add_action("path-from-mask", [this] { on_path_from_layer(core::paths::Source::LayerMask); });
     m_layer_acts["path-from-transparency"] = add_action("path-from-transparency", [this] { on_path_from_layer(core::paths::Source::Transparency); });
@@ -430,6 +430,18 @@ void Shell::bind_actions() {  // bindings
     m_journal.set_on_change([this] { update_undo_ui(); m_history.repaint(); update_title(); });
     m_history.set_on_go(sigc::mem_fun(*this, &Shell::on_history_go));
     m_history.set_on_snapshot(sigc::mem_fun(*this, &Shell::on_snapshot));   // s077
+    // s084: actions and batch (Shell_actions.cpp).
+    m_layer_acts["action-play"]   = add_action("action-play", [this] {
+        const int a = m_actions_panel.picked_action();
+        if (a >= 0) play_action(static_cast<std::size_t>(a), m_actions_panel.picked_step() < 0 ? 0 : static_cast<std::size_t>(m_actions_panel.picked_step()));
+        else toast("Play Action: pick one in the Actions tab");
+    });
+    m_layer_acts["action-record"] = add_action("action-record", [this] { on_actions(ActionsPanel::Do::Record, m_actions_panel.picked_action(), -1, {}); });
+    m_layer_acts["action-stop"]   = add_action("action-stop", [this] { on_actions(ActionsPanel::Do::Stop, -1, -1, {}); });
+    m_layer_acts["action-new"]    = add_action("action-new", [this] { on_actions(ActionsPanel::Do::New, -1, -1, {}); });
+    add_action("batch", [this] { on_batch(); });
+    add_action("actions-show", [this] { set_dock(true); m_dock_stack.set_visible_child("actions"); });
+    build_actions();
     m_layers.set_on_change([this] { on_selection(); });
     // s009 (Scott, s008 -> s009, answer 3): Klimt starts with NO image -- the
     // New dialog comes up (App::on_activate -> start()); the demo is under

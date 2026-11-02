@@ -23,6 +23,7 @@
 #include "EdgeTab.hpp"
 #include "ChannelsPanel.hpp"   // s016: saved selections
 #include "HistoryPanel.hpp"
+#include "ActionsPanel.hpp"   // s084
 #include "LayersPanel.hpp"
 #include "PropertiesPanel.hpp"
 #include "StatusLine.hpp"
@@ -122,7 +123,8 @@ public:
 
     void build_ui();                             // category: glue
     void open_path(const std::string& path);     // category: files: open a file (the command line, Open)
-    void open_paths(const std::vector<std::string>& paths);   // category: files: s020 -- several, one tab each, in turn
+    // s083: `hint` core::roundtrip::kComposixHint -- Composix's Edit Original: Save writes each back.
+    void open_paths(const std::vector<std::string>& paths, const std::string& hint = {});   // category: files: s020 -- several, one tab each, in turn
     void start();                                // category: files: launched with no file -- the New dialog (s009)
 
 private:
@@ -164,6 +166,13 @@ private:
     void export_to(const std::string& path, formats::Kind kind, const formats::WriteOptions& o);   // s050: after the dialog
     bool on_close_request() override;            // category: files: unsaved changes ask first
     void save_to(const std::string& path, std::function<void()> then = {});   // category: files: a save JOB
+    core::file::Contents contents_now();         // category: files: s083 the live document, as a save takes it
+    void save_back(std::function<void()> then = {});
+    void save_into_owner(std::function<void()> then = {});
+    void edit_contents(const core::Document::Id& id);   // category: files: s083 m3 Layer > Smart Layer > Edit Contents
+    bool into_owner(std::uint64_t key, const pixel::TileMap& picture, std::int64_t stamp, std::uint64_t bytes);   // category: files: s083 m3 the picture into its smart layer (one step there)   // category: files: s083 m3 Edit Contents -- the picture back into its smart layer   // category: files: s083 Save of a tab Composix handed us -- its file, its format (a JOB)
+    void mark_back(std::size_t tab, const std::string& file, formats::Kind kind, const std::string& from);   // category: files: s083 the tab saves back to `file`
+    std::string back_line(std::size_t tab) const;   // category: files: s083 "From Composix -- Save writes photo.pdf (PDF)" ("" = none)
     void adopt(core::file::Contents c, const std::string& path, const std::string& name, const std::string& source = {});   // category: files: the document becomes c
     void ask_unsaved(const std::string& doing, std::function<void()> go);   // category: files: Save / Discard / Cancel
     bool dirty() const { return m_tabs.dirty(m_tabs.live()); }
@@ -354,6 +363,7 @@ private:
     PropertiesPanel    m_properties{m_doc, m_journal};
     HistoryPanel       m_history{m_journal};
     ChannelsPanel      m_channels;                 // s016
+    ActionsPanel       m_actions_panel;            // s084
 
     // ── the regions ────────────────────────────────────────────────────────
     ToolRail           m_rail;
@@ -484,6 +494,7 @@ private:
     std::string        m_folder;               // where the last chooser was (view state)
     core::Jobs::Id     m_file_job = 0;         // the open / save / export in flight
     std::vector<std::string> m_open_queue;     // s020: files still to open (the command line, a second launch)
+    std::map<std::string, std::string> m_open_hint;   // s083: a queued file's open hint ("composix")
     void open_next();                          // category: files: the queue's next, once no file job runs
     void place_paths(const std::vector<std::string>& paths);   // category: files: s022 -- files dropped on the canvas: layers here
     void build_file_drops();                   // category: files: s022 -- drops from the file manager
@@ -585,7 +596,21 @@ private:
     // ── History's snapshots (s077), per document tab (its key) ─────────────
     std::map<std::uint64_t, std::vector<core::snapshot::Snapshot>> m_snapshots;
     std::vector<core::snapshot::Snapshot>& live_snapshots() { return m_snapshots[m_tabs.live_info().key]; }
-    void on_snapshot(HistoryPanel::Snap what, std::size_t i);   // category: history: s077 -- take, go back to, delete
+    void on_snapshot(HistoryPanel::Snap what, std::size_t i);
+    // ── s084: actions and batch (Shell_actions.cpp) ───────────────────────
+    std::vector<core::actions::Action> m_actions;   // the library (~/.config/klimt/actions.json)
+    std::string m_actions_file;
+    int  m_recording = -1;                          // the action being recorded (-1: none)
+    std::vector<std::pair<std::size_t, core::Document::Id>> m_rec_made;   // an act -> the adjustment / filter layer it made (retuned)
+    bool m_action_playing = false;
+    void build_actions();                        // category: actions: the library, the panel's wiring
+    void rec(core::actions::Act a, const core::Document::Id& made = {});   // category: actions: recording? -- the act joins the action
+    void rec_retune();                           // category: actions: the layers recorded acts made -- their settings now
+    void on_actions(ActionsPanel::Do d, int action, int step, const std::string& text);   // category: actions: the panel asked
+    void play_action(std::size_t action, std::size_t from);   // category: actions: a JOB -- played on a copy, ONE step lands
+    void sync_actions();                         // category: actions: the panel and the actions' greying
+    void save_actions();                         // category: actions: the library to its file
+    void on_batch();                             // category: actions: File > Automate > Batch… (the dialog, then a job)   // category: history: s077 -- take, go back to, delete
     void update_snapshots();                                     // category: history: s077 -- the panel follows the live tab
     // What the render shows in place of a layer's pixels (the preview).
     std::map<core::Document::Id, std::shared_ptr<const pixel::TileMap>> m_preview;

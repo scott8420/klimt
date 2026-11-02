@@ -10,6 +10,7 @@
 #include "core/Pdf.hpp"        // s051: Export as PDF
 #include "core/Eps.hpp"        // s080: Export as EPS
 #include "core/Smart.hpp"      // s082: Place, smart layers
+#include "core/RoundTrip.hpp"  // s083: the Composix round-trip
 #include "core/Psd.hpp"        // s049: Export as OpenRaster
 #include <glibmm/miscutils.h>
 #include "Log.hpp"
@@ -130,6 +131,7 @@ void Shell::ask_unsaved(const std::string& doing, std::function<void()> go) {
         try { i = a->choose_finish(res); } catch (const Glib::Error&) { return; }
         if (i == 1) { go(); return; }
         if (i != 2) return;
+        if (!m_tabs.live_info().back.empty() || m_tabs.live_info().owner_key) { save_back(go); return; }   // s083
         if (!path_().empty()) { save_to(path_(), go); return; }
         // Never saved: Save As first, then go.
         auto dlg = Gtk::FileDialog::create();
@@ -246,7 +248,7 @@ void Shell::on_open() {
         auto dlg = Gtk::FileDialog::create();
         dlg->set_title("Open");
         auto filters = Gio::ListStore<Gtk::FileFilter>::create();
-        auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp"});
+        auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp", "pdf"});
         filters->append(all);
         filters->append(filter("Klimt document (.klimt)", {"klimt"}));
         filters->append(filter("OpenRaster (.ora)", {"ora"}));   // s049
@@ -255,6 +257,7 @@ void Shell::on_open() {
         filters->append(filter("JPEG", {"jpg", "jpeg"}));
         filters->append(filter("TIFF", {"tif", "tiff"}));
         filters->append(filter("WebP", {"webp"}));                // s049
+        filters->append(filter("PDF written by Klimt", {"pdf"}));  // s083: its layers ride inside
         dlg->set_filters(filters);
         dlg->set_default_filter(all);
         if (!m_folder.empty()) dlg->set_initial_folder(Gio::File::create_for_path(m_folder));
@@ -347,6 +350,7 @@ void Shell::on_smart(const std::string& verb) {
     }
     if (l->kind != core::Kind::Smart || !l->smart) { toast("\u201c" + l->name + "\u201d isn't a smart layer"); return; }
     if (verb == "rasterize") { L::rasterize_smart(m_journal, m_doc, id); return; }
+    if (verb == "edit") { edit_contents(id); return; }   // s083
     if (verb == "embed") { if (!L::embed_smart(m_journal, m_doc, id)) toast("Embed Linked: it's embedded already"); return; }
     if (verb == "update") {
         const auto st = core::smart::status(*l->smart);
@@ -375,7 +379,11 @@ void Shell::on_smart(const std::string& verb) {
 }
 
 // s020: several files -- each in its own tab, one open job at a time.
-void Shell::open_paths(const std::vector<std::string>& paths) {
+void Shell::open_paths(const std::vector<std::string>& paths, const std::string& hint) {
+    for (const auto& p : paths) {
+        if (!hint.empty()) m_open_hint[p] = hint;
+        if (auto lg = log::get(log::Area::Shell)) lg->info("open requested: {}{}", p, hint.empty() ? "" : " (" + hint + ")");
+    }
     m_open_queue.insert(m_open_queue.end(), paths.begin(), paths.end());
     open_next();
 }
@@ -413,11 +421,21 @@ void Shell::open_path(const std::string& path) {
         const auto& p = m_tabs.info(i).path;
         if (!p.empty() && (p == path || fs::weakly_canonical(p, ec).string() == canon)) {
             if (show_tab(i)) toast("“" + name + "” is open here already");
+            m_open_hint.erase(path);
+            return;
+        }
+        // s083: Composix asking again for a file a tab already writes back to: that tab.
+        const auto& b = m_tabs.info(i).back;
+        if (!b.empty() && (b == path || fs::weakly_canonical(b, ec).string() == canon)) {
+            m_open_hint.erase(path);
+            if (show_tab(i)) toast("“" + name + "” is open here already -- Save writes it back");
             return;
         }
     }
+    std::string hint;
+    if (const auto h = m_open_hint.find(path); h != m_open_hint.end()) { hint = h->second; m_open_hint.erase(h); }
     {
-        m_file_job = start_job("Open " + name, [this, path, name](core::Jobs::Token& t) -> core::Jobs::Landing {
+        m_file_job = start_job("Open " + name, [this, path, name, hint](core::Jobs::Token& t) -> core::Jobs::Landing {
             std::string err;
             auto c = core::file::open(path, err, progress_of(t));
             if (!c) {
@@ -428,11 +446,21 @@ void Shell::open_path(const std::string& path) {
                 };
             }
             auto shared = std::make_shared<core::file::Contents>(std::move(*c));
-            return [this, shared, path, name] {
+            return [this, shared, path, name, hint] {
                 const bool native = shared->kind == formats::Kind::Klimt;
+                const auto kind = shared->kind;
                 // s020: a tab of its own -- made now, when there is something to show.
                 if (!tab_reusable() && !new_tab()) { toast("“" + name + "” opened, but the image can't be shown now -- try again"); return; }
                 adopt(std::move(*shared), native ? path : std::string{}, name, path);
+                if (hint == core::roundtrip::kComposixHint) mark_back(m_tabs.live(), path, kind, "Composix");   // s083
+                if (hint.rfind("smart:", 0) == 0) {   // s083 m3: Edit Contents of a linked smart layer
+                    const auto c2 = hint.find(':', 6);
+                    auto& info = m_tabs.live_info();
+                    info.owner_key = std::stoull(hint.substr(6, c2 - 6));
+                    info.owner_layer = hint.substr(c2 + 1);
+                    mark_back(m_tabs.live(), path, kind, "");
+                    toast("Editing “" + name + "” -- Save (Ctrl+S) writes the file and updates its smart layer");
+                }
                 note_recent(path);   // s054
                 Glib::signal_idle().connect_once([this] { open_next(); });
             };
@@ -526,6 +554,7 @@ void Shell::place_paths(const std::vector<std::string>& paths) {
 void Shell::on_save() {
     text_close();   // s046: the visit is a step before it is saved
     if (!has_image()) { toast("No image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
+    if (!m_tabs.live_info().back.empty() || m_tabs.live_info().owner_key) { save_back(); return; }   // s083: back where it came from
     if (path_().empty()) { on_save_as(); return; }
     if (file_job_busy()) return;
     save_to(path_());
@@ -556,8 +585,7 @@ void Shell::on_save_as() {
 
 // The save as a job, from a SNAPSHOT: the document may change while it
 // writes, so the "saved" mark is the one the snapshot was taken at.
-void Shell::save_to(const std::string& path, std::function<void()> then) {
-    if (file_job_busy()) return;
+core::file::Contents Shell::contents_now() {
     core::file::Contents c;
     c.image = m_doc.image();
     c.layers = m_doc.snapshot();
@@ -568,6 +596,12 @@ void Shell::save_to(const std::string& path, std::function<void()> then) {
         const auto v = m_canvas.view();
         c.view = {true, v.fit, v.zoom, v.cx, v.cy, m_layers.collapsed()};
     }
+    return c;
+}
+
+void Shell::save_to(const std::string& path, std::function<void()> then) {
+    if (file_job_busy()) return;
+    core::file::Contents c = contents_now();
     const auto mark = m_journal.mark();
     const std::string name = fs::path(path).filename().string();
     m_folder = fs::path(path).parent_path().string();
@@ -583,16 +617,197 @@ void Shell::save_to(const std::string& path, std::function<void()> then) {
             const auto i = m_tabs.by_key(key);
             if (!i) { toast("Saved “" + name + "”"); return; }   // its tab was closed meanwhile
             auto& info = m_tabs.info(*i);
+            // s083: saved as a .klimt of its own -- it no longer writes back.
+            const std::string was = info.back.empty() ? std::string{} : info.from;
+            const bool owned = info.owner_key != 0;
+            info.back.clear(); info.from.clear(); info.back_kind = formats::Kind::Unknown;
+            info.owner_key = 0; info.owner_layer.clear();
             info.path = path;
             info.name = name;
             info.saved_mark = mark;
             note_recent(path);   // s054
             update_title();
-            toast("Saved “" + name + "”");
+            toast("Saved “" + name + "”" + (!was.empty() ? " -- " + was + "'s file is no longer saved from this tab"
+                                            : owned ? " -- the smart layer is no longer saved from this tab" : ""));
             if (then) then();
             Glib::signal_idle().connect_once([this] { open_next(); });   // s020: a file waiting to open
         };
     });
+}
+
+// ── s083: Save writes back (the Composix round-trip) ───────────────────────
+// The tab Composix handed us: Save writes ITS file, in its format (a PDF with
+// the document inside it -- core/RoundTrip.hpp), atomically; Composix's
+// file monitor sees the change. Snapshot, then a job, as save_to.
+void Shell::mark_back(std::size_t tab, const std::string& file, formats::Kind kind, const std::string& from) {
+    if (tab >= m_tabs.count()) return;
+    const std::string name = fs::path(file).filename().string();
+    if (!core::roundtrip::writes_back(kind)) {
+        if (from.empty()) return;
+        toast(from + " asked to edit “" + name + "”, but Klimt can't write that kind of file -- Save makes a .klimt");
+        return;
+    }
+    auto& info = m_tabs.info(tab);
+    info.back = file;
+    info.back_kind = kind;
+    info.from = from;
+    if (kind == formats::Kind::Klimt) info.path = file;
+    update_summary();
+    if (auto lg = log::get(log::Area::Shell)) lg->info("tab {} writes back: {} ({}) for {}", info.key, file, core::roundtrip::writes_back(kind), from);
+    update_title();
+    if (!from.empty()) toast("“" + name + "” from " + from + " -- Save (Ctrl+S) writes it back as " + core::roundtrip::writes_back(kind));
+}
+
+std::string Shell::back_line(std::size_t tab) const {
+    if (tab >= m_tabs.count()) return {};
+    const auto& info = m_tabs.info(tab);
+    std::string line;
+    if (!info.back.empty())
+        line = (info.from.empty() ? std::string{} : "for " + info.from + ": ") + "Save writes " + fs::path(info.back).filename().string() + " (" +
+               core::roundtrip::writes_back(info.back_kind) + ")";
+    if (info.owner_key) {
+        const auto o = m_tabs.by_key(info.owner_key);
+        line += std::string(line.empty() ? "a smart layer's picture: Save puts it back" : ", and into its smart layer") +
+                (o ? " in “" + m_tabs.info(*o).name + "”" : " (its image was closed)");
+    }
+    return line;
+}
+
+void Shell::save_back(std::function<void()> then) {
+    if (file_job_busy()) return;
+    auto& in = m_tabs.live_info();
+    if (in.back.empty()) { save_into_owner(then); return; }   // m3: Edit Contents
+    const std::string path = in.back;
+    const formats::Kind kind = in.back_kind;
+    const std::string from = in.from;
+    // m3: a LINKED smart layer's file -- written, then its layer updated from it.
+    const auto owner = in.owner_key ? m_tabs.by_key(in.owner_key) : std::nullopt;
+    const std::optional<pixel::Format> owner_format = owner ? std::optional(m_tabs.image(*owner).format) : std::nullopt;
+    core::file::Contents c = contents_now();
+    const auto mark = m_journal.mark();
+    const std::string name = fs::path(path).filename().string();
+    const auto key = in.key;
+    const formats::WriteOptions o = m_prefs.export_options;
+    m_file_job = start_job("Save " + name, [this, c = std::move(c), path, kind, name, mark, then, key, from, o, owner_format](core::Jobs::Token& t)
+                                               -> core::Jobs::Landing {
+        std::string err;
+        std::vector<std::string> notes;
+        if (!core::roundtrip::save_back(path, kind, c, err, notes, progress_of(t), o)) {
+            if (t.cancelled()) return [this] { toast("Save cancelled -- the file is as it was"); };
+            return [this, name, err] { toast("Couldn't save “" + name + "”: " + err + " -- the file is as it was"); };
+        }
+        std::shared_ptr<const pixel::TileMap> pic;
+        if (owner_format) {
+            formats::Progress cancel_only;
+            cancel_only.cancelled = [&t] { return t.cancelled(); };
+            if (auto m = core::roundtrip::picture_of(c, *owner_format, cancel_only)) pic = std::make_shared<const pixel::TileMap>(std::move(*m));
+        }
+        return [this, path, name, mark, then, key, from, notes, pic] {
+            if (pic) {
+                const auto st = core::smart::stamp_of(path);
+                into_owner(key, *pic, st.stamp, st.bytes);
+            }
+            std::string said;
+            for (const auto& n : notes) said += " -- " + n;
+            if (auto lg = log::get(log::Area::Shell)) lg->info("saved back: {}{}", path, said);
+            const auto i = m_tabs.by_key(key);
+            if (i) m_tabs.info(*i).saved_mark = mark;
+            update_title();
+            if (!from.empty()) toast("Saved “" + name + "” for " + from + said);
+            else toast("Saved “" + name + "”" + said);
+            if (then) then();
+            Glib::signal_idle().connect_once([this] { open_next(); });
+        };
+    });
+}
+
+// ── s083 m3: Edit Contents ─────────────────────────────────────────────────
+// Layer > Smart Layer > Edit Contents: the picture in a tab of its own (a
+// linked one: its FILE, which Save then writes as well). Save puts what that
+// tab draws back into the smart layer -- ONE step "Edit Contents" in its
+// image, which comes forward for it and then gives way again.
+void Shell::edit_contents(const core::Document::Id& id) {
+    const auto l = m_doc.get(id);
+    if (!l || l->kind != core::Kind::Smart || !l->smart || !l->smart->source) return;
+    const auto owner = m_tabs.live_info().key;
+    for (std::size_t i = 0; i < m_tabs.count(); ++i)   // being edited already: that tab
+        if (m_tabs.info(i).owner_key == owner && m_tabs.info(i).owner_layer == id) { show_tab(i); return; }
+    const auto& sm = *l->smart;
+    if (!sm.link.empty() && core::smart::status(sm) != core::smart::Link::Missing &&
+        core::roundtrip::writes_back(core::roundtrip::kind_of(sm.link))) {
+        if (core::smart::status(sm) == core::smart::Link::Modified)
+            toast("“" + sm.name + "” changed on disk -- this opens the file as it is now");
+        m_open_hint[sm.link] = "smart:" + std::to_string(owner) + ":" + id;
+        open_paths({sm.link});
+        return;
+    }
+    if (file_job_busy()) return;
+    auto c = core::roundtrip::contents_of(sm, m_doc.image());
+    const std::string name = sm.name.empty() ? std::string("Picture") : sm.name;
+    if (!new_tab()) return;
+    adopt(std::move(c), "", name);
+    auto& info = m_tabs.live_info();
+    info.owner_key = owner;
+    info.owner_layer = id;
+    update_title();
+    update_summary();
+    if (auto lg = log::get(log::Area::Shell)) lg->info("edit contents: {} (embedded) from tab {}", name, owner);
+    toast("Editing “" + name + "” -- Save (Ctrl+S) puts it back in its smart layer");
+}
+
+void Shell::save_into_owner(std::function<void()> then) {
+    if (file_job_busy()) return;
+    auto& in = m_tabs.live_info();
+    const auto owner = m_tabs.by_key(in.owner_key);
+    if (!owner) { toast("Its image was closed -- Save As keeps this picture as a .klimt"); return; }
+    const pixel::Format f = m_tabs.image(*owner).format;
+    core::file::Contents c = contents_now();
+    const auto mark = m_journal.mark();
+    const auto key = in.key;
+    const std::string name = in.name;
+    m_file_job = start_job("Edit Contents " + name, [this, c = std::move(c), f, mark, key, then](core::Jobs::Token& t) -> core::Jobs::Landing {
+        auto pic = core::roundtrip::picture_of(c, f, progress_of(t));
+        if (!pic) return [] {};
+        auto shared = std::make_shared<const pixel::TileMap>(std::move(*pic));
+        return [this, shared, mark, key, then] {
+            if (!into_owner(key, *shared, 0, 0)) return;
+            if (const auto i = m_tabs.by_key(key)) m_tabs.info(*i).saved_mark = mark;
+            update_title();
+            if (then) then();
+            Glib::signal_idle().connect_once([this] { open_next(); });
+        };
+    });
+}
+
+// The picture into the smart layer the tab `key` edits: its image comes
+// forward, the step lands there, and the tab `key` comes back. False when
+// the image or the layer is gone (said).
+bool Shell::into_owner(std::uint64_t key, const pixel::TileMap& picture, std::int64_t stamp, std::uint64_t bytes) {
+    const auto me = m_tabs.by_key(key);
+    if (!me) return false;
+    const auto owner_key = m_tabs.info(*me).owner_key;
+    const auto layer = m_tabs.info(*me).owner_layer;
+    const auto o = m_tabs.by_key(owner_key);
+    if (!o) { toast("Its image was closed -- Save As keeps this picture as a .klimt"); return false; }
+    const std::string owner_name = m_tabs.info(*o).name;
+    if (!show_tab(*o)) { toast("Edit Contents: “" + owner_name + "” is busy -- Save again in a moment"); return false; }
+    const auto l = m_doc.get(layer);
+    bool ok = false;
+    if (!l || l->kind != core::Kind::Smart || !l->smart) {
+        toast("Edit Contents: the smart layer isn't in “" + owner_name + "” any more -- Save As keeps this picture");
+    } else {
+        const auto& sm = *l->smart;
+        ok = L::replace_smart(m_journal, m_doc, layer, picture, sm.name, sm.dpi, sm.link, sm.link.empty() ? 0 : stamp,
+                              sm.link.empty() ? 0 : bytes, "Edit Contents");
+        if (!sm.link.empty()) m_link_said[sm.link] = stamp;   // our own write: no "it changed" toast
+        m_layers.queue_repaint();
+        on_selection();
+        if (auto lg = log::get(log::Area::Shell)) lg->info("edit contents: back into {} in {} ({})", layer, owner_name, ok ? "a step" : "no change");
+    }
+    if (const auto back = m_tabs.by_key(key)) show_tab(*back);
+    if (ok) toast("“" + m_tabs.info(*m_tabs.by_key(key)).name + "” put back in “" + owner_name + "” -- one step there (Undo in that tab)");
+    else if (l && l->kind == core::Kind::Smart) toast("Edit Contents: nothing changed");
+    return true;
 }
 
 // ── Export ──────────────────────────────────────────────────────────────────
@@ -701,11 +916,14 @@ void Shell::export_to(const std::string& path, formats::Kind kind, const formats
     const core::Image im = m_doc.image();
     auto layers = m_doc.snapshot();
     const std::string name = fs::path(path).filename().string();
-    m_file_job = start_job("Export " + name, [this, im, layers = std::move(layers), path, kind, name, o](core::Jobs::Token& t)
+    // s083: a PDF with Klimt's layers inside -- the whole document goes along.
+    auto whole = kind == formats::Kind::PDF && o.pdf_layers ? std::make_shared<const core::file::Contents>(contents_now()) : nullptr;
+    m_file_job = start_job("Export " + name, [this, im, layers = std::move(layers), path, kind, name, o, whole](core::Jobs::Token& t)
                                                  -> core::Jobs::Landing {
         std::string err;
         std::vector<std::string> notes;
-        const bool ok = kind == formats::Kind::ORA   ? core::ora::save(path, im, layers, err, notes, progress_of(t))
+        const bool ok = whole ? core::roundtrip::save_back(path, kind, *whole, err, notes, progress_of(t), o)
+                        : kind == formats::Kind::ORA   ? core::ora::save(path, im, layers, err, notes, progress_of(t))
                         : kind == formats::Kind::PSD ? core::psd::save(path, im, layers, err, notes, progress_of(t))   // s051
                         : kind == formats::Kind::PDF ? core::pdf::save(path, im, layers, fs::path(path).stem().string(), err, notes, progress_of(t))
                         : kind == formats::Kind::EPS ? core::eps::save(path, im, layers, fs::path(path).stem().string(), o, err, notes, progress_of(t))   // s080

@@ -254,6 +254,10 @@ Gtk::Widget& Shell::build_dock() {  // zone
     m_history.set_margin_end(8);
     m_history.set_margin_bottom(8);
     m_dock_stack.add(m_history, "history", "History");
+    m_actions_panel.set_margin_start(8);   // s084
+    m_actions_panel.set_margin_end(8);
+    m_actions_panel.set_margin_bottom(8);
+    m_dock_stack.add(m_actions_panel, "actions", "Actions");
     m_dock_stack.set_vexpand(true);
     lower->append(m_dock_stack);
     auto split = Gtk::make_managed<Gtk::Paned>(Gtk::Orientation::VERTICAL);
@@ -309,6 +313,12 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     sync_recents();
     file->append_submenu("Open Recent", m_recent_menu);
     file->append("Place Embedded…", "win.place-embedded");   // s082: a smart layer
+    {   // s084: File > Automate
+        auto au = Gio::Menu::create();
+        au->append("Batch…", "win.batch");
+        au->append("Actions", "win.actions-show");
+        file->append_submenu("Automate", au);
+    }
     file->append("Place Linked…", "win.place-linked");
     file->append("Save", "win.save");
     file->append("Save As…", "win.save-as");
@@ -405,6 +415,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
         pm->append("Make Path from Layer Mask", "win.path-from-mask");
         auto sl = Gio::Menu::create();   // s082: smart layers
         sl->append("Convert to Smart Layer", "win.smart-convert");
+        sl->append("Edit Contents", "win.smart-edit");   // s083
         sl->append("Replace Contents…", "win.smart-replace");
         sl->append("Update Modified Content", "win.smart-update");
         sl->append("Embed Linked", "win.smart-embed");

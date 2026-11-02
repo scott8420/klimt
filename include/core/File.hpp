@@ -95,5 +95,9 @@ bool export_image(const std::string& path, formats::Kind kind, const Image& im,
 // (adjust::refusal).
 std::string adjust_text(const Adjust& a);
 std::optional<Adjust> adjust_parse(const std::string& text);
+// s084: one filter's settings as JSON text, and back (the live filter's
+// keys) -- what an action keeps (core/Actions.hpp).
+std::string filter_text(const Filter& f);
+std::optional<Filter> filter_parse(const std::string& text);
 
 }  // namespace klimt::core::file

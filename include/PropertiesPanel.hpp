@@ -1,4 +1,5 @@
 #pragma once
+#include "core/Actions.hpp"   // s084: the recorder hook
 #include <functional>
 // PropertiesPanel -- ONE inspector for whatever is selected (s005, docs/ui.md
 // 5; call 2: blend / opacity / fill / locks left the Layers panel for here).
@@ -30,6 +31,8 @@ namespace klimt {
 
 class PropertiesPanel : public widgets::Box {
 public:
+    // s084: ACTIONS -- what this panel did, for the Shell to record (when it is).
+    void set_recorder(std::function<void(const core::actions::Act&)> f) { m_recorder = std::move(f); }
     using Id = core::Document::Id;
     PropertiesPanel(core::Document& doc, core::DocJournal& journal);
     void patterns_changed() { m_styles.patterns_changed(); }   // s033: Define Pattern
@@ -72,6 +75,8 @@ public:
     sigc::signal<void(bool)>& signal_path_outline() { return m_path_outline; }
 
 private:
+    std::function<void(const core::actions::Act&)> m_recorder;   // s084
+    void rec(const core::actions::Act& a) { if (m_recorder) m_recorder(a); }
     void paint();
     void on_blend();
     void on_opacity();

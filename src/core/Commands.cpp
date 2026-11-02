@@ -200,6 +200,13 @@ const std::vector<Command>& commands() {
             {"Place Embedded\u2026", "File", "win.place-embedded", "", "place import smart object layer embed picture file", ""},   // s082
             {"Place Linked\u2026", "File", "win.place-linked", "", "place import smart object layer link linked file", ""},
             {"Convert to Smart Layer", "Layer", "win.smart-convert", "", "smart object layer convert keep whole lossless", ""},
+            {"Batch\u2026", "File", "win.batch", "", "automate batch action folder many files process run", ""},   // s084
+            {"Play Action", "File", "win.action-play", "", "action play run macro automate", ""},
+            {"Record Action", "File", "win.action-record", "", "action record macro automate steps", ""},
+            {"Stop Recording", "File", "win.action-stop", "", "action stop record macro", ""},
+            {"New Action", "File", "win.action-new", "", "action new record macro automate", ""},
+            {"Actions", "Window", "win.actions-show", "", "actions panel tab macro automate", ""},
+            {"Edit Contents", "Layer", "win.smart-edit", "", "smart object layer edit contents open picture tab save back", ""},   // s083
             {"Replace Contents\u2026", "Layer", "win.smart-replace", "", "smart object layer replace contents picture file", ""},
             {"Update Modified Content", "Layer", "win.smart-update", "", "smart object linked update refresh reload file changed", ""},
             {"Embed Linked", "Layer", "win.smart-embed", "", "smart object linked embed", ""},

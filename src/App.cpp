@@ -5,6 +5,7 @@
 #include "Shell.hpp"
 #include <adwaita.h>
 #include "Log.hpp"
+#include "core/RoundTrip.hpp"   // s083
 
 #include <gtkmm/icontheme.h>
 #include <gdkmm/display.h>
@@ -23,7 +24,52 @@ Glib::RefPtr<App> App::create() {
     return Glib::make_refptr_for_instance(new App());
 }
 
-App::App() : Gtk::Application("io.github.scott8420.Klimt", Gio::Application::Flags::HANDLES_OPEN) {}
+App::App() : Gtk::Application("io.github.scott8420.Klimt", Gio::Application::Flags::HANDLES_OPEN) {
+    // s083 (the Composix round-trip): `klimt --composix FILE` -- Composix's
+    // Edit Original. The files are taken here (G_OPTION_REMAINING), so the
+    // hint can go with them: over D-Bus to a Klimt already running
+    // (org.gtk.Application.Open, hint "composix" -- Composix may call that
+    // itself), or to this one's activate. docs/round-trip.md.
+    static const GOptionEntry entries[] = {
+        {"composix", 0, 0, G_OPTION_ARG_NONE, nullptr,
+         "Opened by Composix's Edit Original: Save writes each file back, in its format", nullptr},
+        {G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_FILENAME_ARRAY, nullptr, nullptr, "FILE…"},
+        {nullptr, 0, 0, G_OPTION_ARG_NONE, nullptr, nullptr, nullptr},
+    };
+    g_application_add_main_option_entries(G_APPLICATION(gobj()), entries);
+    g_signal_connect(gobj(), "handle-local-options", G_CALLBACK(&App::on_local_options), this);
+}
+
+gint App::on_local_options(GApplication* app, GVariantDict* options, gpointer self) {
+    auto* me = static_cast<App*>(self);
+    const bool composix = g_variant_dict_contains(options, "composix");
+    gchar** files = nullptr;
+    g_variant_dict_lookup(options, G_OPTION_REMAINING, "^a&ay", &files);
+    if (!files || !files[0]) {
+        g_free(files);
+        return -1;   // nothing named: activate as ever
+    }
+    std::vector<GFile*> gf;
+    for (gchar** f = files; *f; ++f) gf.push_back(g_file_new_for_commandline_arg(*f));
+    g_free(files);   // "^a&ay": the strings belong to the dict
+    const char* hint = composix ? core::roundtrip::kComposixHint : "";
+    GError* err = nullptr;
+    int status = -1;
+    if (!g_application_register(app, nullptr, &err)) {
+        g_printerr("klimt: %s\n", err ? err->message : "can't register");
+        g_clear_error(&err);
+        status = 1;
+    } else if (g_application_get_is_remote(app)) {
+        g_application_open(app, gf.data(), static_cast<gint>(gf.size()), hint);   // the running Klimt opens them
+        status = 0;
+    } else {
+        for (auto* f : gf)
+            if (char* p = g_file_get_path(f)) { me->m_pending.emplace_back(p); g_free(p); }
+        me->m_pending_hint = hint;
+    }
+    for (auto* f : gf) g_object_unref(f);
+    return status;
+}
 
 // The SHORTCUT-REGISTRY paradigm's other consumer. Accelerators are an
 // application-scope concern (they survive window construction order), so they
@@ -49,16 +95,25 @@ void App::on_startup() {
 void App::on_activate() {
     Shell* shell = ensure_shell();
     shell->present();
+    if (!m_pending.empty()) {   // s083: this process's own command line
+        auto paths = std::move(m_pending);
+        m_pending.clear();
+        shell->open_paths(paths, m_pending_hint);
+        return;
+    }
     shell->start();   // s009: no file given -- the New dialog
 }
 
-void App::on_open(const type_vec_files& files, const Glib::ustring&) {
+void App::on_open(const type_vec_files& files, const Glib::ustring& hint) {
     Shell* shell = ensure_shell();
     shell->present();
     // s020: every file, each in a tab of its own.
     std::vector<std::string> paths;
     for (const auto& f : files) if (f && !f->get_path().empty()) paths.push_back(f->get_path());
-    shell->open_paths(paths);
+    // s083: Composix's Edit Original says so in the hint (D-Bus Open, or a
+    // second `klimt --composix FILE`): Save writes these back.
+    if (auto lg = log::get(log::Area::App)) lg->info("open: {} file(s){}", paths.size(), hint.empty() ? "" : " hint " + hint.raw());
+    shell->open_paths(paths, hint.raw());
 }
 
 Shell* App::ensure_shell() {

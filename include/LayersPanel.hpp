@@ -1,4 +1,5 @@
 #pragma once
+#include "core/Actions.hpp"   // s084: the recorder hook
 // LayersPanel -- the Layers panel on core::Document (s003). The first UI
 // milestone: the layer tree you can see and use.
 //
@@ -34,6 +35,8 @@ namespace klimt {
 
 class LayersPanel : public widgets::Box {
 public:
+    // s084: ACTIONS -- what this panel did, for the Shell to record (when it is).
+    void set_recorder(std::function<void(const core::actions::Act&)> f) { m_recorder = std::move(f); }
     using Id = core::Document::Id;
 
     LayersPanel(core::Document& doc, core::DocJournal& journal);
@@ -89,6 +92,8 @@ public:
     bool primary_is_clipped() const;
 
 private:
+    std::function<void(const core::actions::Act&)> m_recorder;   // s084
+    void rec(const core::actions::Act& a) { if (m_recorder) m_recorder(a); }
     void repaint();
     Gtk::ListBoxRow* build_row(const Id& id);
     void start_rename(const Id& id);

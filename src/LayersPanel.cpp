@@ -675,6 +675,7 @@ void LayersPanel::on_rows_selected() {
 void LayersPanel::new_layer() {
     const auto id = L::add_layer(m_journal, m_doc, next_name(m_doc, "Layer"), primary());
     if (id.empty()) return;
+    rec(core::actions::new_layer(m_doc.get(id)->name));   // s084
     m_journal.reselect({id});
     select({id}, true);
 }
@@ -689,6 +690,7 @@ void LayersPanel::new_group() {
 void LayersPanel::duplicate() {
     const auto made = L::duplicate(m_journal, m_doc, m_sel);
     if (made.empty()) return;
+    rec(core::actions::duplicate_layer());   // s084
     m_journal.reselect(made);
     select(made, true);
 }
@@ -716,6 +718,7 @@ void LayersPanel::remove() {
     const auto before = m_doc.walk();
     const auto at = std::find(before.begin(), before.end(), m_sel.front()) - before.begin();
     if (!L::remove(m_journal, m_doc, m_sel)) return;
+    rec(core::actions::delete_layer());   // s084
     Id next;
     for (auto i = at; i < static_cast<long>(before.size()) && next.empty(); ++i)
         if (m_doc.get(before[static_cast<std::size_t>(i)])) next = before[static_cast<std::size_t>(i)];

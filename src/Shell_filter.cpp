@@ -51,6 +51,7 @@ void Shell::filter_run(const core::Filter& f) {
         m_last_filter = f;
         update_layer_actions();
         if (!L::add_live(m_journal, m_doc, target, f)) toast(std::string(F::label(f.kind)) + ": refused");
+        else rec(core::actions::live_filter(f));   // s084
         if (m_preview.erase(target)) queue_render();
         return;
     }
@@ -65,6 +66,7 @@ void Shell::filter_run(const core::Filter& f) {
         m_last_filter = f;
         update_layer_actions();
         if (!L::add_live(m_journal, m_doc, target, f)) toast(std::string(F::label(f.kind)) + ": refused");
+        else rec(core::actions::live_filter(f));   // s084
         if (m_preview.erase(target)) queue_render();
         return;
     }
@@ -82,6 +84,7 @@ void Shell::filter_run_pixels(const core::Filter& f) {
     const auto sel = m_doc.selection_ptr();
     const bool keep_alpha = (cur->locks & core::lock::Alpha) != 0;
     const std::string label(F::label(f.kind));
+    rec(core::actions::apply_filter(f));   // s084
     // s039: Lens Blur's depth map -- the layer's mask; s041 m4: or a channel.
     const auto depth = F::wants_mask(f) ? cur->mask
                      : F::wants_channel(f) && m_doc.channels().count(f.depth_channel) ? m_doc.channels().at(f.depth_channel).mask
@@ -345,6 +348,7 @@ void Shell::on_filter_layer_new(core::FilterKind k) {
     f.seed = ++m_filter_seed;
     const auto id = L::add_filter_layer(m_journal, m_doc, f, m_layers.primary());
     if (id.empty()) { toast("New Filter Layer: refused"); return; }
+    rec(core::actions::filter_layer(f), id);   // s084: retuned as Properties changes it
     m_journal.reselect({id});
     m_layers.select({id}, false);
     if (m_doc.selection()) toast("“" + m_doc.get(id)->name + "” -- only inside the selection (its mask); paint the mask to change where");

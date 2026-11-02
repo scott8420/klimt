@@ -19,6 +19,8 @@ Kind sniff(const std::string& path) {
     // s049: WebP is a RIFF container whose form type is "WEBP".
     // s050: Photoshop -- "8BPS", version 1 (PSD) or 2 (PSB; refused in words).
     if (n >= 6 && std::memcmp(b, "8BPS", 4) == 0 && b[4] == 0 && (b[5] == 1 || b[5] == 2)) return Kind::PSD;
+    // s083: a PDF -- Klimt opens the ones it wrote (core/RoundTrip.hpp).
+    if (n >= 5 && std::memcmp(b, "%PDF-", 5) == 0) return Kind::PDF;
     if (n >= 12 && std::memcmp(b, "RIFF", 4) == 0 && std::memcmp(b + 8, "WEBP", 4) == 0) return Kind::WebP;
     // A .klimt is a zip whose FIRST entry is "mimetype", stored, holding
     // "image/x-klimt" (OpenRaster's trick): the local header's 30 bytes, the

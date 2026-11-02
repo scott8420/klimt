@@ -53,6 +53,7 @@ Prefs load_prefs(const std::string& file) {
         flag("eps_cmyk", o.eps_cmyk);   // s080
         flag("eps_preview", o.eps_preview);
         flag("eps_flate", o.eps_flate);
+        flag("pdf_layers", o.pdf_layers);   // s083
     }
     if (j.contains("export_format") && j["export_format"].is_string() && formats::export_format(j["export_format"].get<std::string>()))
         p.export_format = j["export_format"].get<std::string>();   // s051
@@ -92,7 +93,8 @@ bool save_prefs(const std::string& file, const Prefs& p) {
     const auto& o = p.export_options;          // s050
     j["export"] = {{"jpeg_quality", o.jpeg_quality}, {"webp_quality", o.webp_quality}, {"webp_lossless", o.webp_lossless},
                    {"png_level", o.png_level}, {"tiff_deflate", o.tiff_deflate},
-                   {"eps_cmyk", o.eps_cmyk}, {"eps_preview", o.eps_preview}, {"eps_flate", o.eps_flate}};   // s080
+                   {"eps_cmyk", o.eps_cmyk}, {"eps_preview", o.eps_preview}, {"eps_flate", o.eps_flate},
+                   {"pdf_layers", o.pdf_layers}};   // s080; s083
     j["export_format"] = p.export_format;   // s051
     j["proof_profile"] = p.proof_profile;   // s069
     j["proof_paper"] = p.proof_paper;

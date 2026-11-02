@@ -17,6 +17,7 @@
 #include "widgets/Widgets.hpp"
 
 #include <gtkmm/switch.h>
+#include <gtkmm/checkbutton.h>
 #include <gtkmm/window.h>
 #include <sigc++/signal.h>
 
@@ -57,6 +58,7 @@ private:
     widgets::Named<Gtk::Switch> m_webp_lossless;
     widgets::DropDown     m_tiff_compression;
     widgets::Box          m_ora_list;
+    widgets::Named<Gtk::CheckButton> m_pdf_layers;   // s083: Klimt's layers inside the PDF
     // s080: EPS -- colour, encoding, preview; what crosses (the clipping path).
     widgets::DropDown     m_eps_colour, m_eps_encoding, m_eps_preview;
     widgets::Box          m_eps_list;

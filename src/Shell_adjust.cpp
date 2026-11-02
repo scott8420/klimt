@@ -18,6 +18,7 @@ void Shell::on_adjust_new(core::AdjustKind k) {
     if (!has_image()) return;
     const auto id = L::add_adjustment(m_journal, m_doc, k, m_layers.primary());
     if (id.empty()) { toast("New Adjustment Layer: refused"); return; }
+    rec(core::actions::adjust_layer(m_doc.get(id)->adjust), id);   // s084: its settings as they end up (retuned)
     m_journal.reselect({id});
     m_layers.select({id}, false);
     if (m_doc.selection()) toast("“" + m_doc.get(id)->name + "” -- only inside the selection (its mask); paint the mask to change where");
@@ -162,6 +163,7 @@ void Shell::on_auto(core::adjust::AutoMethod m) {
     if (mode != pixel::Mode::RGB && mode != pixel::Mode::Gray) { toast(verb + ": RGB and Gray documents only, for now"); return; }
     const auto before = l->pixels;
     const auto sel = m_doc.selection_ptr();
+    rec(core::actions::apply_auto(m));   // s084
     start_job(verb, [this, id, before, sel, m, verb](core::Jobs::Token& t) -> core::Jobs::Landing {
         const auto a = core::adjust::auto_adjust(core::adjust::fresh(core::AdjustKind::Levels), core::adjust::histogram_of(*before, sel.get()), m);
         if (core::adjust::identity(a)) return [this, verb] { toast(verb + ": nothing to change -- it already spans the tones"); };
@@ -183,6 +185,7 @@ void Shell::adjust_run(const core::Adjust& a) {
     const auto before = cur->pixels;
     const auto sel = m_doc.selection_ptr();
     const std::string label(core::adjust::label(a.kind));
+    rec(core::actions::apply_adjust(a));   // s084
     // s060: the preview already made these pixels -- they are the step.
     if (m_adjust_exact.px && m_adjust_exact.a == a && m_adjust_exact.was == before && m_adjust_exact.sel == sel) {
         auto px = m_adjust_exact.px;

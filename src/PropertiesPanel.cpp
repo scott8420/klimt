@@ -94,7 +94,9 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
     drag->signal_drag_begin().connect([this](double, double) {
         if (!m_sel.empty()) L::opacity_begin(m_journal, m_doc, m_sel);
     });
-    const auto end = [this]() { L::opacity_end(m_journal); };
+    const auto end = [this]() {
+        if (L::opacity_end(m_journal)) rec(core::actions::set_opacity(static_cast<int>(m_opacity.get_value() + 0.5)));   // s084
+    };
     drag->signal_drag_end().connect([end](double, double) { end(); });
     drag->signal_cancel().connect([end](const Gdk::EventSequence*) { end(); });
     m_opacity.add_controller(drag);
@@ -409,6 +411,7 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
             m_smart_box.append(*note);
             auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
             for (const auto& [label, action, tip] : {std::tuple<const char*, const char*, const char*>
+                     {"Edit", "win.smart-edit", "Open its picture in a tab of its own -- Save puts it back here"},   // s083
                      {"Update", "win.smart-update", "Read the linked file again (it has changed)"},
                      {"Replace…", "win.smart-replace", "Another picture in its place -- the same transform"},
                      {"Rasterize", "win.smart-rasterize", "Make it a pixel layer of what it draws (to paint on it)"}}) {
@@ -924,6 +927,7 @@ void PropertiesPanel::on_blend() {
     if (i >= modes.size()) return;
     // Refused (Pass Through on a layer, a lock): paint puts the menu back.
     if (!L::set_blend(m_journal, m_doc, m_sel, modes[i].mode)) paint();
+    else rec(core::actions::set_blend(modes[i].mode));   // s084
 }
 
 void PropertiesPanel::on_opacity() {
@@ -931,6 +935,7 @@ void PropertiesPanel::on_opacity() {
     const int p = static_cast<int>(m_opacity.get_value() + 0.5);
     if (m_journal.in_gesture()) L::opacity_to(m_journal, m_doc, m_sel, p);
     else if (!L::set_opacity(m_journal, m_doc, m_sel, p)) paint();
+    else rec(core::actions::set_opacity(p));   // s084
 }
 
 // s072: Blend If -- the primary layer's ranges in the two bars; a drag's

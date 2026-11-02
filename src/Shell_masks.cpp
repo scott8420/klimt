@@ -31,6 +31,7 @@ void Shell::on_mask_add(int from) {
         return;
     }
     if (L::add_mask(m_journal, m_doc, id, f)) {
+        rec(core::actions::add_mask(f));   // s084
         m_layers.set_mask_target(id);   // Photoshop's way: the new mask is what's painted next
         toast("Painting the mask of “" + l->name + "” -- white shows, black hides; click the layer's icon for its pixels");
     }
