@@ -399,6 +399,10 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
         auto ty = Gio::Menu::create();
         ty->append("Rasterize Type", "win.text-rasterize");
         layer->append_section(ty);
+        auto pm = Gio::Menu::create();   // s081: the picked layer's outline as a path
+        pm->append("Make Path from Layer Mask", "win.path-from-mask");
+        pm->append("Make Path from Transparency", "win.path-from-transparency");
+        layer->append_section(pm);
     }
     // s008: the Select menu, and Fill / Delete beside Undo.
     auto sel = Gio::Menu::create();
@@ -414,6 +418,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
         auto ps = Gio::Menu::create();
         ps->append("Load Path as Selection", "win.path-selection");
         ps->append("Make Path from Selection", "win.path-make-work");
+        ps->append("Make Path\u2026", "win.path-make");   // s081: any source, the tolerance
         ps->append("Clipping Path\u2026", "win.clipping-path");   // s080
         sel->append_section(ps);
     }

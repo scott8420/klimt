@@ -197,6 +197,9 @@ const std::vector<Command>& commands() {
             {"Load Path as Selection", "Select", "win.path-selection", "", "path pen bezier curve selection outline", "Ctrl+Enter"},
             {"Show / Hide Path Outline", "View", "win.path-outline", "", "path outline hide show nodes anchors extras mask effect", "Ctrl+Shift+H"},
             {"Make Path from Selection", "Select", "win.path-make-work", "", "path pen bezier trace outline vector selection to path work path layer", ""},
+            {"Make Path\u2026", "Select", "win.path-make", "", "path trace tracer streamline outline vector mask transparency channel tolerance bezier", ""},   // s081
+            {"Make Path from Layer Mask", "Layer", "win.path-from-mask", "", "path trace mask outline vector bezier", ""},
+            {"Make Path from Transparency", "Layer", "win.path-from-transparency", "", "path trace alpha transparency cut out outline vector bezier", ""},
             {"Clipping Path\u2026", "Select", "win.clipping-path", "", "clipping path clip eps tiff psd indesign layout cut out flatness", ""},   // s080
             {"Last Filter's Settings", "Filter", "win.filter-last-dialog", "", "filter again repeat dialog", "Ctrl+Alt+F"},
             // s019: layer styles.

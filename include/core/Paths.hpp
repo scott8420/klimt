@@ -24,6 +24,12 @@ pixel::TileMap coverage(const path::Path& p, const pixel::Format& mf, int w, int
 // squares) fitted with Beziers no further than `tolerance` px from it
 // (Photoshop's Make Work Path: 0.5 .. 10, 2 by default). Specks smaller
 // than a pixel are dropped. nullopt when cancelled.
+// s081: the mask's edge as closed loops of points (marching squares at
+// coverage 1/2, between pixel centres; specks under a pixel dropped) -- what
+// traced() hands the tracer (core/Trace.hpp). nullopt when cancelled.
+std::optional<std::vector<std::vector<path::P>>> outlines(const pixel::TileMap& mask, const std::function<bool()>& cancelled = {});
+// s081: traced by core/Trace.hpp -- the fewest anchors, corners where the
+// shape turns, a hard pixel edge's steps read as the straight line they are.
 std::optional<path::Path> traced(const pixel::TileMap& mask, double tolerance,
                                  const std::function<bool()>& cancelled = {});
 
@@ -36,6 +42,23 @@ bool to_selection(DocJournal& j, Document& d, const Document::Id& id, select::Op
 // Make Path from Selection: the selection's edge, at `tolerance`, as a NEW
 // path layer above `above`. Its id; "" refused (nothing selected).
 Document::Id from_selection(DocJournal& j, Document& d, double tolerance = 2.0, const Document::Id& above = {});
+
+// s081: MAKE PATH from any mask -- Photoshop's Make Work Path, and Ctrl-click
+// a mask / a layer's thumbnail, then trace. What the tracer reads:
+//   Selection    -- the selection;
+//   LayerMask    -- a layer's mask, as what it SHOWS (white reveals);
+//   Transparency -- a layer's pixels' alpha (a cut-out's outline);
+//   Channel      -- a saved selection ("@channel/n").
+enum class Source { Selection, LayerMask, Transparency, Channel };
+const char* source_label(Source s);   // "Make Path from Layer Mask" ...
+// The coverage that source gives (0 .. 1, the selection's format, the image's
+// size); nullopt when there's nothing to trace (no mask on that layer, a
+// layer with no pixels, no such channel, nothing selected).
+std::optional<pixel::TileMap> source_mask(const Document& d, Source s, const Document::Id& id = {});
+// A traced mask as a NEW path layer above `above`, ONE step named `label`.
+// "" refused (the mask held nothing to trace).
+Document::Id from_mask(DocJournal& j, Document& d, const pixel::TileMap& mask, double tolerance,
+                       const Document::Id& above, const std::string& label);
 
 // Isolate (s035 m7, core/Isolate.hpp): the path as a HINT -- the figure it
 // goes round, found in what the eye sees (path masks off), as the selection

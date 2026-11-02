@@ -7,6 +7,7 @@
 #include "core/Isolate.hpp"
 #include "core/Clip.hpp"   // s080
 #include "ClipDialog.hpp"
+#include "MakePathDialog.hpp"   // s081
 
 namespace klimt {
 
@@ -90,24 +91,91 @@ void Shell::on_path_selection(core::select::Op op) {
 }
 
 void Shell::on_path_make_work() {
-    const auto sel = m_doc.selection_ptr();
-    if (!sel) { toast("Make Path from Selection: select something first"); return; }
+    if (!m_doc.selection_ptr()) { toast("Make Path from Selection: select something first"); return; }
+    make_path(core::paths::Source::Selection, {}, m_prefs.path_tolerance);
+}
+
+// s081: any source traced -- a job; ONE step when it lands, unless what it
+// read changed meanwhile.
+void Shell::make_path(core::paths::Source source, const std::string& id, double tolerance) {
+    auto mask = P::source_mask(m_doc, source, id);
+    const std::string label = P::source_label(source);
+    if (!mask) { toast(label + ": nothing to trace there"); return; }
     if (m_path_job) m_jobs.cancel(m_path_job);
-    const double tol = m_prefs.path_tolerance;
-    m_path_job = start_job("Make Path from Selection", [this, sel, tol](core::Jobs::Token& t) -> core::Jobs::Landing {
-        auto p = P::traced(*sel, tol, [&t] { return t.cancelled(); });
+    auto shared = std::make_shared<const klimt::pixel::TileMap>(std::move(*mask));
+    const auto before = m_journal.undo_label() + "#" + std::to_string(m_journal.position()) + "/" + std::to_string(m_journal.size());
+    m_path_job = start_job(label, [this, shared, tolerance, label, before](core::Jobs::Token& t) -> core::Jobs::Landing {
+        auto p = P::traced(*shared, tolerance, [&t] { return t.cancelled(); });
         if (!p) return {};
-        return [this, sel, path = std::move(*p)] {
+        return [this, label, before, path = std::move(*p)] {
             m_path_job = 0;
-            if (m_doc.selection_ptr() != sel) return;   // the selection moved meanwhile: nothing
-            if (path.empty()) { toast("Make Path from Selection: nothing to trace"); return; }
-            const auto made = L::add_path_layer(m_journal, m_doc, path, m_layers.primary(), "Make Path from Selection");
+            if (m_journal.undo_label() + "#" + std::to_string(m_journal.position()) + "/" + std::to_string(m_journal.size()) != before) {
+                toast(label + ": the document changed while tracing -- try again");   // what it read is gone
+                return;
+            }
+            if (path.empty()) { toast(label + ": nothing to trace"); return; }
+            const auto made = L::add_path_layer(m_journal, m_doc, path, m_layers.primary(), label);
             if (made.empty()) return;
             m_layers.select({made}, false);
             on_selection();
-            toast("Make Path from Selection -- " + std::to_string(path.anchors()) + " anchors", true);
+            toast(label + " -- " + std::to_string(path.anchors()) + " anchors", true);
+            if (auto lg = log::get(log::Area::Shell)) lg->info("make path: {} -> {} ({} anchors)", label, made, path.anchors());
         };
     });
+}
+
+// s081: Layer > Make Path from Layer Mask / from Transparency -- the picked layer.
+void Shell::on_path_from_layer(core::paths::Source source) {
+    const auto id = m_layers.primary();
+    if (id.empty()) { toast("Pick a layer first"); return; }
+    make_path(source, id, m_prefs.path_tolerance);
+}
+
+// s081: Select > Make Path… -- the source and the tolerance, with a readout.
+void Shell::on_make_path_dialog() {
+    if (!has_image()) return;
+    using Src = core::paths::Source;
+    std::vector<MakePathDialog::Choice> choices;
+    if (m_doc.selection_ptr()) choices.push_back({Src::Selection, {}, "Selection"});
+    const auto id = m_layers.primary();
+    if (const auto l = id.empty() ? std::nullopt : m_doc.get(id)) {
+        if (l->mask) choices.push_back({Src::LayerMask, id, "Layer Mask of \u201c" + l->name + "\u201d"});
+        if (l->pixels && l->kind != core::Kind::Path) choices.push_back({Src::Transparency, id, "Transparency of \u201c" + l->name + "\u201d"});
+    }
+    for (const auto& cid : m_doc.channel_order()) choices.push_back({Src::Channel, cid, "Saved selection \u201c" + m_doc.channels().at(cid).name + "\u201d"});
+    if (choices.empty()) { toast("Make Path: select something, or pick a layer with pixels or a mask"); return; }
+    if (!m_make_path_dialog) {
+        m_make_path_dialog = std::make_unique<MakePathDialog>(*this);
+        m_make_path_dialog->signal_changed().connect([this](std::size_t i, double tol) {
+            const auto& cs = m_make_path_dialog->choices();
+            if (i >= cs.size()) return;
+            auto mask = P::source_mask(m_doc, cs[i].source, cs[i].id);
+            if (!mask) { m_make_path_dialog->set_count("nothing to trace"); return; }
+            if (m_path_count_job) m_jobs.cancel(m_path_count_job);
+            m_make_path_dialog->set_count("\u2026");
+            auto shared = std::make_shared<const klimt::pixel::TileMap>(std::move(*mask));
+            m_path_count_job = m_jobs.submit("Count anchors", [this, shared, tol](core::Jobs::Token& t) -> core::Jobs::Landing {
+                auto p = P::traced(*shared, tol, [&t] { return t.cancelled(); });
+                if (!p) return {};
+                std::size_t subs = p->subs.size(), n = p->anchors();
+                return [this, subs, n] {
+                    m_path_count_job = 0;
+                    if (!m_make_path_dialog) return;
+                    m_make_path_dialog->set_count(n == 0 ? std::string("nothing to trace")
+                                                  : std::to_string(n) + (n == 1 ? " anchor" : " anchors") +
+                                                    (subs > 1 ? " in " + std::to_string(subs) + " subpaths" : std::string()));
+                };
+            });
+        });
+        m_make_path_dialog->signal_ok().connect([this](std::size_t i, double tol) {
+            const auto& cs = m_make_path_dialog->choices();
+            if (i >= cs.size()) return;
+            m_prefs.path_tolerance = tol;   // remembered -- Make Path from Selection uses it too
+            core::save_prefs(m_prefs_file, m_prefs);
+            make_path(cs[i].source, cs[i].id, tol);
+        });
+    }
+    m_make_path_dialog->ask(choices, 0, m_prefs.path_tolerance);
 }
 
 // s037: a stroke painted -- ONE step on the picked path layer; then, when

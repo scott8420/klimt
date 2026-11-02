@@ -1,6 +1,7 @@
 // core::paths -- the path verbs, a path's coverage, a selection traced into
 // a path (s035). docs/paths.md.
 #include "core/Paths.hpp"
+#include "core/Trace.hpp"   // s081
 #include "core/File.hpp"      // m7: the picture isolate reads
 #include "core/Isolate.hpp"
 
@@ -26,8 +27,8 @@ pixel::TileMap coverage(const path::Path& p, const pixel::Format& mf, int w, int
     return select::polygons_mask(mf, w, h, polys, true);
 }
 
-std::optional<path::Path> traced(const pixel::TileMap& mask, double tolerance, const std::function<bool()>& cancelled) {
-    path::Path out;
+std::optional<std::vector<std::vector<path::P>>> outlines(const pixel::TileMap& mask, const std::function<bool()>& cancelled) {
+    std::vector<std::vector<path::P>> out;
     const pixel::Rect b = select::bounds(mask);
     if (b.w <= 0 || b.h <= 0) return out;
     // The grid: pixel centres from one before the bounds to one after (zero
@@ -107,7 +108,20 @@ std::optional<path::Path> traced(const pixel::TileMap& mask, double tolerance, c
             area += p0.x * p1.y - p1.x * p0.y;
         }
         if (std::abs(area) / 2 < 1.0) continue;   // a speck
-        out.subs.push_back(path::fit(loop, std::max(0.1, tolerance)));
+        out.push_back(std::move(loop));
+    }
+    return out;
+}
+
+std::optional<path::Path> traced(const pixel::TileMap& mask, double tolerance, const std::function<bool()>& cancelled) {
+    auto loops = outlines(mask, cancelled);
+    if (!loops) return std::nullopt;
+    path::Path out;
+    trace::Options to;   // s081: the tracer -- the fewest anchors, corners where the shape turns
+    to.tolerance = std::max(0.1, tolerance);
+    to.straight = std::clamp(tolerance, 0.6, 1.2);   // tight tolerances keep a hard edge's steps
+    for (const auto& loop : *loops) {
+        out.subs.push_back(trace::fitted(loop, to));
         if (cancelled && cancelled()) return std::nullopt;
     }
     // A stable order: top-left first (unordered_map's order isn't).
@@ -141,9 +155,65 @@ bool to_selection(DocJournal& j, Document& d, const Document::Id& id, select::Op
 Document::Id from_selection(DocJournal& j, Document& d, double tolerance, const Document::Id& above) {
     const auto* sel = d.selection();
     if (!sel) return {};
-    auto p = traced(*sel, tolerance);
+    return from_mask(j, d, *sel, tolerance, above, "Make Path from Selection");
+}
+
+const char* source_label(Source s) {
+    switch (s) {
+        case Source::Selection:    return "Make Path from Selection";
+        case Source::LayerMask:    return "Make Path from Layer Mask";
+        case Source::Transparency: return "Make Path from Transparency";
+        case Source::Channel:      return "Make Path from Saved Selection";
+    }
+    return "Make Path";
+}
+
+std::optional<pixel::TileMap> source_mask(const Document& d, Source s, const Document::Id& id) {
+    const Image& im = d.image();
+    if (im.width <= 0 || im.height <= 0) return std::nullopt;
+    const pixel::Rect all{0, 0, im.width, im.height};
+    switch (s) {
+        case Source::Selection:
+            if (const auto* sel = d.selection()) return *sel;
+            return std::nullopt;
+        case Source::LayerMask: {
+            const auto l = d.get(id);
+            if (!l || !l->mask) return std::nullopt;
+            const pixel::TileMap& m = *l->mask;   // how much is HIDDEN: what shows is 1 - it
+            return d.blank_mask().paint(all, [&](int x, int y, const pixel::Px&) {
+                pixel::Px p;
+                p.c[0] = 1.f - std::clamp(m.get(x, y).c[0], 0.f, 1.f);
+                return p;
+            });
+        }
+        case Source::Transparency: {
+            const auto l = d.get(id);
+            if (!l || !l->pixels) return std::nullopt;
+            const pixel::TileMap& px = *l->pixels;
+            const pixel::Format f = px.format();
+            const int a = f.channels() - 1;
+            const pixel::Rect box = select::extent(px).intersect(all);
+            if (box.w <= 0 || box.h <= 0) return std::nullopt;
+            return d.blank_mask().paint(box, [&](int x, int y, const pixel::Px&) {
+                pixel::Px p;
+                p.c[0] = f.alpha ? std::clamp(px.get(x, y).c[static_cast<std::size_t>(a)], 0.f, 1.f) : 1.f;
+                return p;
+            });
+        }
+        case Source::Channel: {
+            const auto it = d.channels().find(id);
+            if (it == d.channels().end() || !it->second.mask) return std::nullopt;
+            return *it->second.mask;
+        }
+    }
+    return std::nullopt;
+}
+
+Document::Id from_mask(DocJournal& j, Document& d, const pixel::TileMap& mask, double tolerance,
+                       const Document::Id& above, const std::string& label) {
+    auto p = traced(mask, tolerance);
     if (!p || p->empty()) return {};
-    return layers::add_path_layer(j, d, *p, above, "Make Path from Selection");
+    return layers::add_path_layer(j, d, *p, above, label);
 }
 
 std::optional<pixel::TileMap> picture_for_isolate(const Image& im, const std::map<Document::Id, Layer>& layers) {

@@ -332,6 +332,9 @@ void Shell::bind_actions() {  // bindings
     m_layer_acts["path-selection"] = add_action("path-selection", [this] { on_path_selection(core::select::Op::Replace); });
     m_layer_acts["path-make-work"] = add_action("path-make-work", [this] { on_path_make_work(); });
     m_layer_acts["clipping-path"] = add_action("clipping-path", [this] { on_clipping_path(); });   // s080
+    m_layer_acts["path-make"] = add_action("path-make", [this] { on_make_path_dialog(); });   // s081
+    m_layer_acts["path-from-mask"] = add_action("path-from-mask", [this] { on_path_from_layer(core::paths::Source::LayerMask); });
+    m_layer_acts["path-from-transparency"] = add_action("path-from-transparency", [this] { on_path_from_layer(core::paths::Source::Transparency); });
     m_canvas.signal_guide_moved().connect([this](int i, double at) {
         if (i >= 0) core::canvas::move_guide(m_journal, m_doc, static_cast<std::size_t>(i), at);
     });

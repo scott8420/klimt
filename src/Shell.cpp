@@ -8,6 +8,7 @@
 #include "NewDialog.hpp"        // ditto
 #include "NumberDialog.hpp"
 #include "ClipDialog.hpp"   // s080: the destructor sees it
+#include "MakePathDialog.hpp"   // s081
 #include "ExportDialog.hpp"   // s050
 #include "AdjustDialog.hpp"
 #include "FilterDialog.hpp"   // s013     // ditto

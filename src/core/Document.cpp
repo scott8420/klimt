@@ -1513,6 +1513,25 @@ const std::vector<Verb>& verbs() {
              [](Document& d) { load_path_layer(d, paths::ellipse_path(100, 100, 50, 40)); load_selection(d, {300, 200, 50, 50}); }},
         {"path_make",       [](DocJournal& j, Document& d) { paths::from_selection(j, d, 2.0, "L4"); },
              [](Document& d) { load_selection(d, {150, 120, 100, 80}); }},
+        // s081: Make Path from a layer mask, a layer's transparency, a saved selection.
+        {"path_make_layer_mask", [](DocJournal& j, Document& d) {
+             if (auto m = paths::source_mask(d, paths::Source::LayerMask, "L4"))
+                 paths::from_mask(j, d, *m, 2.0, "L4", paths::source_label(paths::Source::LayerMask)); },
+             [](Document& d) { load_mask(d, "L4"); }},
+        {"path_make_transparency", [](DocJournal& j, Document& d) {
+             if (auto m = paths::source_mask(d, paths::Source::Transparency, "L4"))
+                 paths::from_mask(j, d, *m, 2.0, "L4", paths::source_label(paths::Source::Transparency)); }},
+        {"path_make_channel", [](DocJournal& j, Document& d) {
+             if (auto m = paths::source_mask(d, paths::Source::Channel, "@channel/1"))
+                 paths::from_mask(j, d, *m, 2.0, "", paths::source_label(paths::Source::Channel)); },
+             [](Document& d) {
+                 Document::Loading load(d);
+                 Layer c;
+                 c.name = "Alpha 1";
+                 c.pos = 1;
+                 c.mask = std::make_shared<const pixel::TileMap>(select::ellipse_mask(d.mask_format(), d.image().width, d.image().height, 100, 80, 300, 240));
+                 d.replace_channels({{"@channel/1", c}});
+             }},
         {"path_isolate",    [](DocJournal& j, Document& d) { paths::isolate(j, d, "L6", 8); },
              [](Document& d) { load_path_layer(d, paths::rect_path(90, 90, 310, 260)); }},
         // s037: Isolate's strokes.
