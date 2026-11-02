@@ -543,6 +543,7 @@ private:
         bool                warp = false;         // s074: the box became a mesh -- wmesh rules
         core::xform::Mesh   wmesh;
         unsigned            gen = 0, done_gen = 0;   // s074: each change of the box / mesh; the preview's
+        bool                presetting = false;   // s075: a Style is setting the mesh (not a drag)
         core::Jobs::Id      job = 0;
     };
     Xform              m_xform;

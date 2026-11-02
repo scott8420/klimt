@@ -30,6 +30,8 @@
 #include <string>
 #include <vector>
 
+namespace klimt::core::xform { struct Mesh; }   // s075: Warp's presets
+
 namespace klimt {
 
 class CanvasView : public Gtk::DrawingArea {
@@ -177,6 +179,9 @@ public:
     // emits signal_warp with the 16 points (x y, row by row).
     sigc::signal<void(const std::array<double, 32>&)>& signal_warp() { return m_warp_signal; }
     bool transform_is_warp() const { return m_xf.warp; }
+    // s075: a preset's mesh (Warp's Style) -- emitted as a drag would be.
+    void set_warp_mesh(const core::xform::Mesh& m);
+    pixel::Rect transform_box() const;   // the box the transform started from (whole pixels)
     XfKind transform_kind() const { return m_xf_kind; }
     bool transform_is_quad() const { return m_xf.quad; }
     // s008 m3: the Eyedropper clicked at an image point; `background`: Alt.

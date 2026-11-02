@@ -531,6 +531,69 @@ pixel::Rect mapped(const pixel::Rect&, const Mesh& m) {
     return {ix0, iy0, std::max(0, ix1 - ix0), std::max(0, iy1 - iy0)};
 }
 
+// ── s075: the presets ──────────────────────────────────────────────────────
+const char* warp_style_name(WarpStyle s) {
+    switch (s) {
+        case WarpStyle::Custom:   return "Custom";
+        case WarpStyle::Arc:      return "Arc";
+        case WarpStyle::ArcLower: return "Arc Lower";
+        case WarpStyle::ArcUpper: return "Arc Upper";
+        case WarpStyle::Arch:     return "Arch";
+        case WarpStyle::Bulge:    return "Bulge";
+        case WarpStyle::Flag:     return "Flag";
+        case WarpStyle::Wave:     return "Wave";
+        case WarpStyle::Rise:     return "Rise";
+        case WarpStyle::Squeeze:  return "Squeeze";
+        case WarpStyle::Inflate:  return "Inflate";
+    }
+    return "";
+}
+
+Mesh warp_preset(WarpStyle s, const pixel::Rect& box, double bend_pct, bool vertical) {
+    // In a unit square: X across (the bend's run), Y the way it bends (up -).
+    // A Bezier's inner control points sit 4/3 past the curve's middle, so an
+    // offset of K * t on them moves the curve's middle by t.
+    const double b = std::clamp(bend_pct, -100.0, 100.0) / 100;
+    constexpr double K = 4.0 / 3;
+    double X[4][4], Y[4][4];
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) { X[r][c] = c / 3.0; Y[r][c] = r / 3.0; }
+    const auto bow = [&](int r, double t) { Y[r][1] -= K * t; Y[r][2] -= K * t; };   // row r's middle up by t
+    switch (s) {
+        case WarpStyle::Custom: break;
+        case WarpStyle::Arc:      for (int r = 0; r < 4; ++r) bow(r, 0.5 * b * (1 - r / 6.0)); break;   // concentric: the top bends most
+        case WarpStyle::ArcLower: for (int r = 0; r < 4; ++r) bow(r, -0.5 * b * r / 3.0); break;         // the bottom bows out
+        case WarpStyle::ArcUpper: for (int r = 0; r < 4; ++r) bow(r, 0.5 * b * (3 - r) / 3.0); break;    // the top bows up
+        case WarpStyle::Arch:     for (int r = 0; r < 4; ++r) bow(r, 0.5 * b); break;                     // every row alike
+        case WarpStyle::Bulge:    for (int r = 0; r < 4; ++r) bow(r, 0.3 * b * (1.5 - r) / 1.5); break;   // top up, bottom down
+        case WarpStyle::Flag:
+            for (int r = 0; r < 4; ++r) { Y[r][1] -= 0.4 * b; Y[r][2] += 0.4 * b; }
+            break;
+        case WarpStyle::Wave:     // a flag whose middle rows ripple less
+            for (int r = 0; r < 4; ++r) { const double a = (r == 0 || r == 3) ? 0.4 : 0.2; Y[r][1] -= a * b; Y[r][2] += a * b; }
+            break;
+        case WarpStyle::Rise:     // an S: the left end down, the right end up
+            for (int r = 0; r < 4; ++r) { Y[r][0] += 0.25 * b; Y[r][1] += 0.25 * b; Y[r][2] -= 0.25 * b; Y[r][3] -= 0.25 * b; }
+            break;
+        case WarpStyle::Squeeze:  // the middle pinched, the ends kept
+            Y[0][1] += K * 0.3 * b; Y[0][2] += K * 0.3 * b;
+            Y[3][1] -= K * 0.3 * b; Y[3][2] -= K * 0.3 * b;
+            break;
+        case WarpStyle::Inflate:  // the inner four pushed out from the middle
+            for (int r = 1; r <= 2; ++r)
+                for (int c = 1; c <= 2; ++c) { X[r][c] = 0.5 + (X[r][c] - 0.5) * (1 + 1.5 * b); Y[r][c] = 0.5 + (Y[r][c] - 0.5) * (1 + 1.5 * b); }
+            break;
+    }
+    Mesh m;
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c) {
+            // Vertical: the same shape turned -- its run down the box, its bend across.
+            const double ux = vertical ? Y[c][r] : X[r][c], uy = vertical ? X[c][r] : Y[r][c];
+            m.p[r * 4 + c] = {box.x + ux * box.w, box.y + uy * box.h};
+        }
+    return m;
+}
+
 namespace {
 // The patch cut into triangles (landing points + source points), binned by
 // the tile cells they cover; each tile's pixels are looked up in a small map

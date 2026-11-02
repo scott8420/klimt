@@ -1,5 +1,6 @@
 #include "ContextStrip.hpp"
 #include "core/Patterns.hpp"   // s033: the texture's patterns
+#include "core/Transform.hpp"  // s075: Warp's styles
 #include "text/Hyphen.hpp"     // s048: the hyphenation languages
 
 #include <glibmm/main.h>
@@ -18,6 +19,7 @@
 #include <gtkmm/button.h>
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/spinbutton.h>
+#include <gtkmm/adjustment.h>
 #include <gtkmm/entry.h>
 #include <gtkmm/eventcontrollerfocus.h>
 #include <gtkmm/eventcontrollerscroll.h>
@@ -365,16 +367,69 @@ void ContextStrip::show_transform(int kind) {
         group->append(*b);
     }
     append(*group);
+    // s075: Warp's Style, Bend, Vertical -- one dropdown, shown while warping
+    // (the strip never scrolls: the options sit in its popover).
+    m_warp_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+    {
+        auto mb = Gtk::make_managed<Gtk::MenuButton>();
+        mb->set_name("strip.transform.warp");
+        mb->set_tooltip_text("Warp's Style -- a ready-made warp, shaped by Bend; drag a point afterwards and it's yours (Custom)");
+        m_warp_mb = mb;
+        auto pop = Gtk::make_managed<Gtk::Popover>();
+        auto grid = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+        grid->set_margin(8);
+        std::vector<Glib::ustring> names;
+        for (int i = 0; i < core::xform::kWarpStyles; ++i) names.emplace_back(core::xform::warp_style_name(static_cast<core::xform::WarpStyle>(i)));
+        m_warp_dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(names));
+        m_warp_dd->set_name("strip.transform.warp_style");
+        auto bend = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(m_warp_bend, -100, 100, 1, 10), 1, 0);
+        bend->set_name("strip.transform.warp_bend");
+        bend->set_tooltip_text("Bend, % -- how far the style bends; negative bends the other way");
+        bend->set_width_chars(4);
+        auto vert = Gtk::make_managed<Gtk::CheckButton>("Vertical -- bend the sides");
+        vert->set_name("strip.transform.warp_vertical");
+        vert->set_active(m_warp_vertical);
+        const auto tell = [this] {
+            if (!m_warp_dd) return;
+            const int st = static_cast<int>(m_warp_dd->get_selected());
+            warp_label();
+            if (m_quiet) return;
+            if (st > 0) m_warp_style.emit(st, m_warp_bend, m_warp_vertical);
+        };
+        m_warp_dd->property_selected().signal_changed().connect(tell);
+        bend->signal_value_changed().connect([this, bend, tell] { m_warp_bend = bend->get_value_as_int(); tell(); });
+        vert->signal_toggled().connect([this, vert, tell] { m_warp_vertical = vert->get_active(); tell(); });
+        const auto row = [&](const char* label, Gtk::Widget& w) {
+            auto r = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+            auto l = Gtk::make_managed<Gtk::Label>(label);
+            l->set_hexpand(true);
+            l->set_xalign(0.f);
+            r->append(*l);
+            r->append(w);
+            grid->append(*r);
+        };
+        row("Style", *m_warp_dd);
+        row("Bend %", *bend);
+        grid->append(*vert);
+        pop->set_child(*grid);
+        mb->set_popover(*pop);
+        m_warp_box->append(*mb);
+        warp_label();
+    }
+    m_warp_box->set_visible(kind == 4);
+    append(*m_warp_box);
     auto spacer = Gtk::make_managed<Gtk::Box>();
     spacer->set_hexpand(true);
     append(*spacer);
-    auto cancel = Gtk::make_managed<Gtk::Button>("Cancel");
+    auto cancel = Gtk::make_managed<Gtk::Button>();
+    cancel->set_icon_name("window-close-symbolic");   // s075: icons -- the strip never scrolls
     cancel->set_name("strip.transform.cancel");
     cancel->set_tooltip_text("Drop the transform -- nothing was written  (Esc)");
     cancel->set_focus_on_click(false);
     cancel->signal_clicked().connect([this] { m_xf_done.emit(false); });
     append(*cancel);
-    auto apply = Gtk::make_managed<Gtk::Button>("Apply");
+    auto apply = Gtk::make_managed<Gtk::Button>();
+    apply->set_icon_name("object-select-symbolic");
     apply->set_name("strip.transform.apply");
     apply->add_css_class("suggested-action");
     apply->set_tooltip_text("Apply the transform -- one step  (Enter, or double-click inside)");
@@ -390,10 +445,33 @@ void ContextStrip::set_transform_kind(int kind) {
     m_quiet = false;
 }
 
+void ContextStrip::show_warp_options(bool on) {   // s075
+    if (m_warp_box) m_warp_box->set_visible(on);
+    if (on) set_warp_style(0);
+}
+
+void ContextStrip::warp_label() {   // the button says the style and its Bend
+    if (!m_warp_mb || !m_warp_dd) return;
+    const int st = static_cast<int>(m_warp_dd->get_selected());
+    std::string l = core::xform::warp_style_name(static_cast<core::xform::WarpStyle>(st));
+    if (st > 0) l += "  " + std::to_string(m_warp_bend) + "%" + (m_warp_vertical ? " V" : "");
+    m_warp_mb->set_label(l);
+}
+
+void ContextStrip::set_warp_style(int style) {
+    if (!m_warp_dd) return;
+    m_quiet = true;
+    m_warp_dd->set_selected(static_cast<guint>(std::clamp(style, 0, core::xform::kWarpStyles - 1)));
+    m_quiet = false;
+}
+
 void ContextStrip::show_tool(const core::ToolSpec& t) {
     m_shown = t.id;
     m_variant_buttons.clear();
     m_xf_buttons.clear();
+    m_warp_box = nullptr;
+    m_warp_dd = nullptr;
+    m_warp_mb = nullptr;
     while (auto* c = get_first_child()) remove(*c);
 
     auto name = Gtk::make_managed<Gtk::Label>();

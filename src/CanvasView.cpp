@@ -1535,6 +1535,18 @@ bool CanvasView::set_transform_kind(XfKind k) {
     return true;
 }
 
+void CanvasView::set_warp_mesh(const core::xform::Mesh& m) {   // s075
+    if (!m_xf.on || !m_xf.warp) return;
+    for (int i = 0; i < 16; ++i) m_xf.w[i] = m.p[i];
+    queue_draw();
+    warp_emit();
+}
+
+pixel::Rect CanvasView::transform_box() const {
+    return {static_cast<int>(std::lround(m_xf.bx)), static_cast<int>(std::lround(m_xf.by)),
+            static_cast<int>(std::lround(m_xf.bw)), static_cast<int>(std::lround(m_xf.bh))};
+}
+
 core::select::Pt CanvasView::warp_at(double u, double v) const {
     core::xform::Mesh m;
     for (int i = 0; i < 16; ++i) m.p[i] = m_xf.w[i];

@@ -86,6 +86,13 @@ void Shell::bind_actions() {  // bindings
         m_canvas.grab_focus();
     });
     m_canvas.signal_warp().connect(sigc::mem_fun(*this, &Shell::on_warp_change));
+    m_strip.signal_warp_style().connect([this](int style, int bend, bool vertical) {   // s075: Warp's Style
+        if (!m_xform.active || !m_canvas.transform_is_warp()) return;
+        m_xform.presetting = true;
+        m_canvas.set_warp_mesh(core::xform::warp_preset(static_cast<core::xform::WarpStyle>(style), m_canvas.transform_box(), bend, vertical));
+        m_xform.presetting = false;
+        m_canvas.grab_focus();
+    });
     m_strip.signal_transform_done().connect([this](bool apply) { if (apply) xform_commit(); else xform_cancel(); });
     m_canvas.signal_transform_refused().connect([this] {   // s073
         if (m_xform.plan) toast("Free Transform: " + core::xform::projective_refusal(*m_xform.plan));

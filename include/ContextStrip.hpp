@@ -10,6 +10,8 @@
 #include "core/ToolDefaults.hpp"   // s029
 
 #include <gtkmm/popover.h>
+#include <gtkmm/menubutton.h>
+#include <gtkmm/dropdown.h>
 
 #include <array>
 #include <functional>
@@ -142,11 +144,25 @@ public:
     void set_transform_kind(int kind);   // the buttons follow (a key chose it)
     sigc::signal<void(int)>& signal_transform_kind() { return m_xf_kind; }
     sigc::signal<void(bool)>& signal_transform_done() { return m_xf_done; }   // true: Apply
+    // s075: WARP'S STYLE, shown while warping: the preset (core::xform::
+    // WarpStyle; 0 Custom), Bend (-100 .. 100 %), Vertical. A change is told
+    // whole; set_warp_style shows a style without telling (a dragged point
+    // makes it Custom).
+    void show_warp_options(bool on);
+    void set_warp_style(int style);
+    sigc::signal<void(int, int, bool)>& signal_warp_style() { return m_warp_style; }
 
 private:
     sigc::signal<void(int)> m_xf_kind;                    // s073
     sigc::signal<void(bool)> m_xf_done;
     std::vector<Gtk::ToggleButton*> m_xf_buttons;
+    sigc::signal<void(int, int, bool)> m_warp_style;     // s075
+    Gtk::Box* m_warp_box = nullptr;
+    Gtk::DropDown* m_warp_dd = nullptr;
+    Gtk::MenuButton* m_warp_mb = nullptr;
+    void warp_label();
+    int m_warp_bend = 50;
+    bool m_warp_vertical = false;
     TextOpts m_text;                                       // s046
     sigc::signal<void(const std::string&)> m_text_signal;
     void text_strip();                                     // s046: the Text tool's row

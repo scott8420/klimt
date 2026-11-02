@@ -384,6 +384,44 @@ void selftest_transform(const Check& check) {
         check("warp: the document holds", t.d.check().empty(), t.d.check());
     }
     {
+        // s075: the presets.
+        std::cout << "\n-- transform: warp presets (s075) --\n";
+        const P::Rect box{100, 100, 200, 150};
+        bool zero = true, corners = true;
+        for (int i = 0; i < X::kWarpStyles; ++i) {
+            const auto st = static_cast<X::WarpStyle>(i);
+            zero = zero && X::warp_preset(st, box, 0).identity_for(box) && X::warp_preset(st, box, 0, true).identity_for(box);
+            if (st == X::WarpStyle::Rise) continue;   // Rise moves its ends
+            const auto m = X::warp_preset(st, box, 80);
+            corners = corners && near(m.p[0], {100, 100}, 1e-9) && near(m.p[3], {300, 100}, 1e-9) &&
+                      near(m.p[12], {100, 250}, 1e-9) && near(m.p[15], {300, 250}, 1e-9);
+        }
+        check("warp presets: every one at Bend 0 is the identity", zero, "");
+        check("warp presets: the corners stay (Rise aside)", corners, "");
+        check("warp presets: every one has a name", std::string(X::warp_style_name(X::WarpStyle::ArcLower)) == "Arc Lower" &&
+                                                    std::string(X::warp_style_name(X::WarpStyle::Inflate)) == "Inflate", "");
+        // Arch 50: the top's middle up a quarter of the height (37.5), the bottom's too.
+        const auto arch = X::warp_preset(X::WarpStyle::Arch, box, 50);
+        check("warp presets: Arch 50 -- the middle up a quarter", near(arch.at(0.5, 0), {200, 62.5}, 1e-9) && near(arch.at(0.5, 1), {200, 212.5}, 1e-9),
+              std::to_string(arch.at(0.5, 0).y));
+        const auto down = X::warp_preset(X::WarpStyle::Arch, box, -50);
+        check("warp presets: a negative Bend bows the other way", near(down.at(0.5, 0), {200, 137.5}, 1e-9), "");
+        const auto upper = X::warp_preset(X::WarpStyle::ArcUpper, box, 50);
+        check("warp presets: Arc Upper -- the top bows, the bottom stays", upper.at(0.5, 0).y < 100 && near(upper.at(0.5, 1), {200, 250}, 1e-9), "");
+        const auto bulge = X::warp_preset(X::WarpStyle::Bulge, box, 50);
+        check("warp presets: Bulge -- top up, bottom down", bulge.at(0.5, 0).y < 100 && bulge.at(0.5, 1).y > 250, "");
+        // Vertical: the same, turned -- the left side bows out to the left.
+        const auto va = X::warp_preset(X::WarpStyle::Arch, box, 50, true);
+        check("warp presets: vertical -- the sides bow", va.at(0, 0.5).x < 100 - 1 && std::abs(va.at(0, 0.5).y - 175) < 1e-9 &&
+                                                         near(va.at(0, 0), {100, 100}, 1e-9), std::to_string(va.at(0, 0.5).x));
+        const auto inf = X::warp_preset(X::WarpStyle::Inflate, box, 50);
+        check("warp presets: Inflate -- the middle grows", std::abs(inf.at(0.5, 0.5).x - 200) < 1e-9 && inf.p[5].x < X::Mesh::of(box).p[5].x, "");
+        Fix t;
+        check("warp presets: one lands as a Warp", X::warp(t.j, t.d, {"L4"}, [](const P::Rect& b) {
+            return X::warp_preset(X::WarpStyle::Arc, b, 40); }, "Warp", kWhite) && t.j.undo_label() == "Warp", "");
+        check("warp presets: the document holds", t.d.check().empty(), t.d.check());
+    }
+    {
         // Type stays type: a warp is refused.
         Fix t;
         klimt::text::Spec sp;

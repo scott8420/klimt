@@ -83,6 +83,15 @@ struct Mesh {
 };
 pixel::Rect mapped(const pixel::Rect& box, const Mesh& m);   // the control points' box (the patch lies inside them)
 
+// s075: WARP'S PRESETS (Photoshop's Style menu). Each is a mesh over the box,
+// shaped by Bend (-100 .. 100 %; 0 is the identity for every one) and bent
+// across (horizontal -- the top / bottom curve) or down (vertical -- the
+// sides curve: the same shape turned a quarter). Custom: the even mesh.
+enum class WarpStyle { Custom, Arc, ArcLower, ArcUpper, Arch, Bulge, Flag, Wave, Rise, Squeeze, Inflate };
+constexpr int kWarpStyles = 11;
+const char* warp_style_name(WarpStyle s);
+Mesh warp_preset(WarpStyle s, const pixel::Rect& box, double bend_pct, bool vertical = false);
+
 // The box a rectangle lands in under m (rounded out to whole pixels).
 pixel::Rect mapped(const pixel::Rect& r, const Affine& m);
 pixel::Rect mapped(const pixel::Rect& r, const Projective& m);   // s073: empty when a corner crosses the horizon
