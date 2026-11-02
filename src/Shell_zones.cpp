@@ -378,6 +378,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     lm_do->append("Delete", "win.mask-delete");
     lm->append_section(lm_do);
     layer->append_submenu("Layer Mask", lm);
+    layer->append("Remove Background", "win.remove-background");   // s087: a layer mask from a local model
     // s013: Layer > New Adjustment Layer.
     auto nal = Gio::Menu::create();
     for (const auto k : core::adjust::kinds())

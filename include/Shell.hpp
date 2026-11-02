@@ -203,7 +203,8 @@ private:
     void on_select_all();                        // category: select: Ctrl+A
     void on_deselect();                          // category: select: Ctrl+D
     void on_select_invert();                     // category: select: Ctrl+Shift+I
-    void on_select_subject();                    // category: select: s086 Select > Subject -- a local model (libs/seg), a job
+    void on_select_subject();
+    void on_remove_background();                 // category: select: s087 Layer > Remove Background -- a layer mask from the model (a job)                    // category: select: s086 Select > Subject -- a local model (libs/seg), a job
     void say_model_missing(const std::string& verb, const std::string& model_key, const std::string& words);   // category: select: s086 where the model goes, and from where
     void on_fill(bool foreground);               // category: select: Alt / Ctrl+Backspace
     void on_delete_selection();                  // category: select: Delete / Backspace on the canvas

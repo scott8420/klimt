@@ -115,6 +115,11 @@ void Shell::update_layer_actions() {
     on("guides-clear", img && !m_doc.image().guides.empty());   // s032
     on("action-play", img && m_recording < 0 && !m_action_playing);   // s084
     on("select-subject", img);   // s086
+    {   // s087: a layer with a picture of its own
+        const auto pk = m_layers.primary();
+        const auto pl2 = pk.empty() ? std::nullopt : m_doc.get(pk);
+        on("remove-background", img && pl2 && core::draws_pixels(pl2->kind) && pl2->pixels);
+    }
     for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save", "select-range", "refine-edges",
                           "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
                           "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate",

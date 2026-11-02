@@ -93,7 +93,7 @@ const std::vector<Verb>& verbs() {
         {"filter.live", "Live Filter"},        {"filter.layer", "New Filter Layer"},
         {"select.all", "Select All"},          {"select.none", "Deselect"},
         {"select.invert", "Inverse"},          {"select.feather", "Feather"},
-        {"select.subject", "Select Subject"},
+        {"select.subject", "Select Subject"},  {"layer.remove_bg", "Remove Background"},
         {"select.fill", "Fill"},               {"layer.new", "New Layer"},
         {"layer.duplicate", "Duplicate Layer"}, {"layer.delete", "Delete Layer"},
         {"layer.mask", "Add Mask"},            {"layer.opacity", "Opacity"},
@@ -147,6 +147,7 @@ Act select_all() { return make("select.all", json::object(), "Select All"); }
 Act select_none() { return make("select.none", json::object(), "Deselect"); }
 Act select_invert() { return make("select.invert", json::object(), "Inverse"); }
 Act select_subject() { return make("select.subject", json::object(), "Select Subject"); }
+Act remove_background() { return make("layer.remove_bg", json::object(), "Remove Background"); }
 Act feather(double r) { return make("select.feather", {{"radius", r}}, "Feather  " + num(r) + " px"); }
 Act fill_selection(const P::Px& c) { return make("select.fill", {{"colour", colour_json(c)}}, "Fill"); }
 Act new_layer(const std::string& name) { return make("layer.new", {{"name", name}}, "New Layer “" + name + "”"); }
@@ -285,18 +286,29 @@ bool run(DocJournal& j, Document& d, Document::Id& picked, const Act& act, std::
         if (v == "select.all") { select::all(j, d); return true; }
         if (v == "select.none") { select::none(j, d); return true; }
         if (v == "select.invert") { select::invert(j, d); return true; }
+        if (v == "layer.remove_bg") {   // s087
+            if (!seg::available()) { error = "Klimt was built without ONNX Runtime"; return false; }
+            if (!layer_ok()) return false;
+            const auto l = d.get(picked);
+            if (!draws_pixels(l->kind) || !l->pixels) { error = "“" + l->name + "” has no picture of its own"; return false; }
+            const std::string dir = seg::default_dir();
+            const auto* m = seg::best_subject(dir);
+            if (!m) { error = "no subject model in " + dir; return false; }
+            auto hide = subject::background_mask(*l->pixels, d.selection_ptr().get(), d.mask_format(), *m, seg::path_of(*m, dir),
+                                                 subject::edge_for(im.width, im.height), error, cancelled);
+            if (!hide) return false;
+            layers::set_mask(j, d, picked, std::move(*hide), "Remove Background");
+            return true;
+        }
         if (v == "select.subject") {   // s086
-            const auto* m = seg::model("subject");
             const std::string dir = seg::default_dir();
             if (!seg::available()) { error = "Klimt was built without ONNX Runtime"; return false; }
-            if (const auto st = m ? seg::check(*m, dir) : seg::State::Missing; st != seg::State::Ready) {
-                error = m ? seg::state_words(*m, st, dir) : "no model";
-                return false;
-            }
+            const auto* m = seg::best_subject(dir);
+            if (!m) { error = "no subject model in " + dir; return false; }
             const auto flat = file::flatten(d.image(), d.snapshot());
             if (!flat) { error = "cancelled"; return false; }
             const auto sel = d.selection_ptr();
-            auto mk = subject::mask(*flat, sel.get(), d.mask_format(), seg::path_of(*m, dir), m->side, error, cancelled);
+            auto mk = subject::mask(*flat, sel.get(), d.mask_format(), *m, seg::path_of(*m, dir), error, cancelled);
             if (!mk) return false;
             select::set(j, d, std::move(*mk), "Select Subject");
             return true;

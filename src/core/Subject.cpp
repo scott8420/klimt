@@ -1,5 +1,6 @@
 // core/Subject -- Select > Subject (s086). See core/Subject.hpp.
 #include "core/Subject.hpp"
+#include "core/Matte.hpp"
 #include "core/Selection.hpp"
 #include "core/Transfer.hpp"
 #include "seg/Seg.hpp"
@@ -23,7 +24,8 @@ P::Rect look_box(const P::TileMap* within, int width, int height) {
 }
 
 std::optional<P::TileMap> mask(const P::TileMap& picture, const P::TileMap* within, const P::Format& mask_format,
-                               const std::string& model_path, int side, std::string& error, const std::function<bool()>& cancelled) {
+                               const seg::Model& model, const std::string& model_path, std::string& error,
+                               const std::function<bool()>& cancelled) {
     const int W = picture.width(), H = picture.height();
     const P::Rect box = look_box(within, W, H);
     if (box.w < 2 || box.h < 2) { error = "the selection is too small to look in"; return std::nullopt; }
@@ -43,7 +45,7 @@ std::optional<P::TileMap> mask(const P::TileMap& picture, const P::TileMap* with
         }
         if ((y & 63) == 0 && cancelled && cancelled()) { error = "cancelled"; return std::nullopt; }
     }
-    auto cov = seg::salient(model_path, side, rgb.data(), box.w, box.h, error, cancelled);
+    auto cov = seg::salient(model, model_path, rgb.data(), box.w, box.h, error, cancelled);
     if (!cov) return std::nullopt;
     // Into the selection's format at the picture's size, cut to the selection.
     P::TileMap out(mask_format, W, H);
@@ -56,6 +58,22 @@ std::optional<P::TileMap> mask(const P::TileMap& picture, const P::TileMap* with
     });
     if (select::bounds(out).empty()) { error = "nothing stands out there"; return std::nullopt; }
     return out;
+}
+
+double edge_for(int width, int height) { return std::clamp(std::max(width, height) * 0.004, 2.0, 24.0); }
+
+std::optional<P::TileMap> background_mask(const P::TileMap& picture, const P::TileMap* within, const P::Format& mask_format,
+                                          const seg::Model& model, const std::string& model_path, double edge,
+                                          std::string& error, const std::function<bool()>& cancelled) {
+    auto cover = mask(picture, within, mask_format, model, model_path, error, cancelled);
+    if (!cover) return std::nullopt;
+    if (edge > 0) {
+        auto soft = matte::soft_edge(picture, *cover, edge, cancelled);
+        if (!soft) { error = "cancelled"; return std::nullopt; }
+        cover = std::move(soft);
+    }
+    // The mask says how much it HIDES: what isn't the subject.
+    return select::inverted(&*cover, mask_format, cover->width(), cover->height());
 }
 
 }  // namespace klimt::core::subject

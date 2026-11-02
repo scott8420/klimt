@@ -34,9 +34,17 @@ struct Model {
     const char*   url;      // where it is published
     const char*   what;     // "Select Subject -- U²-Net (small), salient object"
     int           side;     // the square it sees (320)
+    // s087: how the picture goes in -- scaled by its brightest value, then
+    // (v - mean) / spread per channel (U²-Net: ImageNet's; ISNet: 0.5, 1).
+    float         mean[3];
+    float         spread[3];
 };
 const std::vector<Model>& catalog();
 const Model* model(std::string_view key);
+// s087: the best SALIENT-object model in the store: "subject-fine" (ISNet,
+// 1024 -- hair, fur, fine edges) when it's there and whole, else "subject"
+// (U²-Net small, 320); nullptr when neither is.
+const Model* best_subject(const std::string& dir);
 
 std::string default_dir();
 std::string path_of(const Model& m, const std::string& dir);
@@ -52,7 +60,7 @@ std::string sha256(const std::uint8_t* data, std::size_t n);
 // SALIENT OBJECT: what stands out in the picture. `rgb`: w x h, 8-bit,
 // interleaved RGB. Back: w x h coverage 0..1 (the model's own soft edge),
 // or nullopt with `error` in words (cancelled: "cancelled").
-std::optional<std::vector<float>> salient(const std::string& model_path, int side, const std::uint8_t* rgb, int w, int h,
+std::optional<std::vector<float>> salient(const Model& m, const std::string& model_path, const std::uint8_t* rgb, int w, int h,
                                           std::string& error, const std::function<bool()>& cancelled = {});
 
 }  // namespace klimt::seg

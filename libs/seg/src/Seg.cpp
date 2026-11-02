@@ -22,7 +22,11 @@ const std::vector<Model>& catalog() {
     static const std::vector<Model> c = {
         {"subject", "u2netp.onnx", 4574861, "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8",
          "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx",
-         "Select Subject -- U²-Net (small): the thing that stands out", 320},
+         "Select Subject -- U²-Net (small): the thing that stands out", 320, {0.485f, 0.456f, 0.406f}, {0.229f, 0.224f, 0.225f}},
+        // s087: the fine one -- hair and fur, 1024 square (Remove Background, and Select Subject when it's there).
+        {"subject-fine", "isnet-general-use.onnx", 178648008, "60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a",
+         "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
+         "Remove Background and fine Select Subject -- ISNet (general use): hair, fur, fine edges", 1024, {0.5f, 0.5f, 0.5f}, {1.f, 1.f, 1.f}},
     };
     return c;
 }
@@ -30,6 +34,12 @@ const std::vector<Model>& catalog() {
 const Model* model(std::string_view key) {
     for (const auto& m : catalog())
         if (key == m.key) return &m;
+    return nullptr;
+}
+
+const Model* best_subject(const std::string& dir) {
+    for (const char* k : {"subject-fine", "subject"})
+        if (const auto* m = model(k); m && check(*m, dir) == State::Ready) return m;
     return nullptr;
 }
 
@@ -121,8 +131,9 @@ std::shared_ptr<Ort::Session> session(const std::string& path) {
 bool available() { return true; }
 std::string version() { return Ort::GetVersionString(); }
 
-std::optional<std::vector<float>> salient(const std::string& model_path, int side, const std::uint8_t* rgb, int w, int h,
+std::optional<std::vector<float>> salient(const Model& model, const std::string& model_path, const std::uint8_t* rgb, int w, int h,
                                           std::string& error, const std::function<bool()>& cancelled) {
+    const int side = model.side;
     if (w < 1 || h < 1 || !rgb) { error = "an empty picture"; return std::nullopt; }
     // In: the picture squeezed to side x side, scaled by its brightest value,
     // ImageNet's mean and spread taken out (as U²-Net was trained).
@@ -139,7 +150,8 @@ std::optional<std::vector<float>> salient(const std::string& model_path, int sid
                 top = std::max(top, px[c]);
             }
         }
-    const float mean[3] = {0.485f, 0.456f, 0.406f}, spread[3] = {0.229f, 0.224f, 0.225f};
+    const float* mean = model.mean;
+    const float* spread = model.spread;
     for (int y = 0; y < S; ++y)
         for (int x = 0; x < S; ++x)
             for (int c = 0; c < 3; ++c)
@@ -192,7 +204,7 @@ std::optional<std::vector<float>> salient(const std::string& model_path, int sid
 
 bool available() { return false; }
 std::string version() { return {}; }
-std::optional<std::vector<float>> salient(const std::string&, int, const std::uint8_t*, int, int, std::string& error,
+std::optional<std::vector<float>> salient(const Model&, const std::string&, const std::uint8_t*, int, int, std::string& error,
                                           const std::function<bool()>&) {
     error = "Klimt was built without ONNX Runtime -- install onnxruntime-devel and build again";
     return std::nullopt;

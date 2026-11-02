@@ -62,6 +62,7 @@ const std::vector<Command>& commands() {
             {"Contract Selection", "Select", "win.select-contract", "", "modify shrink smaller", ""},
             {"Border Selection", "Select", "win.select-border", "", "modify edge band outline ring", ""},
             {"Color Range", "Select", "win.select-range", "", "colour color pick sample similar fuzziness range", ""},
+            {"Remove Background", "Layer", "win.remove-background", "", "remove background cut out isolate subject mask ai model matting hair", ""},   // s087
             {"Subject", "Select", "win.select-subject", "", "select subject object person ai model mask cut out isolate automatic", ""},   // s086
             {"Refine to Edges", "Select", "win.refine-edges", "", "snap edge subject figure isolate rough lasso cut out select and mask", "Ctrl+Alt+R"},
             {"Save Selection", "Select", "win.select-save", "", "channel alpha keep store remember", ""},

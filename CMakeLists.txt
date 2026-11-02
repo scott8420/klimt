@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s086")
+set(KLIMT_BUILD "s087")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -177,13 +177,13 @@ find_package(ZLIB REQUIRED)   # s050: PSD's ZIP channels (libpng's own dependenc
 target_link_libraries(klimt_core PRIVATE ZLIB::ZLIB)
 # s085: camera RAW through LibRaw (the thread-safe libraw_r). Optional: without
 # it Klimt builds and says "install LibRaw-devel" when a RAW is opened.
-pkg_check_modules(LIBRAW IMPORTED_TARGET libraw_r)
+pkg_check_modules(LIBRAW QUIET IMPORTED_TARGET libraw_r)
 if(LIBRAW_FOUND)
   target_compile_definitions(klimt_core PRIVATE KLIMT_HAVE_LIBRAW)
   target_link_libraries(klimt_core PRIVATE PkgConfig::LIBRAW)
   message(STATUS "LibRaw ${LIBRAW_VERSION}: camera RAW on")
 else()
-  message(WARNING "LibRaw not found (Fedora: sudo dnf install LibRaw-devel) -- camera RAW files will be refused")
+  message(STATUS "LibRaw: not installed -- camera RAW off (optional: sudo dnf install LibRaw-devel)")
 endif()
 # s051: cairo-pdf writes Export as PDF (cairo comes with GTK; the core stays GTK-free).
 pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)   # s049: the ants bench too

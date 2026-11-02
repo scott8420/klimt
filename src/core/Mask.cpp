@@ -112,4 +112,10 @@ bool set_mask_if(DocJournal& j, Document& d, const Id& id, const MapPtr& expect,
     return put_mask(j, d, id, std::make_shared<const pixel::TileMap>(std::move(after)), l.mask_on, label);
 }
 
+bool set_mask(DocJournal& j, Document& d, const Id& id, pixel::TileMap hide, const std::string& label) {   // s087
+    if (!maskable(d, id)) return false;
+    if (!(hide.format() == d.mask_format()) || hide.width() != d.image().width || hide.height() != d.image().height) return false;
+    return put_mask(j, d, id, std::make_shared<const pixel::TileMap>(std::move(hide)), true, label);
+}
+
 }  // namespace klimt::core::layers

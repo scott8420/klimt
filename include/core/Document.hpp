@@ -452,6 +452,10 @@ bool set_mask_edges(DocJournal& j, Document& d, const Id& id, const MaskEdges& e
 // the mask is still `expect`).
 bool set_mask_if(DocJournal& j, Document& d, const Id& id, const std::shared_ptr<const pixel::TileMap>& expect,
                  pixel::TileMap after, const std::string& label);
+// s087: the layer's mask BECOMES `hide` (made, or replaced; switched on) --
+// one step `label` (Remove Background). Refused where a mask can't go, or
+// `hide` isn't the mask's format and the image's size.
+bool set_mask(DocJournal& j, Document& d, const Id& id, pixel::TileMap hide, const std::string& label);
 
 // s013 -- ADJUSTMENT LAYERS (core/Adjust.hpp, docs/adjustments.md). A new
 // one sits above `above` like add_layer, named "Levels 1", "Curves 2" ...,

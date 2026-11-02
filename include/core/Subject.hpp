@@ -9,6 +9,7 @@
 // cut to the selection; with none, the whole picture. The model's own soft
 // edge is kept (Refine Edges takes it further). GTK-free; pure; on a worker.
 #include "pixel/Pixel.hpp"
+#include "seg/Seg.hpp"
 
 #include <functional>
 #include <optional>
@@ -25,7 +26,19 @@ pixel::Rect look_box(const pixel::TileMap* within, int width, int height);
 // coverage (nullptr: none). Back: the selection, `mask_format` at the
 // picture's size; nullopt with `error` ("cancelled" when it was).
 std::optional<pixel::TileMap> mask(const pixel::TileMap& picture, const pixel::TileMap* within, const pixel::Format& mask_format,
-                                   const std::string& model_path, int side, std::string& error,
+                                   const seg::Model& model, const std::string& model_path, std::string& error,
                                    const std::function<bool()>& cancelled = {});
+
+// s087: LAYER > REMOVE BACKGROUND -- the layer mask (how much it HIDES, in
+// `mask_format`): the subject as above, its edge then taken from the
+// picture's own colours within `edge` px (core/Matte's soft edge -- hair and
+// fur the model only half sees); 0: the model's edge as it is.
+std::optional<pixel::TileMap> background_mask(const pixel::TileMap& picture, const pixel::TileMap* within,
+                                              const pixel::Format& mask_format, const seg::Model& model,
+                                              const std::string& model_path, double edge, std::string& error,
+                                              const std::function<bool()>& cancelled = {});
+// The edge Remove Background uses on a picture this size: about 0.4 % of its
+// larger side, 2 .. 24 px.
+double edge_for(int width, int height);
 
 }  // namespace klimt::core::subject

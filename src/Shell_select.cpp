@@ -323,11 +323,18 @@ void Shell::update_select_actions() {
 namespace klimt {
 
 void Shell::say_model_missing(const std::string& verb, const std::string& model_key, const std::string& words) {
-    const auto* m = seg::model(model_key);
+    // s087: the subject verbs take the fine model or the small one -- both named.
+    std::vector<const seg::Model*> ms;
+    if (model_key == "subject") ms = {seg::model("subject-fine"), seg::model("subject")};
+    else ms = {seg::model(model_key)};
+    const seg::Model* m = ms.front();
     const std::string dir = seg::default_dir();
     auto a = Gtk::AlertDialog::create(verb + " needs its model");
-    std::string detail = words + ".\n\n";
-    if (m) detail += std::string(m->what) + ".\nPut " + m->file + " in that folder -- it is published at\n" + m->url;
+    std::string detail = words + ".\n";
+    for (const auto* x : ms)
+        if (x) detail += "\n" + std::string(x->what) + " -- " + x->file + ", " +
+                         std::to_string(static_cast<int>(x->bytes / 1000000.0 + 0.5)) + " MB:\n" + x->url + "\n";
+    if (ms.size() > 1) detail += "\nEither works; the first is finer (and slower). Put it in that folder.";
     a->set_detail(detail);
     a->set_buttons({"Close", "Copy Link", "Open Folder"});
     a->set_cancel_button(0);
@@ -350,8 +357,6 @@ void Shell::on_select_subject() {
     const std::string verb = "Select Subject";
     if (!has_image()) { toast(verb + ": no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     if (!seg::available()) { toast(verb + ": Klimt was built without ONNX Runtime -- install onnxruntime-devel and build again"); return; }
-    const auto* m = seg::model("subject");
-    if (!m) return;
     const core::Image im = m_doc.image();
     const auto layers = m_doc.snapshot();
     const auto sel = m_doc.selection_ptr();
@@ -359,10 +364,10 @@ void Shell::on_select_subject() {
     const auto mark = m_journal.mark();
     const std::string dir = seg::default_dir();
     rec(core::actions::select_subject());
-    start_job(verb, [this, im, layers, sel, mf, mark, dir, m, verb](core::Jobs::Token& t) -> core::Jobs::Landing {
-        const auto state = seg::check(*m, dir);
-        if (state != seg::State::Ready) {
-            const auto words = seg::state_words(*m, state, dir);
+    start_job(verb, [this, im, layers, sel, mf, mark, dir, verb](core::Jobs::Token& t) -> core::Jobs::Landing {
+        const auto* m = seg::best_subject(dir);
+        if (!m) {
+            const auto words = "Neither model is in " + dir;
             return [this, verb, words] { say_model_missing(verb, "subject", words); };
         }
         formats::Progress cancel_only;
@@ -371,7 +376,7 @@ void Shell::on_select_subject() {
         if (!flat) return [] {};
         t.progress(0.2);
         std::string err;
-        auto mk = core::subject::mask(*flat, sel.get(), mf, seg::path_of(*m, dir), m->side, err, [&t] { return t.cancelled(); });
+        auto mk = core::subject::mask(*flat, sel.get(), mf, *m, seg::path_of(*m, dir), err, [&t] { return t.cancelled(); });
         if (!mk) {
             if (t.cancelled()) return [] {};
             return [this, verb, err] { toast(verb + ": " + err); };
@@ -382,6 +387,57 @@ void Shell::on_select_subject() {
             S::set(m_journal, m_doc, std::move(*res), verb);
             if (auto lg = log::get(log::Area::Shell)) lg->info("select subject: landed");
             toast(verb + " -- Select > Refine to Edges takes the edge further", true);
+        };
+    });
+}
+
+// ── s087: Layer > Remove Background ────────────────────────────────────────
+// The picked layer's background HIDDEN by a layer mask (its pixels kept --
+// paint the mask to mend it): the subject from the fine model when it's in
+// the store (else the small one), inside the selection when there is one,
+// its edge then taken from the layer's own colours. ONE step.
+void Shell::on_remove_background() {
+    const std::string verb = "Remove Background";
+    if (!has_image()) { toast(verb + ": no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
+    if (!seg::available()) { toast(verb + ": Klimt was built without ONNX Runtime -- install onnxruntime-devel and build again"); return; }
+    const auto id = m_layers.primary();
+    const auto l = id.empty() ? std::nullopt : m_doc.get(id);
+    if (!l) { toast(verb + ": pick a layer first"); return; }
+    if (!core::draws_pixels(l->kind) || !l->pixels) { toast(verb + ": “" + l->name + "” has no picture of its own -- pick the photo's layer"); return; }
+    if (m_doc.locked_all(id)) { toast(verb + ": “" + l->name + "” is locked"); return; }
+    const auto px = l->pixels;
+    const auto had = l->mask;
+    const auto sel = m_doc.selection_ptr();
+    const auto mf = m_doc.mask_format();
+    const auto mark = m_journal.mark();
+    const std::string dir = seg::default_dir();
+    const double edge = core::subject::edge_for(m_doc.image().width, m_doc.image().height);
+    rec(core::actions::remove_background());
+    start_job(verb, [this, id, px, had, sel, mf, mark, dir, edge, verb](core::Jobs::Token& t) -> core::Jobs::Landing {
+        const auto* m = seg::best_subject(dir);
+        if (!m) {
+            const auto words = "Neither model is in " + dir;
+            return [this, verb, words] { say_model_missing(verb, "subject", words); };
+        }
+        std::string err;
+        auto hide = core::subject::background_mask(*px, sel.get(), mf, *m, seg::path_of(*m, dir), edge, err, [&t] { return t.cancelled(); });
+        if (!hide) {
+            if (t.cancelled()) return [] {};
+            return [this, verb, err] { toast(verb + ": " + err); };
+        }
+        auto res = std::make_shared<pixel::TileMap>(std::move(*hide));
+        const std::string which = m->key == std::string("subject-fine") ? "the fine model" : "the small model (isnet-general-use.onnx in the models folder is finer)";
+        return [this, id, px, had, sel, mark, res, verb, which] {
+            const auto now = m_doc.get(id);
+            if (m_journal.mark() != mark || !now || now->pixels != px || now->mask != had || m_doc.selection_ptr() != sel) {
+                toast(verb + ": the image changed meanwhile -- nothing done");
+                return;
+            }
+            if (!core::layers::set_mask(m_journal, m_doc, id, std::move(*res), verb)) { toast(verb + ": refused"); return; }
+            m_layers.queue_repaint();
+            on_selection();
+            if (auto lg = log::get(log::Area::Shell)) lg->info("remove background: landed ({})", which);
+            toast(verb + " -- a layer mask (" + which + "); paint it to mend, Properties' Defringe for a colour halo", true);
         };
     });
 }
