@@ -282,6 +282,7 @@ void Shell::after_switch() {
     queue_ants();
     update_channels();
     m_history.repaint();
+    update_snapshots();   // s077: this tab's
     update_undo_ui();
     update_title();
     update_summary();

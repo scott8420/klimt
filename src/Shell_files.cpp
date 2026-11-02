@@ -91,6 +91,7 @@ void Shell::adopt(core::file::Contents c, const std::string& path, const std::st
         }
     }
     m_journal.clear();
+    live_snapshots().clear(); update_snapshots();   // s077: a new picture in the tab -- its snapshots go
     m_tabs.live_info().saved_mark = m_journal.mark();
     path_() = path;
     name_() = name;
@@ -209,6 +210,7 @@ void Shell::open_demo() {
         m_layers.forget_view();
         load_demo();
         m_journal.clear();
+        live_snapshots().clear(); update_snapshots();   // s077
         m_tabs.live_info().saved_mark = m_journal.mark();
         path_().clear();
         name_() = "Demo";

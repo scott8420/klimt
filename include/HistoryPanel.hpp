@@ -8,6 +8,9 @@
 #include "core/Document.hpp"
 
 #include <functional>
+#include <string>
+#include <vector>
+#include <gtkmm/button.h>
 
 namespace klimt {
 
@@ -16,6 +19,12 @@ public:
     explicit HistoryPanel(const core::DocJournal& journal);
     void repaint();      // after every journal change: once per idle, after the writes
     void set_on_go(std::function<void(std::size_t)> f) { m_go = std::move(f); }
+    // s077: SNAPSHOTS -- named states of the document, listed above the steps
+    // (a click goes back to one: a step, undoable); the footer's camera takes
+    // one, its bin deletes the one last clicked. The Shell keeps them.
+    enum class Snap { Take, Restore, Delete };
+    void set_snapshots(const std::vector<std::string>& names);
+    void set_on_snapshot(std::function<void(Snap, std::size_t)> f) { m_snap = std::move(f); }
 
 private:
     const core::DocJournal& m_journal;
@@ -25,6 +34,12 @@ private:
     bool                    m_queued = false;
     void paint();
     std::function<void(std::size_t)> m_go;
+    std::function<void(Snap, std::size_t)> m_snap;     // s077
+    widgets::ListBox        m_snaps{"history.snapshots"};
+    Gtk::Button*            m_delete = nullptr;
+    std::vector<std::string> m_names;
+    int                     m_picked = -1;            // the snapshot last clicked
+    bool                    m_snap_painting = false;
 };
 
 }  // namespace klimt

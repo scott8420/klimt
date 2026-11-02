@@ -41,7 +41,8 @@ enum class FilterKind : std::uint8_t { None, GaussianBlur, UnsharpMask, HighPass
                                        Displace,                                     // s043 m4: Distort
                                        LensFlare,                                    // s044 m1: Render
                                        Shear,                                        // s044 m2: Distort
-                                       Lighting };                                   // s045 m1: Render
+                                       Lighting,                                     // s045 m1: Render
+                                       LensCorrection };                             // s077: Distort
 
 // s034: what Smart Sharpen takes away -- the blur it undoes.
 enum class Remove : std::uint8_t { Gaussian, Lens, Motion };
@@ -194,6 +195,17 @@ struct Filter {
     // luminance, `height` 0 .. 100. White light.
     double hotspot = 35, ambient = 20, gloss = 0, height = 50;
     bool texture = false;
+    // s077 -- LENS CORRECTION (Distort), about the middle of the selection's
+    // bounds (or the picture), its corners at radius 1: `amount` Remove
+    // Distortion -100 .. 100 (+ straightens barrel -- lines bowed out; -
+    // pincushion); `fringe_rc` Fix Red / Cyan Fringe and `fringe_by` Fix
+    // Blue / Yellow Fringe -100 .. 100 (the red / blue channel scaled about
+    // the middle by up to 1 %; RGB only); `vignette` -100 .. 100 (+ lightens
+    // the corners, - darkens them; RGB and Gray) with `vignette_mid` its
+    // Midpoint 0 .. 100 (how far in it reaches; smaller: further); `lens_scale`
+    // Scale 50 .. 150 % (above 100 zooms in -- what the correction pulled in
+    // from past the edge is cropped off).
+    double vignette = 0, vignette_mid = 50, fringe_rc = 0, fringe_by = 0, lens_scale = 100;
     bool operator==(const Filter&) const = default;
 };
 

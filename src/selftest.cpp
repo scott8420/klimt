@@ -103,6 +103,7 @@ void selftest_pen(const std::function<void(const std::string&, bool, const std::
 void selftest_bounds(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_transform(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_liquify(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s076
+void selftest_snapshot(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s077
 void selftest_modify(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_masks(const std::function<void(const std::string&, bool, const std::string&)>& check);
 void selftest_gradient(const std::function<void(const std::string&, bool, const std::string&)>& check);
@@ -1259,6 +1260,7 @@ int main() {
     selftest_bounds([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_transform([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_liquify([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
+    selftest_snapshot([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_modify([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_masks([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_gradient([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });

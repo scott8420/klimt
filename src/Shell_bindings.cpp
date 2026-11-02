@@ -398,6 +398,7 @@ void Shell::bind_actions() {  // bindings
     m_journal.set_selection_source([this] { return m_layers.selection(); });
     m_journal.set_on_change([this] { update_undo_ui(); m_history.repaint(); update_title(); });
     m_history.set_on_go(sigc::mem_fun(*this, &Shell::on_history_go));
+    m_history.set_on_snapshot(sigc::mem_fun(*this, &Shell::on_snapshot));   // s077
     m_layers.set_on_change([this] { on_selection(); });
     // s009 (Scott, s008 -> s009, answer 3): Klimt starts with NO image -- the
     // New dialog comes up (App::on_activate -> start()); the demo is under

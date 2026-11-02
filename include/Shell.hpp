@@ -10,6 +10,7 @@
 #include "core/Canvas.hpp"     // s009: Crop, Image / Canvas Size
 #include "core/Transform.hpp"  // s011: Free Transform
 #include "core/Liquify.hpp"    // s076: Liquify
+#include "core/Snapshot.hpp"   // s077: History's snapshots
 #include "core/Prefs.hpp"      // s014 m4: settings remembered between runs
 #include "core/Tabs.hpp"       // s020: several documents in one window
 #include "core/Fade.hpp"       // s020: Edit > Fade
@@ -83,6 +84,7 @@ typedef struct _AdwTabPage AdwTabPage;
 //   Canvas   -- Crop, Image Size, Canvas Size (jobs).    src/Shell_canvas.cpp (s009)
 //   Transform-- Free Transform, flips, quarter turns.    src/Shell_transform.cpp (s011)
 //   Liquify  -- Filter > Liquify, its brushes.          src/Shell_liquify.cpp (s076)
+//   History  -- History's snapshots.                    src/Shell_history.cpp (s077)
 //   Masks    -- the Layer Mask menu, the mask view.     src/Shell_masks.cpp (s012)
 //   Tabs     -- document tabs: switch, close, the bar.  src/Shell_tabs.cpp (s020)
 //   Fade     -- Edit > Fade: the dialog, its preview.   src/Shell_fade.cpp (s020)
@@ -565,6 +567,11 @@ private:
         core::Jobs::Id job = 0;
     };
     Liq                m_liq;
+    // ── History's snapshots (s077), per document tab (its key) ─────────────
+    std::map<std::uint64_t, std::vector<core::snapshot::Snapshot>> m_snapshots;
+    std::vector<core::snapshot::Snapshot>& live_snapshots() { return m_snapshots[m_tabs.live_info().key]; }
+    void on_snapshot(HistoryPanel::Snap what, std::size_t i);   // category: history: s077 -- take, go back to, delete
+    void update_snapshots();                                     // category: history: s077 -- the panel follows the live tab
     // What the render shows in place of a layer's pixels (the preview).
     std::map<core::Document::Id, std::shared_ptr<const pixel::TileMap>> m_preview;
     std::string        m_mask_view;              // s012: the layer whose mask the canvas shows ("" : the image)

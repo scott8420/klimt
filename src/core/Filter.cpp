@@ -36,6 +36,7 @@ constexpr Info kInfo[] = {
     {FilterKind::Twirl,        "twirl",         "Twirl",         "Distort"}, // s040 m4
     {FilterKind::Pinch,        "pinch",         "Pinch",         "Distort"},
     {FilterKind::Spherize,     "spherize",      "Spherize",      "Distort"},
+    {FilterKind::LensCorrection, "lens-correction", "Lens Correction", "Distort"},   // s077
     {FilterKind::PolarCoordinates, "polar-coordinates", "Polar Coordinates", "Distort"},   // s041 m3
     {FilterKind::Ripple,       "ripple",        "Ripple",        "Distort"},
     {FilterKind::Wave,         "wave",          "Wave",          "Distort"},
@@ -73,7 +74,8 @@ bool warps(FilterKind k) {
     return k == FilterKind::Twirl || k == FilterKind::Pinch || k == FilterKind::Spherize || k == FilterKind::PolarCoordinates ||
            k == FilterKind::Ripple || k == FilterKind::Wave || k == FilterKind::ZigZag ||   // s041 m3
            k == FilterKind::Displace ||   // s043 m4: by its map (worked in the same pass)
-           k == FilterKind::Shear;        // s044 m2
+           k == FilterKind::Shear ||      // s044 m2
+           k == FilterKind::LensCorrection;   // s077: three reads a pixel (the fringes), then the vignette
 }
 const Info* info(FilterKind k) {
     for (const auto& i : kInfo)
@@ -1766,7 +1768,7 @@ const std::vector<FilterKind>& kinds() {
     // Alphabetical within each submenu, as Photoshop's.
     static const std::vector<FilterKind> v{FilterKind::BoxBlur, FilterKind::GaussianBlur, FilterKind::LensBlur, FilterKind::MotionBlur,
                                            FilterKind::RadialBlur, FilterKind::SurfaceBlur,   // s040
-                                           FilterKind::Displace,                                                                         // s043 m4
+                                           FilterKind::Displace, FilterKind::LensCorrection,                                             // s043 m4; s077
                                            FilterKind::Pinch, FilterKind::PolarCoordinates, FilterKind::Ripple, FilterKind::Shear, FilterKind::Spherize,   // s040 m4; s044 m2: Shear
                                            FilterKind::Twirl, FilterKind::Wave, FilterKind::ZigZag,                                    // s041 m3: Distort
                                            FilterKind::Diffuse, FilterKind::Emboss, FilterKind::FindEdges, FilterKind::Solarize,       // s042 m1: Stylize
@@ -1814,6 +1816,7 @@ Filter fresh(FilterKind k) {
         case FilterKind::Twirl:        f.angle = 50; break;    // s040 m4: Photoshop's
         case FilterKind::Pinch:        f.amount = 50; break;
         case FilterKind::Spherize:     f.amount = 100; break;
+        case FilterKind::LensCorrection: break;                // s077: nothing done until asked
         case FilterKind::PolarCoordinates: break;              // s041 m3: Rectangular to Polar
         case FilterKind::Ripple:       f.amount = 100; break;  // Medium
         case FilterKind::Wave:         f.radius = 120; f.amount = 35; f.generators = 5; f.wl_min = 10; f.amp_min = 5; break;   // s042 m4: Photoshop's
@@ -1863,7 +1866,7 @@ Filter normalised(const Filter& in) {
         case FilterKind::Mosaic: f.radius = std::round(std::clamp(f.radius, 2.0, 200.0)); break;   // s043 m1: the Cell Size
         case FilterKind::Crystallize: case FilterKind::Pointillize: f.radius = std::round(std::clamp(f.radius, 3.0, 300.0)); break;
         case FilterKind::Fragment: case FilterKind::Facet: case FilterKind::Mezzotint: case FilterKind::Fibers: f.radius = 1; break;
-        case FilterKind::Displace: case FilterKind::LensFlare: case FilterKind::Shear: f.radius = 1; break;   // s043 m4, s044
+        case FilterKind::Displace: case FilterKind::LensFlare: case FilterKind::Shear: case FilterKind::LensCorrection: f.radius = 1; break;   // s043 m4, s044, s077
         case FilterKind::Lighting: f.radius = std::round(std::clamp(f.radius, 5.0, 200.0)); break;   // s045 m1: its Reach
         case FilterKind::ColourHalftone: f.radius = std::round(std::clamp(f.radius, 4.0, 127.0)); break;   // s043 m2: the Max. Radius
         default:                     f.radius = std::round(std::clamp(f.radius, 0.1, 250.0) * 10) / 10; break;
@@ -1878,7 +1881,7 @@ Filter normalised(const Filter& in) {
     else if (f.kind == FilterKind::ReduceNoise) f.amount = std::round(std::clamp(f.amount, 0.0, 10.0));
     else if (f.kind == FilterKind::LensBlur) f.amount = std::round(std::clamp(f.amount, 0.0, 100.0));   // s039: its Noise
     else if (f.kind == FilterKind::RadialBlur) f.amount = std::round(std::clamp(f.amount, 1.0, 100.0));   // s040
-    else if (f.kind == FilterKind::Pinch || f.kind == FilterKind::Spherize || f.kind == FilterKind::ZigZag)
+    else if (f.kind == FilterKind::Pinch || f.kind == FilterKind::Spherize || f.kind == FilterKind::ZigZag || f.kind == FilterKind::LensCorrection)
         f.amount = std::round(std::clamp(f.amount, -100.0, 100.0));   // s040 m4, s041 m3
     else if (f.kind == FilterKind::Ripple) f.amount = std::round(std::clamp(f.amount, -999.0, 999.0));   // s041 m3
     else if (f.kind == FilterKind::Wave) f.amount = std::round(std::clamp(f.amount, 1.0, 999.0));
@@ -1906,6 +1909,15 @@ Filter normalised(const Filter& in) {
     if (f.kind == FilterKind::ReduceNoise) { f.preserve = pct(f.preserve); f.colour = pct(f.colour); f.sharpen = pct(f.sharpen); }
     else f.preserve = f.colour = f.sharpen = 0;
     if (f.kind != FilterKind::Maximum && f.kind != FilterKind::Minimum) f.round = false;   // m3
+    if (f.kind == FilterKind::LensCorrection) {   // s077
+        const auto pm = [](double v) { return std::round(std::clamp(v, -100.0, 100.0)); };
+        f.vignette = pm(f.vignette); f.fringe_rc = pm(f.fringe_rc); f.fringe_by = pm(f.fringe_by);
+        f.vignette_mid = std::round(std::clamp(f.vignette_mid, 0.0, 100.0));
+        f.lens_scale = std::round(std::clamp(f.lens_scale, 50.0, 150.0));
+    } else {
+        f.vignette = blank.vignette; f.vignette_mid = blank.vignette_mid; f.fringe_rc = blank.fringe_rc;
+        f.fringe_by = blank.fringe_by; f.lens_scale = blank.lens_scale;
+    }
     if (f.kind == FilterKind::LensBlur) {   // s037
         f.blades = std::round(std::clamp(f.blades, 3.0, 8.0));
         f.curvature = pct(f.curvature);
@@ -2003,6 +2015,7 @@ int reach(const Filter& in) {
         case FilterKind::Displace: return 1 << 16;   // s043 m4: anywhere the map sends it
         case FilterKind::LensFlare: return 0;         // s044 m1: by place, no neighbours
         case FilterKind::Shear:     return 1 << 16;   // s044 m2: the whole row
+        case FilterKind::LensCorrection: return 1 << 16;   // s077: from anywhere toward the middle
         case FilterKind::Lighting:  return f.texture ? 1 : 0;   // s045 m1: the relief's slope
         case FilterKind::FindEdges: return 1;   // s042 m1: the 3 x 3
         case FilterKind::Solarize:  return 0;
@@ -2164,6 +2177,47 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
         load_g();
         std::vector<float> res = gbuf;
         const double ex = whole_r.x + whole_r.w / 2.0, ey = whole_r.y + whole_r.h / 2.0, rx = whole_r.w / 2.0, ry = whole_r.h / 2.0;
+        // s077: LENS CORRECTION. Radius 1 at the corners; a pixel reads from
+        // the middle out by (1 + k r^2) / scale (k < 0 for + Remove
+        // Distortion: the edges read from nearer the middle -- barrel undone);
+        // red and blue by their fringe's own extra scale; then the vignette.
+        const auto lens_pixel = [&](double x, double y, float* o) {
+            const double R = std::max(1e-9, std::hypot(rx, ry));
+            const double px = x - ex, py = y - ey;
+            const double rr = (px * px + py * py) / (R * R);
+            const double g = (1 - f.amount / 100 * 0.25 * rr) / (f.lens_scale / 100);
+            const bool rgb = fmt.mode == pixel::Mode::RGB && cc >= 3;
+            const auto read = [&](double gs, int c0, int c1) {   // channels c0 .. c1 at the scaled point, bilinear
+                const double sx2 = ex + px * gs, sy2 = ey + py * gs;
+                const double bx = std::clamp(sx2 - 0.5 - G.x, 0.0, G.w - 1.0), by = std::clamp(sy2 - 0.5 - G.y, 0.0, G.h - 1.0);
+                const int x0 = static_cast<int>(bx), y0 = static_cast<int>(by);
+                const int x1 = std::min(x0 + 1, G.w - 1), y1 = std::min(y0 + 1, G.h - 1);
+                const float fx = static_cast<float>(bx - x0), fy = static_cast<float>(by - y0);
+                const auto P = [&](int qx, int qy) { return gbuf.data() + (static_cast<std::size_t>(qy) * static_cast<std::size_t>(G.w) + static_cast<std::size_t>(qx)) * static_cast<std::size_t>(C); };
+                const float *p00 = P(x0, y0), *p10 = P(x1, y0), *p01 = P(x0, y1), *p11 = P(x1, y1);
+                for (int c = c0; c <= c1; ++c)
+                    o[c] = (p00[c] * (1 - fx) + p10[c] * fx) * (1 - fy) + (p01[c] * (1 - fx) + p11[c] * fx) * fy;
+            };
+            read(g, 0, C - 1);
+            if (rgb && (f.fringe_rc != 0 || f.fringe_by != 0)) {
+                // A fringe's channel read a touch further in or out; its
+                // alpha is the green's (the outline doesn't move).
+                std::array<float, pixel::kMaxChannels + 1> keep{};
+                std::copy(o, o + C, keep.begin());
+                if (f.fringe_rc != 0) { read(g * (1 + f.fringe_rc / 100 * 0.01), 0, 0); keep[0] = o[0]; }
+                if (f.fringe_by != 0) { read(g * (1 + f.fringe_by / 100 * 0.01), 2, 2); keep[2] = o[2]; }
+                std::copy(keep.begin(), keep.begin() + C, o);
+                if (has_a) for (int c = 0; c < cc; ++c) o[c] = std::min(o[c], o[ai]);   // premultiplied: never past its alpha
+            }
+            if (f.vignette != 0 && (rgb || fmt.mode == pixel::Mode::Gray)) {
+                const double e0 = f.vignette_mid / 100 * 0.9, r1 = std::sqrt(rr);
+                double t = std::clamp((r1 - e0) / std::max(1e-6, 1.0 - e0), 0.0, 1.0);
+                t = t * t * (3 - 2 * t);
+                const float a = static_cast<float>(f.vignette / 100 * t);
+                const float al = has_a ? o[ai] : 1.f;
+                for (int c = 0; c < cc; ++c) o[c] = a > 0 ? o[c] + (al - o[c]) * a : o[c] * (1 + a);   // + toward white, - toward black
+            }
+        };
         std::atomic<int> nextrow{r.y};
         std::atomic<bool> quit{false};
         const auto work = [&] {
@@ -2176,6 +2230,10 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                         sx = x + 0.5 - m[0] * 256 * f.scale_h / 100;
                         sy = y + 0.5 - m[1] * 256 * f.scale_v / 100;
                         if (f.wrap) { sx = std::fmod(std::fmod(sx, IW) + IW, IW); sy = std::fmod(std::fmod(sy, IH) + IH, IH); }
+                    } else if (f.kind == FilterKind::LensCorrection) {   // s077: per channel, then the vignette
+                        float* o = res.data() + (static_cast<std::size_t>(y - G.y) * static_cast<std::size_t>(G.w) + static_cast<std::size_t>(x - G.x)) * static_cast<std::size_t>(C);
+                        lens_pixel(x + 0.5, y + 0.5, o);
+                        continue;
                     } else if (!warp_source(f, ex, ey, rx, ry, x + 0.5, y + 0.5, sx, sy)) continue;
                     const double bx = std::clamp(sx - 0.5 - G.x, 0.0, G.w - 1.0), by = std::clamp(sy - 0.5 - G.y, 0.0, G.h - 1.0);
                     const int x0 = static_cast<int>(bx), y0 = static_cast<int>(by);

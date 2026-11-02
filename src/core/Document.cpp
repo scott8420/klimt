@@ -12,6 +12,7 @@
 #include "core/Rulers.hpp"      // s031: the zero point
 #include "core/Transform.hpp"   // s011: Free Transform, flips, rotations
 #include "core/Liquify.hpp"     // s076: Liquify
+#include "core/Snapshot.hpp"    // s077: History's snapshots
 #include "core/Gradient.hpp"    // s012: the Gradient tool
 #include "core/Heal.hpp"        // s015 m3: the healing brushes
 #include "core/Live.hpp"        // s018: live filters
@@ -1392,6 +1393,10 @@ const std::vector<Verb>& verbs() {
         {"warp",          [](DocJournal& j, Document& d) {   // s074 / s075
              xform::warp(j, d, {"L4"}, [](const pixel::Rect& b) { return xform::warp_preset(xform::WarpStyle::Flag, b, 40); }, "Warp",
                          pixel::rgba(1, 1, 1, 1)); }},
+        {"snapshot",      [](DocJournal& j, Document& d) {   // s077: back to a snapshot without the empty layer (L5) -- one step
+             auto s = snapshot::take(d, "Snapshot 1");
+             s.records.erase("L5");
+             snapshot::restore(j, d, s); }},
         {"liquify",       [](DocJournal& j, Document& d) {   // s076
              liquify::Field f(d.image().width, d.image().height);
              f.dab({liquify::Tool::Forward, 40, 1, 0.5}, {200, 175}, {20, 5});

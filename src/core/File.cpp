@@ -529,6 +529,8 @@ json live_json(const LiveFilter& lf) {
             {"shear", f.shear},                   // s044 m2: Shear's curve
             {"hotspot", f.hotspot}, {"ambient", f.ambient}, {"gloss", f.gloss}, {"height", f.height}, {"texture", f.texture},   // s045 m1
             {"generators", f.generators}, {"wl_min", f.wl_min}, {"amp_min", f.amp_min},   // s042 m4: Wave
+            {"vignette", f.vignette}, {"vignette_mid", f.vignette_mid}, {"fringe_rc", f.fringe_rc}, {"fringe_by", f.fringe_by},
+            {"lens_scale", f.lens_scale},   // s077: Lens Correction
             {"ridges", f.ridges}, {"scale_h", f.scale_h}, {"scale_v", f.scale_v}, {"wrap", f.wrap}};   // s041 m3
 }
 std::optional<LiveFilter> live_from(const json& j) {
@@ -571,6 +573,11 @@ std::optional<LiveFilter> live_from(const json& j) {
     lf.f.cy = j.value("cy", 50.0);
     lf.f.axis = j.value("axis", 0);   // s040 m4
     lf.f.ridges = j.value("ridges", 5.0);   // s041 m3
+    lf.f.vignette = j.value("vignette", 0.0);   // s077: Lens Correction
+    lf.f.vignette_mid = j.value("vignette_mid", 50.0);
+    lf.f.fringe_rc = j.value("fringe_rc", 0.0);
+    lf.f.fringe_by = j.value("fringe_by", 0.0);
+    lf.f.lens_scale = j.value("lens_scale", 100.0);
     lf.f.depth_channel = j.value("depth_channel", std::string());   // s041 m4
     lf.f.from_left = j.value("from_left", false);                     // s042 m2
     // s042 m4: Wave's generators -- absent (s041's file): one, the min the max (as it looked).

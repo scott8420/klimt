@@ -117,6 +117,7 @@ const std::vector<Command>& commands() {
             {"Displace", "Filter", "win.filter-displace", "", "filter distort displace displacement map texture warp layer", ""},   // s043 m4
             {"Pinch", "Filter", "win.filter-pinch", "", "filter distort squeeze bulge shrink", ""},
             {"Spherize", "Filter", "win.filter-spherize", "", "filter distort sphere bulge fisheye lens dent", ""},
+            {"Lens Correction", "Filter", "win.filter-lens-correction", "", "filter distort lens barrel pincushion vignette fringe chromatic aberration", ""},   // s077
             {"Polar Coordinates", "Filter", "win.filter-polar-coordinates", "", "filter distort polar rectangular circle tiny planet unwrap", ""},   // s041 m3
             {"Ripple", "Filter", "win.filter-ripple", "", "filter distort ripple water wobble", ""},
             {"Wave", "Filter", "win.filter-wave", "", "filter distort wave sine triangle square wrap", ""},
@@ -158,6 +159,7 @@ const std::vector<Command>& commands() {
             {"New Filter Layer: Twirl", "Layer", "win.filter-layer-twirl", "", "filter layer live non-destructive distort swirl whirl", ""},   // s040 m4
             {"New Filter Layer: Pinch", "Layer", "win.filter-layer-pinch", "", "filter layer live non-destructive distort squeeze", ""},
             {"New Filter Layer: Spherize", "Layer", "win.filter-layer-spherize", "", "filter layer live non-destructive distort sphere bulge", ""},
+            {"New Filter Layer: Lens Correction", "Layer", "win.filter-layer-lens-correction", "", "filter layer live non-destructive distort lens barrel vignette fringe", ""},
             {"New Filter Layer: Polar Coordinates", "Layer", "win.filter-layer-polar-coordinates", "", "filter layer live non-destructive distort polar", ""},   // s041 m3
             {"New Filter Layer: Ripple", "Layer", "win.filter-layer-ripple", "", "filter layer live non-destructive distort ripple", ""},
             {"New Filter Layer: Wave", "Layer", "win.filter-layer-wave", "", "filter layer live non-destructive distort wave", ""},

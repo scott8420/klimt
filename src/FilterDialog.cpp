@@ -443,6 +443,14 @@ void FilterDialog::rebuild() {
             });
             break;
         }
+        case FilterKind::LensCorrection:   // s077: about the middle of the selection's bounds (or the picture)
+            row("filter.lens_distort", "Remove Distortion", -100, 100, 0, false, "", &m_f.amount);
+            row("filter.fringe_rc", "Fix Red / Cyan Fringe", -100, 100, 0, false, "", &m_f.fringe_rc);
+            row("filter.fringe_by", "Fix Blue / Yellow Fringe", -100, 100, 0, false, "", &m_f.fringe_by);
+            row("filter.vignette", "Vignette Amount", -100, 100, 0, false, "", &m_f.vignette);
+            row("filter.vignette_mid", "Vignette Midpoint", 0, 100, 0, false, "", &m_f.vignette_mid);
+            row("filter.lens_scale", "Scale", 50, 150, 0, false, "%", &m_f.lens_scale);
+            break;
         case FilterKind::None: break;
     }
 }

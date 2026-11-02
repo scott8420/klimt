@@ -2,6 +2,7 @@
 // resample through it, the verb.
 #include "core/Document.hpp"
 #include "core/Liquify.hpp"
+#include "core/Filter.hpp"   // s077: Lens Correction
 #include "core/Text.hpp"
 
 #include <cmath>
@@ -122,5 +123,86 @@ void selftest_liquify(const Check& check) {
         core::layers::set_locks(t.j, t.d, "L4", core::lock::Pixels);
         check("liquify: a Pixels lock refused", !L::refusal(t.d, "L4").empty(), "");
         check("liquify: an empty layer refused", !L::refusal(t.d, "L5").empty(), "");
+    }
+
+    // ── s077: Lens Correction (a Distort filter) ───────────────────────────
+    std::cout << "\n-- lens correction (s077) --\n";
+    namespace F = klimt::core::filter;
+    using klimt::core::FilterKind;
+    {
+        const auto f = F::fresh(FilterKind::LensCorrection);
+        check("lens: under Distort, named", F::group(FilterKind::LensCorrection) == "Distort" && F::label(FilterKind::LensCorrection) == "Lens Correction", "");
+        auto big = f; big.amount = 300; big.vignette = -400; big.vignette_mid = 120; big.fringe_rc = 999; big.lens_scale = 10;
+        const auto n = F::normalised(big);
+        check("lens: normalised -- -100..100, Midpoint 0..100, Scale 50..150",
+              n.amount == 100 && n.vignette == -100 && n.vignette_mid == 100 && n.fringe_rc == 100 && n.lens_scale == 50, "");
+        auto g = F::fresh(FilterKind::GaussianBlur); g.vignette = 30; g.lens_scale = 120;
+        check("lens: its settings go back on another kind", F::normalised(g).vignette == 0 && F::normalised(g).lens_scale == 100, "");
+        // The fresh one changes nothing.
+        P::TileMap m(P::Format{}, 400, 300);
+        m = m.fill({0, 0, 400, 300}, P::rgba(0.5f, 0.5f, 0.5f, 1)).fill({120, 60, 30, 30}, P::rgba(1, 0, 0, 1));
+        const auto out = F::filtered(m, f, nullptr);
+        bool same = out.has_value();
+        for (int y = 0; y < 300 && same; y += 7)
+            for (int x = 0; x < 400 && same; x += 7) same = std::abs(out->get(x, y).c[0] - m.get(x, y).c[0]) < 1e-4f;
+        check("lens: nothing asked, nothing changed", same, "");
+    }
+    {
+        // A dark vertical line near the right edge; Remove Distortion + (barrel
+        // undone) moves the edges out -- more at the corners than at the middle.
+        P::TileMap m(P::Format{}, 400, 300);
+        m = m.fill({0, 0, 400, 300}, P::rgba(1, 1, 1, 1)).fill({360, 0, 3, 300}, P::rgba(0, 0, 0, 1));
+        auto f = F::fresh(FilterKind::LensCorrection);
+        f.amount = 60;
+        const auto out = F::filtered(m, f, nullptr);
+        const auto line_at = [&](int y) { int best = -1; float lo = 2; for (int x = 300; x < 400; ++x) if (out->get(x, y).c[0] < lo) { lo = out->get(x, y).c[0]; best = x; } return best; };
+        const int mid = line_at(150), top = line_at(5);
+        check("lens: Remove Distortion + moves the edge out", mid > 362, std::to_string(mid));
+        check("lens: ...more at the corners (the bow taken out)", top > mid, std::to_string(top) + " vs " + std::to_string(mid));
+        f.amount = -60;
+        const auto in = F::filtered(m, f, nullptr);
+        int lo_x = -1; float lo = 2;
+        for (int x = 300; x < 400; ++x) if (in->get(x, 150).c[0] < lo) { lo = in->get(x, 150).c[0]; lo_x = x; }
+        check("lens: Remove Distortion - moves it in", lo_x < 361, std::to_string(lo_x));
+    }
+    {
+        // Scale 125: the middle stays, the rest grows from it.
+        P::TileMap m(P::Format{}, 400, 300);
+        m = m.fill({0, 0, 400, 300}, P::rgba(1, 1, 1, 1)).fill({190, 140, 20, 20}, P::rgba(0, 0, 0, 1)).fill({290, 145, 4, 10}, P::rgba(0, 0, 0, 1));
+        auto f = F::fresh(FilterKind::LensCorrection);
+        f.lens_scale = 125;
+        const auto out = F::filtered(m, f, nullptr);
+        check("lens: Scale -- the middle stays", out->get(200, 150).c[0] < 0.05f, "");
+        check("lens: Scale -- the rest grows from it", out->get(316, 150).c[0] < 0.3f && out->get(292, 150).c[0] > 0.9f, "");
+    }
+    {
+        // Vignette: - darkens the corners, + lightens them, the middle kept.
+        P::TileMap m(P::Format{}, 400, 300);
+        m = m.fill({0, 0, 400, 300}, P::rgba(0.5f, 0.5f, 0.5f, 1));
+        auto f = F::fresh(FilterKind::LensCorrection);
+        f.vignette = -100;
+        const auto dk = F::filtered(m, f, nullptr);
+        f.vignette = 100;
+        const auto lt = F::filtered(m, f, nullptr);
+        check("lens: Vignette - darkens the corners", dk->get(1, 1).c[0] < 0.1f && std::abs(dk->get(200, 150).c[0] - 0.5f) < 0.01f, std::to_string(dk->get(1, 1).c[0]));
+        check("lens: Vignette + lightens them", lt->get(398, 298).c[0] > 0.9f && std::abs(lt->get(200, 150).c[0] - 0.5f) < 0.01f, "");
+        f.vignette = -100; f.vignette_mid = 0;
+        const auto wide = F::filtered(m, f, nullptr);
+        check("lens: a smaller Midpoint reaches further in", wide->get(100, 75).c[0] < dk->get(100, 75).c[0] - 0.02f, "");
+    }
+    {
+        // A fringe moves one channel only: red off the white line, green kept.
+        P::TileMap m(P::Format{}, 400, 300);
+        m = m.fill({0, 0, 400, 300}, P::rgba(0, 0, 0, 1)).fill({370, 0, 2, 300}, P::rgba(1, 1, 1, 1));
+        auto f = F::fresh(FilterKind::LensCorrection);
+        f.fringe_rc = 100;
+        const auto out = F::filtered(m, f, nullptr);
+        bool split = false, green_kept = true;
+        for (int x = 360; x < 380; ++x) {
+            const auto p = out->get(x, 150), o = m.get(x, 150);
+            if (std::abs(p.c[0] - p.c[1]) > 0.3f) split = true;
+            green_kept = green_kept && std::abs(p.c[1] - o.c[1]) < 1e-4f;
+        }
+        check("lens: Fix Red / Cyan Fringe moves the red only", split && green_kept, "");
     }
 }

@@ -314,6 +314,14 @@ void FilterLayerEditor::rebuild() {
         case FilterKind::Pinch:
             row("filter_layer.amount", "Amount", -100, 100, 0, false, "%", &m_f.amount);
             break;
+        case FilterKind::LensCorrection:   // s077
+            row("filter_layer.lens_distort", "Remove Distortion", -100, 100, 0, false, "", &m_f.amount);
+            row("filter_layer.fringe_rc", "Fix Red / Cyan Fringe", -100, 100, 0, false, "", &m_f.fringe_rc);
+            row("filter_layer.fringe_by", "Fix Blue / Yellow Fringe", -100, 100, 0, false, "", &m_f.fringe_by);
+            row("filter_layer.vignette", "Vignette Amount", -100, 100, 0, false, "", &m_f.vignette);
+            row("filter_layer.vignette_mid", "Vignette Midpoint", 0, 100, 0, false, "", &m_f.vignette_mid);
+            row("filter_layer.lens_scale", "Scale", 50, 150, 0, false, "%", &m_f.lens_scale);
+            break;
         case FilterKind::Spherize:
             row("filter_layer.amount", "Amount", -100, 100, 0, false, "%", &m_f.amount);
             choice("filter_layer.axis", "Mode", {"Normal", "Horizontal only", "Vertical only"}, [this] { return m_f.axis; },
