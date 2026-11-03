@@ -218,7 +218,35 @@ private:
     std::size_t m_sweep_at = 0;
     std::uint64_t m_sweep_mark = 0;
     int m_sweep_failed = 0;
-    int m_sweep_waits = 0;                            // category: select: s089 Edit > AI Models… -- what's in the folder   // category: select: s089 the Select tool's Object -- a box, a model (a job)                // category: select: s088 Edit > Content-Aware Fill -- LaMa through the selection, a new layer (a job)                 // category: select: s087 Layer > Remove Background -- a layer mask from the model (a job)                    // category: select: s086 Select > Subject -- a local model (libs/seg), a job
+    // s091: KLIMT_SWEEP_OK=1 -- each dialog's OK pressed (not just closed);
+    // the step it lands named, then undone.
+    bool m_sweep_ok = false;
+    bool m_sweep_pressed = false;
+    int m_sweep_landed = 0;
+    // s091: KLIMT_SWEEP=canvas (scripts/sweep_canvas.sh) -- the tools driven
+    // on the canvas. The app says where to press (KLIMT_FINGERS, a file of
+    // lines); the script's xdotool presses under Xvfb and acks.
+public:   // s091: the scene table (Shell_sweep_canvas.cpp's file scope) builds these
+    struct SweepBeat {
+        enum class K { Tool, Variant, Action, Widget, Drag, Click, Key, Type, Shot } k;
+        std::string s;                                   // tool / action / widget name / key / text
+        int v = 0;                                       // variant / clicks
+        std::vector<std::array<double, 2>> pts;          // image fractions (0..1)
+        std::string mods;                                // "shift", "alt", "ctrl", "shift+alt"
+    };
+    struct SweepScene { std::string name; bool step; std::vector<SweepBeat> beats; };   // step: one is expected
+private:
+    void start_canvas_sweep();                   // category: glue: s091 every tool on the canvas, logged
+    void canvas_step();
+    void canvas_beat();
+    void canvas_cleanup();
+    bool finger(const std::string& line);        // false: no fingers file
+    bool widget_point(Gtk::Widget& w, double x, double y, double& wx, double& wy);
+    std::vector<SweepScene> m_scenes;
+    std::size_t m_scene_at = 0, m_beat_at = 0;
+    int m_finger_n = 0, m_scene_bad = 0, m_canvas_waits = 0;
+    std::string m_fingers;
+    int m_sweep_waits = 0;                      // category: select: s089 Edit > AI Models… -- what's in the folder   // category: select: s089 the Select tool's Object -- a box, a model (a job)                // category: select: s088 Edit > Content-Aware Fill -- LaMa through the selection, a new layer (a job)                 // category: select: s087 Layer > Remove Background -- a layer mask from the model (a job)                    // category: select: s086 Select > Subject -- a local model (libs/seg), a job
     void say_model_missing(const std::string& verb, const std::string& model_key, const std::string& words);   // category: select: s086 where the model goes, and from where
     void on_fill(bool foreground);               // category: select: Alt / Ctrl+Backspace
     void on_delete_selection();                  // category: select: Delete / Backspace on the canvas

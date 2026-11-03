@@ -4,6 +4,7 @@
 #include "core/Selection.hpp"
 
 #include <glibmm/main.h>
+#include <gtkmm/button.h>
 #include <gtkmm/window.h>
 
 #include <cstdlib>
@@ -28,6 +29,24 @@ bool skipped(const std::string& action) {
     };
     return skip.count(action) > 0;
 }
+// s091 (KLIMT_SWEEP_OK): dialogs whose OK writes the user's settings or
+// library, not the picture -- closed, never OK'd.
+bool close_only(const std::string& action) {
+    static const std::set<std::string> keep = {
+        "win.colour-settings", "win.shortcuts", "win.proof-setup", "win.batch", "win.define-pattern",
+        "win.action-new", "win.action-record", "win.ai-models", "win.about",
+    };
+    return keep.count(action) > 0;
+}
+// A dialog's OK: the shown, suggested-action button (every dialog of ours
+// marks its OK so).
+Gtk::Button* ok_of(Gtk::Widget& w) {
+    if (!w.get_visible()) return nullptr;
+    if (auto* b = dynamic_cast<Gtk::Button*>(&w); b && b->has_css_class("suggested-action")) return b;
+    for (auto* c = w.get_first_child(); c; c = c->get_next_sibling())
+        if (auto* b = ok_of(*c)) return b;
+    return nullptr;
+}
 }  // namespace
 
 void Shell::start_sweep() {
@@ -39,7 +58,9 @@ void Shell::start_sweep() {
         if (!skipped(c.action) && (!only || c.action.find(only) != std::string::npos)) m_sweep.push_back(&c);
     m_sweep_at = 0;
     m_sweep_failed = 0;
-    if (auto lg = log::get(log::Area::Shell)) lg->info("sweep: {} commands", m_sweep.size());
+    m_sweep_landed = 0;
+    m_sweep_ok = std::getenv("KLIMT_SWEEP_OK") != nullptr;
+    if (auto lg = log::get(log::Area::Shell)) lg->info("sweep: {} commands{}", m_sweep.size(), m_sweep_ok ? ", each dialog's OK pressed" : "");
     Glib::signal_timeout().connect_once([this] { sweep_step(); }, 800);
 }
 
@@ -48,8 +69,18 @@ void Shell::start_sweep() {
 // Feather, Content-Aware Fill ...).
 void Shell::sweep_setup() {
     m_sweep_layer.clear();
+    // s091: the pixel layer that covers the most picture (the demo's top
+    // pixel layer is the Title bar -- a smudge or a warp in the middle of the
+    // picture found nothing of it to move); not a locked one (the Background).
+    std::size_t most = 0;
     for (const auto& id : m_doc.walk())
-        if (const auto l = m_doc.get(id); l && l->kind == core::Kind::Pixel && l->pixels) { m_sweep_layer = id; break; }
+        if (const auto l = m_doc.get(id); l && l->kind == core::Kind::Pixel && l->pixels && !l->locks && l->pixels->tile_count() > most) {
+            most = l->pixels->tile_count();
+            m_sweep_layer = id;
+        }
+    if (const char* want = std::getenv("KLIMT_SWEEP_LAYER"))   // s091: a layer by name (the demo's Skin -- colour to filter)
+        for (const auto& id : m_doc.walk())
+            if (const auto l = m_doc.get(id); l && l->name == want) { m_sweep_layer = id; break; }
     if (!m_sweep_layer.empty()) m_layers.select({m_sweep_layer}, false);
     const char* s = std::getenv("KLIMT_SWEEP");
     if (s && std::string(s) == "2") {
@@ -70,6 +101,24 @@ void Shell::sweep_step() {
         m_jobs.cancel_all();
     }
     m_sweep_waits = 0;
+    // s091 (KLIMT_SWEEP_OK): the dialog's OK first, and its job waited for.
+    if (m_sweep_ok && !m_sweep_pressed && m_sweep_at > 0 && !close_only(m_sweep[m_sweep_at - 1]->action)) {
+        m_sweep_pressed = true;
+        bool any = false;
+        for (auto* w : Gtk::Window::list_toplevels()) {
+            if (w == this || !w->get_visible()) continue;
+            auto* b = ok_of(*w);
+            if (!b) continue;
+            const std::string label = b->get_label();
+            if (!b->is_sensitive()) { if (lg) lg->info("sweep:   OK greyed (\"{}\" in \"{}\")", label, std::string(w->get_title())); continue; }
+            if (lg) lg->info("sweep:   pressed \"{}\" in \"{}\"", label, std::string(w->get_title()));
+            b->activate();
+            any = true;
+            break;   // one OK a tick: it may close the dialog (and the list)
+        }
+        if (any) { Glib::signal_timeout().connect_once([this] { sweep_step(); }, 350); return; }
+    }
+    m_sweep_pressed = false;
     // Close what it opened: every other window of ours (a dialog, an alert).
     for (auto* w : Gtk::Window::list_toplevels())
         if (w != this && w->get_visible()) {
@@ -78,10 +127,12 @@ void Shell::sweep_step() {
         }
     // Its step undone, so the next command finds the demo as it was.
     if (m_sweep_at > 0 && m_journal.mark() != m_sweep_mark) {
+        if (lg) lg->info("sweep:   landed \"{}\"", m_journal.undo_label());
+        ++m_sweep_landed;
         while (m_journal.can_undo() && m_journal.mark() != m_sweep_mark) m_journal.undo();
     }
     if (m_sweep_at >= m_sweep.size()) {
-        if (lg) lg->info("sweep: done -- {} commands, {} refused to run", m_sweep.size(), m_sweep_failed);
+        if (lg) lg->info("sweep: done -- {} commands, {} landed a step, {} refused to run", m_sweep.size(), m_sweep_landed, m_sweep_failed);
         Glib::signal_timeout().connect_once([this] { m_closing = true; close(); }, 500);
         return;
     }

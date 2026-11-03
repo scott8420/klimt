@@ -374,7 +374,7 @@ void ContextStrip::show_transform(int kind) {
     m_warp_box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
     {
         auto mb = Gtk::make_managed<Gtk::MenuButton>();
-        mb->set_name("strip.transform.warp");
+        mb->set_name("strip.transform.warp_options");
         mb->set_tooltip_text("Warp's Style -- a ready-made warp, shaped by Bend; drag a point afterwards and it's yours (Custom)");
         m_warp_mb = mb;
         auto pop = Gtk::make_managed<Gtk::Popover>();

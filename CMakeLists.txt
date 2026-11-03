@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s090")
+set(KLIMT_BUILD "s091")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -261,6 +261,7 @@ add_executable(klimt
     src/Shell_history.cpp
     src/Shell_actions.cpp
     src/Shell_sweep.cpp
+    src/Shell_sweep_canvas.cpp   # s091: the tools driven on the canvas (scripts/sweep_canvas.sh)
     src/Shell_masks.cpp
     src/Shell_tabs.cpp
     src/Shell_adjust.cpp      # s013: adjustment layers, Image > Adjustments

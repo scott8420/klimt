@@ -240,6 +240,7 @@ void Shell::update_summary() {   // s012: says when the mask is what's painted
 
 // A toast. With `offer_undo`, its button is Undo (the step just taken).
 void Shell::toast(const std::string& text, bool offer_undo) {
+    if (auto lg = log::get(log::Area::Shell)) lg->info("toast: {}", text);   // s091: what the user was told, in the log (the sweeps)
     if (!m_toasts) return;
     // s090 (the sweep: "Black & White 1 …" -- a GTK warning and no words): a
     // toast's title is markup, so a layer's or a file's name with & or < in
