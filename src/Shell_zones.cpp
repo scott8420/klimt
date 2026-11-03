@@ -193,7 +193,13 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
         adw_overlay_split_view_set_min_sidebar_width(m_split, w);
         adw_overlay_split_view_set_max_sidebar_width(m_split, w);
     });
-    adw_overlay_split_view_set_content(m_split, GTK_WIDGET(content->gobj()));
+    // Toasts ("Deleted “Hair”  Undo") over the picture's side only. s093 (the
+    // canvas sweep): over the whole window, a toast sat on the dock's foot --
+    // "■ in Actions stops" lay over the ■, and Channels' Save was under the
+    // "Saved as Alpha 1" toast for the next two seconds.
+    m_toasts = ADW_TOAST_OVERLAY(adw_toast_overlay_new());
+    adw_toast_overlay_set_child(m_toasts, GTK_WIDGET(content->gobj()));
+    adw_overlay_split_view_set_content(m_split, GTK_WIDGET(m_toasts));
     adw_overlay_split_view_set_sidebar(m_split, GTK_WIDGET(build_dock().gobj()));
     gtk_widget_set_vexpand(GTK_WIDGET(m_split), TRUE);
     m_outer.append(*Glib::wrap(GTK_WIDGET(m_split)));
@@ -207,10 +213,7 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     m_status.signal_cancel().connect(sigc::mem_fun(*this, &Shell::on_job_cancel));
     m_outer.append(*status_box);
 
-    // Toasts over everything ("Deleted “Hair”  Undo").
-    m_toasts = ADW_TOAST_OVERLAY(adw_toast_overlay_new());
-    adw_toast_overlay_set_child(m_toasts, GTK_WIDGET(m_outer.gobj()));
-    gtk_window_set_child(GTK_WINDOW(gobj()), GTK_WIDGET(m_toasts));
+    gtk_window_set_child(GTK_WINDOW(gobj()), GTK_WIDGET(m_outer.gobj()));
 
     // The canvas surround follows dark / light (neutral either way).
     auto* sm = adw_style_manager_get_default();

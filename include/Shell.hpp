@@ -50,6 +50,7 @@
 // few Adw widgets as C pointers, owned by their GTK parents).
 typedef struct _AdwOverlaySplitView AdwOverlaySplitView;
 typedef struct _AdwToastOverlay AdwToastOverlay;
+typedef struct _AdwToast AdwToast;
 typedef struct _AdwWindowTitle AdwWindowTitle;
 typedef struct _AdwTabView AdwTabView;   // s020
 typedef struct _AdwTabBar AdwTabBar;
@@ -231,13 +232,15 @@ private:
     // lines); the script's xdotool presses under Xvfb and acks.
 public:   // s091: the scene table (Shell_sweep_canvas.cpp's file scope) builds these
     struct SweepBeat {
-        enum class K { Tool, Variant, Action, Widget, Drag, Click, Key, Type, Shot, Row, RowDrag, Slide, Mark } k;   // s092: Row, RowDrag, Slide -- the panels
+        enum class K { Tool, Variant, Action, Widget, Drag, Click, Key, Type, Shot, Row, RowDrag, Slide, Mark, RowButton } k;   // s092: Row, RowDrag, Slide -- the panels; s093: RowButton -- a button inside a row
         std::string s;                                   // tool / action / widget name / key / text
         int v = 0;                                       // variant / clicks / row (s092)
         std::vector<std::array<double, 2>> pts;          // image fractions (0..1)
         std::string mods;                                // "shift", "alt", "ctrl", "shift+alt"
     };
-    struct SweepScene { std::string name; bool step; std::vector<SweepBeat> beats; };   // step: one is expected
+    // step: one is expected. s093: check -- what else must hold at the end
+    // (the actions library, a dialog on show; canvas_check() reads it).
+    struct SweepScene { std::string name; bool step; std::vector<SweepBeat> beats; std::string check = {}; };
 private:
     void start_canvas_sweep();                   // category: glue: s091 every tool on the canvas, logged
     void start_canvas_run();
@@ -246,7 +249,14 @@ private:
     void canvas_cleanup();
     bool finger(const std::string& line);        // false: no fingers file
     bool widget_point(Gtk::Widget& w, double x, double y, double& wx, double& wy);
+    Gtk::Widget* sweep_named(const std::string& name);   // s093: the registry, else the tree -- mapped only
+    bool sweep_reveal(Gtk::Widget& w);           // s093: scrolled into its panel's view (true: it moved)
+    std::string canvas_check(const std::string& what);   // s093: "" -- it holds; else what didn't
     std::vector<SweepScene> m_scenes;
+    std::vector<core::actions::Action> m_sweep_actions;   // s093: the library as the sweep found it (put back after each scene)
+    std::size_t m_sweep_actions_n = 0;
+    bool m_revealing = false;
+    bool m_sweep_toasts = false;                 // s093: toasts kept (m_toasts_up) for the canvas sweep to dismiss
     std::size_t m_scene_at = 0, m_beat_at = 0;
     int m_finger_n = 0, m_scene_bad = 0, m_canvas_waits = 0;
     std::uint64_t m_expect_mark = 0;               // s092: steps counted from here (a scene's setup before it)
@@ -458,6 +468,7 @@ private:
     Gtk::Widget*       m_strip_box = nullptr;  // the strip's frame (Tab hides it); managed
     AdwOverlaySplitView* m_split = nullptr;    // content | dock (collapsible)
     AdwToastOverlay*     m_toasts = nullptr;
+    std::vector<AdwToast*> m_toasts_up;            // s093: the sweep dismisses what's still up between scenes (refs held)
     bool               m_panels = true;        // Tab hides rail, strip and dock
     // The hiding tabs (s006): click hides / shows; the dock's drag sizes it.
     EdgeTab            m_rail_tab{"shell.rail_tab", EdgeTab::Side::Left, false};

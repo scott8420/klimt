@@ -253,6 +253,7 @@ void Shell::toast(const std::string& text, bool offer_undo) {
         adw_toast_set_button_label(t, "Undo");
         adw_toast_set_action_name(t, "win.undo");
     }
+    if (m_sweep_toasts) m_toasts_up.push_back(ADW_TOAST(g_object_ref(t)));   // s093: the canvas sweep clears them between scenes
     adw_toast_overlay_add_toast(m_toasts, t);   // takes the toast
 }
 

@@ -1,11 +1,17 @@
 #include "Shell.hpp"
+
+#include <adwaita.h>
 #include "Log.hpp"
 #include "core/Selection.hpp"
 #include "core/Tools.hpp"
 #include "Registry.hpp"
 
 #include <glibmm/main.h>
+#include <gtkmm/adjustment.h>
+#include <gtkmm/button.h>
+#include <gtkmm/checkbutton.h>
 #include <gtkmm/listbox.h>
+#include <gtkmm/scrolledwindow.h>
 #include <gtkmm/window.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/x11/gdkx.h>
@@ -45,7 +51,12 @@ B type(const std::string& t) { return {K::Type, t, 0, {}, {}}; }
 // s092: the panels. A row of a named list (x: a fraction of its width -- the
 // eye at the left, the name further in), clicked n times; a row dragged onto
 // another; a named slider dragged from one fraction of its width to another.
-B row(const std::string& list, int i, double x = 0.6, int n = 1) { return {K::Row, list, i, {{x, static_cast<double>(n)}}, {}}; }
+B row(const std::string& list, int i, double x = 0.6, int n = 1, const std::string& mods = {}) { return {K::Row, list, i, {{x, static_cast<double>(n)}}, mods}; }
+// s093: the k-th button (or check box) inside row i of a named list -- a
+// colour channel's Load / Duplicate, an action's arrow, a step's tick.
+B row_button(const std::string& list, int i, int k) { return {K::RowButton, list, i, {{static_cast<double>(k), 0}}, {}}; }
+// s093: the dock's tabs -- 0 Layers, 1 Channels, 2 History, 3 Actions.
+B tab(int i) { return {K::Row, "dock.tabs", i, {{0.5, 1}}, {}}; }
 B row_drag(const std::string& list, int from, int to) { return {K::RowDrag, list, from, {{0.6, static_cast<double>(to)}}, {}}; }
 // s092: the setup is done -- the scene's expected step is counted from here.
 B mark() { return {K::Mark, {}, 0, {}, {}}; }
@@ -106,7 +117,39 @@ std::vector<Shell::SweepScene> scenes() {
         {"properties: fill dragged", true, {slide("properties.fill", 0.9, 0.5)}},
         {"properties: lock alpha", true, {widget("properties.lock.alpha")}},
         {"properties: blend picked from the list", true, {widget("properties.blend"), key("Down"), key("Down"), key("Return")}},
-        {"history: a stroke, then the row before it", false, {tool("brush"), drag(stroke), row("dock.tabs", 2, 0.5), row("history.list", 0)}},
+        {"history: a stroke, then the row before it", false, {tool("brush"), drag(stroke), tab(2), row("history.list", 0)}},
+        // ── channels (s093) ──
+        {"channels: the selection saved", true, {tool("select", 0), drag(box), mark(), tab(1), widget("dock.channels.save")}, "channels=1"},
+        {"channels: a saved one loaded", true, {tool("select", 0), drag(box), tab(1), widget("dock.channels.save"), action("deselect"), mark(),
+                                                row("dock.channels.list", 0)}},
+        {"channels: double-click renames, typed, Enter", true, {tool("select", 0), drag(box), tab(1), widget("dock.channels.save"), mark(),
+                                                                row("dock.channels.list", 0, 0.5, 2), key("ctrl+a"), type("Swept"), key("Return")}, "channel0=Swept"},
+        {"channels: a saved one deleted", true, {tool("select", 0), drag(box), tab(1), widget("dock.channels.save"), mark(),
+                                                 row("dock.channels.list", 0), widget("dock.channels.remove")}, "channels=0"},
+        {"channels: the red one viewed", false, {tab(1), row("dock.channels.colour", 1, 0.3)}, "viewing=0"},
+        {"channels: Ctrl-click red loads it", true, {tab(1), row("dock.channels.colour", 1, 0.3, 1, "ctrl")}},
+        {"channels: red duplicated", true, {tab(1), row_button("dock.channels.colour", 1, 1)}, "channels=1"},
+        // ── paths: a path layer's row and its Properties (s093; the Paths tab went at m4) ──
+        {"paths: the outline hidden", false, {tool("pen", 0), click(0.3, 0.3), click(0.7, 0.3), click(0.5, 0.7), click(0.3, 0.3), mark(),
+                                              widget("layers.path_outline")}, "outline-off"},
+        {"paths: mask below switched on", true, {tool("pen", 0), click(0.3, 0.3), click(0.7, 0.3), click(0.5, 0.7), click(0.3, 0.3), mark(),
+                                                 widget("properties.path.mask")}},
+        {"paths: be the selection", true, {tool("pen", 0), click(0.3, 0.3), click(0.7, 0.3), click(0.5, 0.7), click(0.3, 0.3), mark(),
+                                           widget("properties.path.select")}},
+        {"paths: loaded as a selection", true, {tool("pen", 0), click(0.3, 0.3), click(0.7, 0.3), click(0.5, 0.7), click(0.3, 0.3), mark(),
+                                                widget("properties.path.load")}},
+        {"paths: Ctrl+Enter loads it", true, {tool("pen", 0), click(0.3, 0.3), click(0.7, 0.3), click(0.5, 0.7), click(0.3, 0.3), mark(),
+                                              key("ctrl+Return")}},
+        {"paths: isolate inside it", true, {tool("pen", 0), click(0.2, 0.2), click(0.8, 0.2), click(0.8, 0.8), click(0.2, 0.8), click(0.2, 0.2), mark(),
+                                            widget("properties.path.isolate")}},
+        {"paths: a work path from the selection", true, {tool("select", 0), drag(box), mark(), action("path-make-work")}},
+        // ── actions (s093; the library is put back after each) ──
+        {"actions: new, Select All recorded, stop", true, {tab(3), widget("actions.new"), action("select-all"), widget("actions.stop")}, "actions+1"},
+        {"actions: a starter played", true, {tab(3), row("actions.list", 0, 0.95), widget("actions.play")}},
+        {"actions: a step switched off", false, {tab(3), row_button("actions.list", 0, 0), row_button("actions.list", 1, 0)}, "step0off"},
+        {"actions: double-click renames, typed, Enter", false, {tab(3), row("actions.list", 0, 0.4, 2), key("ctrl+a"), type("Swept"), key("Return")}, "action0=Swept"},
+        {"actions: one deleted", false, {tab(3), row("actions.list", 2, 0.95), widget("actions.delete")}, "actions-1"},
+        {"actions: Batch opens its dialog", false, {tab(3), row("actions.list", 0, 0.95), widget("actions.batch")}, "window"},
         // ── sample / view (no step) ──
         {"eyedropper", false, {tool("eyedropper"), click(0.5, 0.5)}},
         {"hand", false, {tool("hand"), drag(nudge)}},
@@ -135,6 +178,69 @@ bool Shell::widget_point(Gtk::Widget& w, double x, double y, double& wx, double&
     return true;
 }
 
+// s093: a widget by name -- the registry first, else the window's tree; on show only.
+Gtk::Widget* Shell::sweep_named(const std::string& name) {
+    if (auto* r = registry::find(name); r && r->get_mapped()) return r;
+    Gtk::Widget* w = nullptr;
+    std::function<void(Gtk::Widget&)> find = [&](Gtk::Widget& p) {
+        if (w) return;
+        if (std::string(p.get_name()) == name && p.get_mapped()) { w = &p; return; }
+        for (auto* c = p.get_first_child(); c; c = c->get_next_sibling()) find(*c);
+    };
+    find(*this);
+    return w;
+}
+
+// s093: a widget below its panel's fold (Properties is tall for a path layer)
+// is scrolled into view -- xdotool would press whatever lies over it.
+bool Shell::sweep_reveal(Gtk::Widget& w) {
+    for (auto* p = w.get_parent(); p; p = p->get_parent()) {
+        auto* sw = dynamic_cast<Gtk::ScrolledWindow*>(p);
+        if (!sw) continue;
+        graphene_point_t in = GRAPHENE_POINT_INIT(0.f, 0.f), out;
+        if (!gtk_widget_compute_point(w.gobj(), GTK_WIDGET(sw->gobj()), &in, &out)) return false;
+        const double top = out.y, bottom = out.y + w.get_height(), h = sw->get_height();
+        if (top >= 0 && bottom <= h) return false;
+        auto adj = sw->get_vadjustment();
+        adj->set_value(adj->get_value() + top - h / 3);
+        return true;
+    }
+    return false;
+}
+
+// s093: what a scene asks to hold beyond its step.
+std::string Shell::canvas_check(const std::string& what) {
+    const auto n = m_actions.size(), was = m_sweep_actions_n;
+    if (what == "actions+1") {
+        if (n != was + 1) return "the library has " + std::to_string(n) + " actions (was " + std::to_string(was) + ")";
+        if (m_actions.back().acts.empty()) return "the new action recorded nothing";
+        if (m_recording >= 0) return "still recording";
+        return {};
+    }
+    if (what == "actions-1") return n + 1 == was ? std::string{} : "the library has " + std::to_string(n) + " actions (was " + std::to_string(was) + ")";
+    if (what == "action0=Swept") return !m_actions.empty() && m_actions[0].name == "Swept" ? std::string{} : "the first action is \"" + (m_actions.empty() ? std::string{} : m_actions[0].name) + "\"";
+    if (what == "step0off") return !m_actions.empty() && !m_actions[0].acts.empty() && !m_actions[0].acts[0].on ? std::string{} : "the first action's first step is still on";
+    if (what.rfind("channels=", 0) == 0) {
+        const auto want = std::stoul(what.substr(9)), have = m_doc.channel_order().size();
+        return have == want ? std::string{} : std::to_string(have) + " saved channels, not " + std::to_string(want);
+    }
+    if (what == "channel0=Swept") {
+        const auto& o = m_doc.channel_order();
+        const auto l = o.empty() ? decltype(m_doc.get(o.front())){} : m_doc.get(o.front());
+        return l && l->name == "Swept" ? std::string{} : "the saved channel is \"" + (l ? l->name : std::string{}) + "\"";
+    }
+    if (what == "viewing=0") return m_channel_view == 0 ? std::string{} : "viewing channel " + std::to_string(m_channel_view);
+    if (what == "outline-off") {
+        const auto id = path_layer();
+        return !id.empty() && m_outlines_off.count(id) > 0 ? std::string{} : "the outline still shows";
+    }
+    if (what == "window") {
+        for (auto* w : Gtk::Window::list_toplevels()) if (w != this && w->get_visible()) return {};
+        return "no dialog on show";
+    }
+    return "unknown check \"" + what + "\"";
+}
+
 void Shell::start_canvas_sweep() {
     sweep_open([this] { start_canvas_run(); });
 }
@@ -157,6 +263,9 @@ void Shell::start_canvas_run() {
     m_scene_at = m_beat_at = 0;
     m_scene_bad = 0;
     m_finger_n = 0;
+    m_sweep_toasts = true;   // s093: a toast left up covers the dock's foot (Channels' Save) -- dismissed between scenes
+    m_sweep_actions = m_actions;   // s093: put back after every scene (and the file with it)
+    m_sweep_actions_n = m_actions.size();
     if (lg) lg->info("sweep: canvas -- {} scenes", m_scenes.size());
     // The window first, so the script knows where to press.
     Glib::signal_timeout().connect_once([this] {
@@ -219,6 +328,12 @@ void Shell::canvas_beat() {
             ++m_scene_bad;
             if (lg) lg->warn("sweep:   NOT AS EXPECTED -- {}", sc.step ? "a step should have landed" : "a step landed that shouldn't");
         }
+        if (!sc.check.empty()) {   // s093
+            if (const auto bad = canvas_check(sc.check); !bad.empty()) {
+                ++m_scene_bad;
+                if (lg) lg->warn("sweep:   NOT AS EXPECTED -- {} ({})", bad, sc.check);
+            } else if (lg) lg->info("sweep:   holds: {}", sc.check);
+        }
         std::string shot = sc.name;
         for (auto& ch : shot) if (!std::isalnum(static_cast<unsigned char>(ch))) ch = '_';
         char num[8];
@@ -228,6 +343,14 @@ void Shell::canvas_beat() {
         ++m_scene_at;
         m_beat_at = 0;
         canvas_step();
+        return;
+    }
+    // s093: a toast raised by this scene ("Free Transform: drag the box") can
+    // lie over the next press -- dismissed, and its fade waited out, first.
+    if (!m_toasts_up.empty()) {
+        for (auto* t : m_toasts_up) { adw_toast_dismiss(t); g_object_unref(t); }
+        m_toasts_up.clear();
+        Glib::signal_timeout().connect_once([this] { canvas_beat(); }, 400);
         return;
     }
     const auto& b = sc.beats[m_beat_at++];
@@ -259,14 +382,14 @@ void Shell::canvas_beat() {
         canvas_step();
         return;
     case K::Widget: {
-        Gtk::Widget* w = nullptr;
-        std::function<void(Gtk::Widget&)> find = [&](Gtk::Widget& p) {
-            if (w) return;
-            if (std::string(p.get_name()) == b.s && p.get_mapped()) { w = &p; return; }
-            for (auto* c = p.get_first_child(); c; c = c->get_next_sibling()) find(*c);
-        };
-        if (auto* r = registry::find(b.s); r && r->get_mapped()) w = r;   // s092: the registry first (a name it knows)
-        else find(*this);
+        Gtk::Widget* w = sweep_named(b.s);   // s092: the registry first (a name it knows); s093: one helper
+        if (w && !m_revealing && sweep_reveal(*w)) {   // s093: scrolled into view first, then this beat again
+            m_revealing = true;
+            --m_beat_at;
+            Glib::signal_timeout().connect_once([this] { canvas_beat(); }, 250);
+            return;
+        }
+        m_revealing = false;
         double x = 0, y = 0;
         if (!w || !widget_point(*w, w->get_width() / 2.0, w->get_height() / 2.0, x, y)) {
             if (lg) lg->warn("sweep:   NO WIDGET \"{}\" on show", b.s);
@@ -278,7 +401,7 @@ void Shell::canvas_beat() {
         break;
     }
     case K::Row: case K::RowDrag: {   // s092
-        auto* lb = dynamic_cast<Gtk::ListBox*>(registry::find(b.s));
+        auto* lb = dynamic_cast<Gtk::ListBox*>(sweep_named(b.s));   // s093: Channels' lists by their names too
         Gtk::Widget* r = lb && lb->get_mapped() ? lb->get_row_at_index(b.v) : nullptr;
         if (!lb && b.k == K::Row) {   // not a list: the i-th child of a named box (the dock's tabs)
             Gtk::Widget* box = nullptr;
@@ -301,12 +424,33 @@ void Shell::canvas_beat() {
             return;
         }
         if (b.k == K::Row) {
-            o << "click " << static_cast<int>(b.pts[0][1]) << ' ' << static_cast<int>(x) << ' ' << static_cast<int>(y) << " -";
+            o << "click " << static_cast<int>(b.pts[0][1]) << ' ' << static_cast<int>(x) << ' ' << static_cast<int>(y) << ' ' << (b.mods.empty() ? "-" : b.mods);
             break;
         }
         widget_point(*r2, r2->get_width() * 0.6, r2->get_height() * 0.75, x2, y2);   // its lower part: below it
         o << "drag - " << static_cast<int>(x) << ' ' << static_cast<int>(y) << ' ' << static_cast<int>(x) << ' ' << static_cast<int>(y + 12)
           << ' ' << static_cast<int>(x2) << ' ' << static_cast<int>(y2);
+        break;
+    }
+    case K::RowButton: {   // s093
+        auto* lb = dynamic_cast<Gtk::ListBox*>(sweep_named(b.s));
+        Gtk::Widget* r = lb ? lb->get_row_at_index(b.v) : nullptr;
+        Gtk::Widget* hit = nullptr;
+        int k = static_cast<int>(b.pts[0][0]);
+        std::function<void(Gtk::Widget&)> find = [&](Gtk::Widget& p) {
+            if (hit) return;
+            if ((dynamic_cast<Gtk::Button*>(&p) || dynamic_cast<Gtk::CheckButton*>(&p)) && p.get_mapped() && k-- == 0) { hit = &p; return; }
+            for (auto* c = p.get_first_child(); c; c = c->get_next_sibling()) find(*c);
+        };
+        if (r && r->get_mapped()) find(*r);
+        double x = 0, y = 0;
+        if (!hit || !widget_point(*hit, hit->get_width() / 2.0, hit->get_height() / 2.0, x, y)) {
+            if (lg) lg->warn("sweep:   NO BUTTON {} in row {} of \"{}\"", static_cast<int>(b.pts[0][0]), b.v, b.s);
+            ++m_scene_bad;
+            canvas_step();
+            return;
+        }
+        o << "click 1 " << static_cast<int>(x) << ' ' << static_cast<int>(y) << " -";
         break;
     }
     case K::Slide: {   // s092
@@ -360,6 +504,17 @@ void Shell::canvas_cleanup() {
     if (!m_sweep_layer.empty() && m_doc.get(m_sweep_layer)) m_layers.select({m_sweep_layer}, false);
     activate_action("win.zoom-fit");
     m_dock_stack.set_visible_child("layers");   // s092: a scene may have shown History
+    // s093: the picture's own view again; the actions library as it was found.
+    if (m_channel_view >= 0) on_channel_view(-1);
+    for (auto* t : m_toasts_up) { adw_toast_dismiss(t); g_object_unref(t); }
+    m_toasts_up.clear();
+    m_recording = -1;
+    m_rec_made.clear();
+    m_actions = m_sweep_actions;
+    m_actions_panel.pick(-1);
+    m_actions_panel.close_all();
+    save_actions();
+    sync_actions();
     update_layer_actions();
 }
 

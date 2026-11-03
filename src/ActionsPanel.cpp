@@ -42,8 +42,15 @@ ActionsPanel::ActionsPanel()
         sync_buttons();
     });
     // Enter / a double-click on a row: play it (Photoshop's).
+    // s093 (the canvas sweep): GTK 4's ListBox activates on a SINGLE click by
+    // default -- a click to pick "Half Size for the Web" halved the picture.
+    // And a double-click on the name renames (its tooltip says so) -- it
+    // played as well, and the play's repaint rebuilt the row under the
+    // double-click (s092's Layers crash, the same shape).
+    m_list.set_activate_on_single_click(false);
     m_list.signal_row_activated().connect([this](Gtk::ListBoxRow*) {
-        if (!m_painting) Glib::signal_idle().connect_once([this] { ask(Do::Play); });
+        if (m_painting) return;
+        Glib::signal_timeout().connect_once([this] { if (!m_renaming) ask(Do::Play); }, 50);   // the name's editing starts first
     });
     m_scroll.set_child(m_list);
     m_scroll.set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
@@ -88,6 +95,12 @@ ActionsPanel::ActionsPanel()
 
 void ActionsPanel::ask(Do d, const std::string& text) {
     if (m_on) m_on(d, m_action, m_step, text);
+}
+
+void ActionsPanel::close_all() {
+    m_open.clear();
+    m_renaming = false;
+    paint();
 }
 
 void ActionsPanel::pick(int action, int step) {
@@ -150,7 +163,8 @@ void ActionsPanel::paint() {
         name->set_hexpand(true);
         name->set_tooltip_text("Double-click to rename");
         name->property_editing().signal_changed().connect([this, name, ia] {
-            if (name->get_editing()) return;
+            m_renaming = name->get_editing();
+            if (m_renaming) return;
             const std::string t = name->get_text();
             if (ia < static_cast<int>(m_all.size()) && !t.empty() && t != m_all[static_cast<std::size_t>(ia)].name) {
                 m_action = ia;

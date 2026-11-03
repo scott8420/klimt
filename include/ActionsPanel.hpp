@@ -26,6 +26,7 @@ public:
     int picked_action() const { return m_action; }
     int picked_step() const { return m_step; }
     void pick(int action, int step = -1);
+    void close_all();                             // s093: every action shut onto its row (the canvas sweep, between scenes)
 
 private:
     widgets::ScrolledWindow m_scroll;
@@ -43,6 +44,7 @@ private:
     int                     m_recording = -1;
     bool                    m_playing = false;
     bool                    m_painting = false;
+    bool                    m_renaming = false;   // s093: a name being edited -- a double-click there renames, never plays
     std::function<void(Do, int, int, const std::string&)> m_on;
     void paint();
     void sync_buttons();

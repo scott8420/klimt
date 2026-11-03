@@ -8,6 +8,8 @@
 #include <gtkmm/scrolledwindow.h>
 #include <glibmm/main.h>
 
+#include <memory>
+
 namespace klimt {
 
 ChannelsPanel::ChannelsPanel() : Gtk::Box(Gtk::Orientation::VERTICAL, 6) {
@@ -178,12 +180,21 @@ void ChannelsPanel::rename_row(int index) {
     pop->set_child(*entry);
     pop->set_parent(*row);
     const std::string id = m_items[static_cast<std::size_t>(index)].id;
-    entry->signal_activate().connect([this, pop, entry, id] {
-        const std::string name = entry->get_text();
+    // s093 (the canvas sweep: "Finalizing GtkListBoxRow, but it still has
+    // children left" + CRITICALs): the rename changes the document, which
+    // rebuilds this list at once -- the row went while the popover was still
+    // its child. Now the popover leaves the row first, then the rename.
+    auto renamed = std::make_shared<std::string>();
+    entry->signal_activate().connect([pop, entry, renamed] {
+        *renamed = entry->get_text();
         pop->popdown();
-        if (!name.empty()) m_rename.emit(id, name);
     });
-    pop->signal_closed().connect([pop] { Glib::signal_idle().connect_once([pop] { pop->unparent(); }); });
+    pop->signal_closed().connect([this, pop, id, renamed] {
+        Glib::signal_idle().connect_once([this, pop, id, renamed] {
+            pop->unparent();
+            if (!renamed->empty()) m_rename.emit(id, *renamed);
+        });
+    });
     pop->popup();
     entry->grab_focus();
 }
