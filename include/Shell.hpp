@@ -25,6 +25,7 @@
 #include "HistoryPanel.hpp"
 #include "ActionsPanel.hpp"   // s084
 #include "RawDialog.hpp"      // s085
+#include "core/Commands.hpp"  // s090: the sweep walks the catalog
 #include "LayersPanel.hpp"
 #include "PropertiesPanel.hpp"
 #include "StatusLine.hpp"
@@ -207,7 +208,17 @@ private:
     void on_remove_background();
     void on_content_aware_fill();
     void object_select(const CanvasView::Shape& shape);
-    void on_models();                            // category: select: s089 Edit > AI Models… -- what's in the folder   // category: select: s089 the Select tool's Object -- a box, a model (a job)                // category: select: s088 Edit > Content-Aware Fill -- LaMa through the selection, a new layer (a job)                 // category: select: s087 Layer > Remove Background -- a layer mask from the model (a job)                    // category: select: s086 Select > Subject -- a local model (libs/seg), a job
+    void on_models();
+    // ── s090: the regression sweep (Shell_sweep.cpp; KLIMT_SWEEP=1) ──────
+    void start_sweep();                          // category: glue: s090 every palette command in turn, logged
+    void sweep_step();
+    void sweep_setup();
+    std::string m_sweep_layer;
+    std::vector<const core::Command*> m_sweep;
+    std::size_t m_sweep_at = 0;
+    std::uint64_t m_sweep_mark = 0;
+    int m_sweep_failed = 0;
+    int m_sweep_waits = 0;                            // category: select: s089 Edit > AI Models… -- what's in the folder   // category: select: s089 the Select tool's Object -- a box, a model (a job)                // category: select: s088 Edit > Content-Aware Fill -- LaMa through the selection, a new layer (a job)                 // category: select: s087 Layer > Remove Background -- a layer mask from the model (a job)                    // category: select: s086 Select > Subject -- a local model (libs/seg), a job
     void say_model_missing(const std::string& verb, const std::string& model_key, const std::string& words);   // category: select: s086 where the model goes, and from where
     void on_fill(bool foreground);               // category: select: Alt / Ctrl+Backspace
     void on_delete_selection();                  // category: select: Delete / Backspace on the canvas

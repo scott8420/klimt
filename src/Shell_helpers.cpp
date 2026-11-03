@@ -241,7 +241,12 @@ void Shell::update_summary() {   // s012: says when the mask is what's painted
 // A toast. With `offer_undo`, its button is Undo (the step just taken).
 void Shell::toast(const std::string& text, bool offer_undo) {
     if (!m_toasts) return;
-    AdwToast* t = adw_toast_new(text.c_str());
+    // s090 (the sweep: "Black & White 1 …" -- a GTK warning and no words): a
+    // toast's title is markup, so a layer's or a file's name with & or < in
+    // it broke it. Every toast is plain text: escaped here, once.
+    gchar* safe = g_markup_escape_text(text.c_str(), -1);
+    AdwToast* t = adw_toast_new(safe);
+    g_free(safe);
     adw_toast_set_timeout(t, offer_undo ? 4 : 2);
     if (offer_undo) {
         adw_toast_set_button_label(t, "Undo");

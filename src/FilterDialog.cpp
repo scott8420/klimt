@@ -155,6 +155,11 @@ void FilterDialog::row(const char* name, const char* label, double lo, double hi
 }
 
 void FilterDialog::rebuild() {
+    // s090 (the sweep: Lens Blur's dialog, then Radial Blur's -- a crash):
+    // the focal pick is let go BEFORE the rows go -- removing them destroys
+    // the toggle the check would read.
+    if (focal_picking()) { m_focal_pick->set_active(false); }
+    m_focal_pick = nullptr;
     while (auto* c = m_body.get_first_child()) m_body.remove(*c);
     m_rows.clear();
     m_remove = nullptr;
@@ -162,8 +167,7 @@ void FilterDialog::rebuild() {
     m_motion_only.clear();
     m_into = nullptr;
     m_gauss = m_uniform = m_mono = nullptr;
-    if (focal_picking()) { m_focal_pick->set_active(false); }
-    m_depth = nullptr; m_invert = nullptr; m_depth_note = nullptr; m_focal_pick = nullptr;   // s039
+    m_depth = nullptr; m_invert = nullptr; m_depth_note = nullptr;   // s039
     m_depth_only.clear();
     m_method = m_quality = nullptr;   // s040
     m_choices.clear();                // s041 m3

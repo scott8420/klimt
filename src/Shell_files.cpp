@@ -169,6 +169,7 @@ bool Shell::on_close_request() {
 // ── New ─────────────────────────────────────────────────────────────────────
 // s009: launched without a file: the New dialog, once the window is up.
 void Shell::start() {
+    if (const char* s = std::getenv("KLIMT_SWEEP"); s && (*s == '1' || *s == '2')) { start_sweep(); return; }   // s090 (2: with a selection made)
     if (has_image()) return;
     Glib::signal_idle().connect_once([this] {
         if (has_image()) return;
