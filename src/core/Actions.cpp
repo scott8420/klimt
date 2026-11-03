@@ -94,6 +94,7 @@ const std::vector<Verb>& verbs() {
         {"filter.live", "Live Filter"},        {"filter.layer", "New Filter Layer"},
         {"select.all", "Select All"},          {"select.none", "Deselect"},
         {"select.invert", "Inverse"},          {"select.feather", "Feather"},
+        {"select.shape", "Rectangle / Ellipse / Lasso"},   // s094
         {"select.subject", "Select Subject"},  {"layer.remove_bg", "Remove Background"},
         {"edit.fill_ca", "Content-Aware Fill"},
         {"select.fill", "Fill"},               {"layer.new", "New Layer"},
@@ -148,6 +149,22 @@ Act filter_layer(const Filter& f) {
 Act select_all() { return make("select.all", json::object(), "Select All"); }
 Act select_none() { return make("select.none", json::object(), "Deselect"); }
 Act select_invert() { return make("select.invert", json::object(), "Inverse"); }
+Act select_shape(Drawn kind, select::Op op, const std::vector<select::Pt>& frac) {   // s094
+    static const char* kinds[] = {"rect", "ellipse", "lasso"};
+    static const char* names[] = {"Rectangle Select", "Ellipse Select", "Lasso"};
+    const int k = std::clamp(static_cast<int>(kind), 0, 2), o = std::clamp(static_cast<int>(op), 0, 3);
+    json pts = json::array();
+    const auto r4 = [](double v) { return std::round(std::clamp(v, -1.0, 2.0) * 10000) / 10000; };
+    for (const auto& p : frac) pts.push_back(json::array({r4(p.x), r4(p.y)}));
+    std::string label = names[k];
+    if (kind == Drawn::Lasso) label += "  " + std::to_string(frac.size()) + " points";
+    else if (frac.size() >= 2)
+        label += "  " + num(std::round(std::abs(frac.back().x - frac.front().x) * 1000) / 10) + " × " +
+                 num(std::round(std::abs(frac.back().y - frac.front().y) * 1000) / 10) + " % of the canvas";
+    static const char* ops[] = {"", " (Add)", " (Subtract)", " (Intersect)"};
+    label += ops[o];
+    return make("select.shape", {{"kind", kinds[k]}, {"op", o}, {"pts", pts}}, label);
+}
 Act select_subject() { return make("select.subject", json::object(), "Select Subject"); }
 Act remove_background() { return make("layer.remove_bg", json::object(), "Remove Background"); }
 Act content_aware_fill() { return make("edit.fill_ca", json::object(), "Content-Aware Fill"); }
@@ -289,6 +306,35 @@ bool run(DocJournal& j, Document& d, Document::Id& picked, const Act& act, std::
         if (v == "select.all") { select::all(j, d); return true; }
         if (v == "select.none") { select::none(j, d); return true; }
         if (v == "select.invert") { select::invert(j, d); return true; }
+        if (v == "select.shape") {   // s094: the fractions on THIS canvas
+            const auto k = a.value("kind", std::string());
+            const int o = a.value("op", 0);
+            if (o < 0 || o > 3) { error = "an unknown way to combine"; return false; }
+            const auto op = static_cast<select::Op>(o);
+            std::vector<select::Pt> pts;
+            if (a.contains("pts") && a.at("pts").is_array())
+                for (const auto& p : a.at("pts"))
+                    if (p.is_array() && p.size() == 2 && p[0].is_number() && p[1].is_number())
+                        pts.push_back({p[0].get<double>() * im.width, p[1].get<double>() * im.height});
+            if (k == "lasso") {
+                if (pts.size() < 3) { error = "too few points"; return false; }
+                select::polygon(j, d, pts, op);
+                return true;
+            }
+            if (pts.size() < 2) { error = "too few points"; return false; }
+            const double x0 = std::min(pts.front().x, pts.back().x), x1 = std::max(pts.front().x, pts.back().x);
+            const double y0 = std::min(pts.front().y, pts.back().y), y1 = std::max(pts.front().y, pts.back().y);
+            if (k == "rect") {   // whole pixels, as the marquee
+                const int ix0 = static_cast<int>(std::lround(x0)), iy0 = static_cast<int>(std::lround(y0));
+                const int ix1 = static_cast<int>(std::lround(x1)), iy1 = static_cast<int>(std::lround(y1));
+                if (ix1 <= ix0 || iy1 <= iy0) { error = "the box is empty on this picture"; return false; }
+                select::rect(j, d, {ix0, iy0, ix1 - ix0, iy1 - iy0}, op);
+                return true;
+            }
+            if (k == "ellipse") { select::ellipse(j, d, x0, y0, x1, y1, op); return true; }
+            error = "an unknown shape “" + k + "”";
+            return false;
+        }
         if (v == "edit.fill_ca") {   // s088
             if (!seg::available()) { error = "Klimt was built without ONNX Runtime"; return false; }
             if (!d.selection()) { error = "nothing is selected"; return false; }

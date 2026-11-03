@@ -29,6 +29,7 @@
 // GTK-free; the library is a JSON file (`load` / `save`).
 #include "core/Canvas.hpp"
 #include "core/Document.hpp"
+#include "core/Selection.hpp"   // s094
 #include "core/Snapshot.hpp"
 #include "formats/Formats.hpp"
 
@@ -73,6 +74,12 @@ Act filter_layer(const Filter& f);
 Act select_all();
 Act select_none();
 Act select_invert();
+// s094: a selection DRAWN on the canvas -- Rectangle, Ellipse, Lasso -- its
+// shape as FRACTIONS of the canvas (0..1, (0, 0) the top-left corner), so a
+// picture of another size gets the same place in it; `op` how it met the
+// selection already there (Shift adds ...).
+enum class Drawn { Rect, Ellipse, Lasso };
+Act select_shape(Drawn kind, select::Op op, const std::vector<select::Pt>& frac);
 Act select_subject();
 Act remove_background();
 Act content_aware_fill();   // s088: LaMa through the selection, a new layer above the picked one   // s087: the picked layer's mask from the model   // s086: the local model (libs/seg) -- inside the selection when there is one

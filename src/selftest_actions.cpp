@@ -208,4 +208,44 @@ void selftest_actions(const Check& check) {
         const auto rc = ac::run_batch(b, web, [&n] { return ++n > 1; });
         check("actions: batch -- cancelled, said", rc.cancelled, "");
     }
+    // ── s094: a selection drawn on the canvas, as fractions of it ─────────
+    {
+        using SP = core::select::Pt;
+        const auto box = ac::select_shape(ac::Drawn::Rect, core::select::Op::Replace, {SP{0.25, 0.25}, SP{0.75, 0.5}});
+        check("actions: a drawn box names itself -- its share of the canvas", box.verb == "select.shape" && ac::known("select.shape") &&
+              box.label == "Rectangle Select  50 × 25 % of the canvas", box.label);
+        Doc t;
+        const auto W = t.d.image().width, H = t.d.image().height;
+        core::Document::Id picked = "L1";
+        std::string err;
+        const bool ran = ac::run(t.j, t.d, picked, box, err);
+        const auto b = t.d.selection() ? core::select::bounds(*t.d.selection()) : P::Rect{};
+        check("actions: a drawn box played -- the same place on this canvas",
+              ran && b.x == W / 4 && b.y == H / 4 && b.w == W / 2 && b.h == H / 4, std::to_string(b.x) + "," + std::to_string(b.y) + " " + std::to_string(b.w) + "x" + std::to_string(b.h));
+        const auto add = ac::select_shape(ac::Drawn::Rect, core::select::Op::Add, {SP{0.0, 0.0}, SP{0.1, 0.1}});
+        check("actions: Shift's Add -- said, and the corner joins the box",
+              add.label.find("(Add)") != std::string::npos && ac::run(t.j, t.d, picked, add, err) &&
+                  core::select::coverage(*t.d.selection(), 2, 2) == 1.f && core::select::coverage(*t.d.selection(), W / 2, H / 3) == 1.f, add.label);
+        const auto ell = ac::select_shape(ac::Drawn::Ellipse, core::select::Op::Replace, {SP{0.0, 0.0}, SP{1.0, 1.0}});
+        check("actions: a drawn ellipse -- the middle in, the corner out",
+              ac::run(t.j, t.d, picked, ell, err) && core::select::coverage(*t.d.selection(), W / 2, H / 2) == 1.f &&
+                  core::select::coverage(*t.d.selection(), 1, 1) == 0.f, err);
+        const auto tri = ac::select_shape(ac::Drawn::Lasso, core::select::Op::Replace, {SP{0.1, 0.1}, SP{0.9, 0.1}, SP{0.5, 0.9}});
+        check("actions: a drawn lasso -- its points counted; inside in, outside out",
+              tri.label == "Lasso  3 points" && ac::run(t.j, t.d, picked, tri, err) && core::select::coverage(*t.d.selection(), W / 2, H / 3) == 1.f &&
+                  core::select::coverage(*t.d.selection(), W / 20, H * 8 / 10) == 0.f, tri.label);
+        const auto two = ac::select_shape(ac::Drawn::Lasso, core::select::Op::Replace, {SP{0.1, 0.1}, SP{0.9, 0.1}});
+        check("actions: a lasso of two points refused, in words", !ac::run(t.j, t.d, picked, two, err) && err == "too few points", err);
+        // On a picture twice the size (Image Size first): the box goes with it.
+        const ac::Action grow{"Box on bigger", {ac::image_size(W * 2, H * 2, t.d.image().dpi, core::canvas::Filter::Nearest, W, H), box}};
+        Doc u;
+        const auto p = ac::play(core::snapshot::take(u.d, "start"), "L1", grow);
+        const bool landed = p.ok && core::snapshot::restore(u.j, u.d, p.result);
+        const auto b2 = (landed && u.d.selection()) ? core::select::bounds(*u.d.selection()) : P::Rect{};
+        check("actions: on a picture of another size -- the same share of it",
+              landed && u.d.image().width == W * 2 && b2.x == W / 2 && b2.w == W && b2.y == H / 2 && b2.h == H / 2, p.error);
+        const std::string f = (scratch() / "conf2" / "actions.json").string();
+        const std::vector<ac::Action> lib{{"Drawn", {box, add, ell, tri}}};
+        check("actions: drawn selections kept in the library and read back", ac::save(f, lib) && ac::load(f) == lib, "");
+    }
 }

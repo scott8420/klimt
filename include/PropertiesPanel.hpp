@@ -99,6 +99,8 @@ private:
     widgets::Label        m_subtitle;   // "pixel layer" / "group of 4"
     widgets::Box          m_fields;     // hidden when nothing is selected
     widgets::DropDown     m_blend;
+    std::vector<core::Blend> m_blend_modes;   // s094: what the list holds -- Pass Through for a group only
+    void blend_list(bool groups);
     widgets::Scale        m_opacity;
     widgets::Scale        m_fill;
     widgets::ToggleButton m_lock_alpha, m_lock_pixels, m_lock_position, m_lock_all;

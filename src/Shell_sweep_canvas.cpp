@@ -145,6 +145,8 @@ std::vector<Shell::SweepScene> scenes() {
         {"paths: a work path from the selection", true, {tool("select", 0), drag(box), mark(), action("path-make-work")}},
         // ── actions (s093; the library is put back after each) ──
         {"actions: new, Select All recorded, stop", true, {tab(3), widget("actions.new"), action("select-all"), widget("actions.stop")}, "actions+1"},
+        {"actions: a drawn box recorded (s094)", true, {tab(3), widget("actions.new"), tool("select", 0), drag(box), widget("actions.stop")}, "recorded=select.shape"},
+        {"actions: a drawn lasso recorded (s094)", true, {tab(3), widget("actions.new"), tool("select", 2), drag(loop), widget("actions.stop")}, "recorded=select.shape"},
         {"actions: a starter played", true, {tab(3), row("actions.list", 0, 0.95), widget("actions.play")}},
         {"actions: a step switched off", false, {tab(3), row_button("actions.list", 0, 0), row_button("actions.list", 1, 0)}, "step0off"},
         {"actions: double-click renames, typed, Enter", false, {tab(3), row("actions.list", 0, 0.4, 2), key("ctrl+a"), type("Swept"), key("Return")}, "action0=Swept"},
@@ -216,6 +218,11 @@ std::string Shell::canvas_check(const std::string& what) {
         if (m_actions.back().acts.empty()) return "the new action recorded nothing";
         if (m_recording >= 0) return "still recording";
         return {};
+    }
+    if (what.rfind("recorded=", 0) == 0) {   // s094: the new action's last act is this verb
+        if (n != was + 1 || m_actions.back().acts.empty()) return "nothing recorded (" + std::to_string(n) + " actions, was " + std::to_string(was) + ")";
+        const auto& v = m_actions.back().acts.back().verb;
+        return v == what.substr(9) ? std::string{} : "the last act recorded is \"" + v + "\"";
     }
     if (what == "actions-1") return n + 1 == was ? std::string{} : "the library has " + std::to_string(n) + " actions (was " + std::to_string(was) + ")";
     if (what == "action0=Swept") return !m_actions.empty() && m_actions[0].name == "Swept" ? std::string{} : "the first action is \"" + (m_actions.empty() ? std::string{} : m_actions[0].name) + "\"";

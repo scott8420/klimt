@@ -66,6 +66,13 @@ bool pixelate_kind(FilterKind k) {
     return k == FilterKind::Mosaic || k == FilterKind::Crystallize || k == FilterKind::Pointillize || k == FilterKind::Fragment ||
            k == FilterKind::ColourHalftone || k == FilterKind::Facet || k == FilterKind::Mezzotint;   // s043 m2
 }
+
+// s094: the filters whose result reaches the alpha (a soft edge pixelated,
+// fragmented, blown into the clear) -- Photoshop's do. The rest keep it.
+// Lock Alpha (keep_alpha) keeps it for these too.
+bool reaches_alpha(FilterKind k) {
+    return k == FilterKind::Mosaic || k == FilterKind::Fragment || k == FilterKind::Wind;
+}
 bool clouds_kind(FilterKind k) { return k == FilterKind::Clouds || k == FilterKind::DifferenceClouds; }
 // s043 m3: RENDER -- made from nothing (reads no pixels), fills clear ones too.
 bool renders(FilterKind k) { return clouds_kind(k) || k == FilterKind::Fibers; }
@@ -1126,6 +1133,7 @@ void pixelate(const std::vector<float>& buf, std::vector<float>& out, int W, int
                 }
                 float* o = put(x, y);
                 for (int c = 0; c < cc; ++c) o[c] = sum[4] > 1e-9 ? static_cast<float>(sum[static_cast<std::size_t>(c)] / sum[4]) : 0.f;
+                if (has_a) o[cc] = static_cast<float>(sum[4] / 4);   // s094: the copies' coverage too -- the edge fragments
             }
         }
         return;
@@ -1139,10 +1147,20 @@ void pixelate(const std::vector<float>& buf, std::vector<float>& out, int W, int
             for (int i = floor_div(b.x + ox, S); i * S < b.x + b.w + ox; ++i) {
                 const int x0 = i * S - ox, y0 = j * S - oy;
                 const Col m = mean(x0, y0, x0 + S, y0 + S);
+                float ma = 1.f;   // s094: the cell's mean coverage -- a soft edge goes square too
+                if (has_a) {
+                    const int ax0 = std::max(x0, 0), ay0 = std::max(y0, 0), ax1 = std::min(x0 + S, W), ay1 = std::min(y0 + S, H);
+                    double sa = 0;
+                    for (int y = ay0; y < ay1; ++y)
+                        for (int x = ax0; x < ax1; ++x) sa += at(x, y)[cc];
+                    const double n = static_cast<double>(std::max(0, ax1 - ax0)) * static_cast<double>(std::max(0, ay1 - ay0));
+                    ma = n > 0 ? static_cast<float>(sa / n) : 0.f;
+                }
                 for (int y = std::max(y0, b.y); y < std::min(y0 + S, b.y + b.h); ++y)
                     for (int x = std::max(x0, b.x); x < std::min(x0 + S, b.x + b.w); ++x) {
                         float* o = put(x, y);
                         for (int c = 0; c < cc; ++c) o[c] = m[static_cast<std::size_t>(c)];
+                        if (has_a) o[cc] = ma;
                     }
             }
         }
@@ -1318,13 +1336,17 @@ void weather(const std::vector<float>& buf, std::vector<float>& out, int W, int 
     // own length; Stagger: a new length every so often along the row.
     static constexpr double base[3] = {8, 24, 8};
     const int m = std::clamp(f.axis, 0, 2);
+    // s094: the trail is premultiplied, its coverage beside it -- an edge blows
+    // into the clear in its own colour (opaque rows: as before).
     std::vector<float> trail(static_cast<std::size_t>(cc));
+    float ta = 0.f;
     for (int y = b.y; y < b.y + b.h; ++y) {
         if ((y & 15) == 0 && stop && stop()) return;
         const int Y = y + oy;
         double len = base[m] * (0.25 + 1.5 * place_hash(0, Y, f.seed, 3));
         double d = std::exp(-1 / len);
         std::fill(trail.begin(), trail.end(), 0.f);
+        ta = 0.f;
         const int step = f.from_left ? 1 : -1;
         const int x0 = f.from_left ? 0 : W - 1, x1 = f.from_left ? W : -1;   // the whole buffer row: the trail comes in from its edge
         for (int x = x0; x != x1; x += step) {
@@ -1333,10 +1355,13 @@ void weather(const std::vector<float>& buf, std::vector<float>& out, int W, int 
                 d = std::exp(-1 / len);
             }
             const float* p = px(x, y);
-            for (int c = 0; c < cc; ++c) trail[static_cast<std::size_t>(c)] = std::max(straight(p, c), static_cast<float>(trail[static_cast<std::size_t>(c)] * d));
+            const float pa = has_a ? p[cc] : 1.f;
+            for (int c = 0; c < cc; ++c) trail[static_cast<std::size_t>(c)] = std::max(pa * straight(p, c), static_cast<float>(trail[static_cast<std::size_t>(c)] * d));
+            ta = std::max(pa, static_cast<float>(ta * d));
             if (x < b.x || x >= b.x + b.w) continue;
             float* o = out.data() + (static_cast<std::size_t>(y) * static_cast<std::size_t>(W) + static_cast<std::size_t>(x)) * static_cast<std::size_t>(C);
-            for (int c = 0; c < cc; ++c) o[c] = trail[static_cast<std::size_t>(c)];
+            for (int c = 0; c < cc; ++c) o[c] = ta > 1e-6f ? std::min(1.f, trail[static_cast<std::size_t>(c)] / ta) : 0.f;
+            if (has_a) o[cc] = ta;
         }
     }
 }
@@ -2354,8 +2379,12 @@ std::optional<pixel::TileMap> filtered(const pixel::TileMap& src, const Filter& 
                     Px n = o;
                     const float oa = has_a ? o.c[static_cast<std::size_t>(ai)] : 1.f;
                     if (custom(f.kind)) {   // s034: straight colour, alpha kept
-                        if (oa <= 0.f) continue;
                         const float* bp = B.data() + (static_cast<std::size_t>(y - R.y) * static_cast<std::size_t>(R.w) + static_cast<std::size_t>(x - R.x)) * static_cast<std::size_t>(C);
+                        if (has_a && !keep_alpha && reaches_alpha(f.kind)) {   // s094: Mosaic, Fragment, Wind -- the alpha too
+                            const float na = std::clamp(bp[ai], 0.f, 1.f);
+                            if (na <= 0.f && oa <= 0.f) continue;
+                            n.c[static_cast<std::size_t>(ai)] = na;
+                        } else if (oa <= 0.f) continue;
                         for (int c = 0; c < cc; ++c)
                             n.c[static_cast<std::size_t>(c)] = clamp01 ? std::clamp(bp[c], 0.f, 1.f) : std::max(bp[c], 0.f);
                     } else if (reads(f.kind)) {

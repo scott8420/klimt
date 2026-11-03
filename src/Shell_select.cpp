@@ -42,7 +42,11 @@ void Shell::on_shape(const CanvasView::Shape& shape) {
     const auto im = m_doc.image();
     const auto mf = m_doc.mask_format();
     const auto old = m_doc.selection_ptr();
-    if (shape.object && shape.kind == K::Rect && shape.pts.size() >= 2) { object_select(shape); return; }   // s089
+    if (shape.object && shape.kind == K::Rect && shape.pts.size() >= 2) {   // s089
+        if (m_recording >= 0) toast("Object Select: done, but not recorded -- an action can't repeat it yet");   // s094
+        object_select(shape);
+        return;
+    }
     if (shape.kind == K::Point) {
         // The Magic Wand: the pixels like the clicked one, in the selected
         // layer -- or in what you see, with "All layers".
@@ -56,6 +60,7 @@ void Shell::on_shape(const CanvasView::Shape& shape) {
         const auto src = w.all_layers ? nullptr : l->pixels;
         const auto blank = m_doc.blank();
         const std::string label = shape.op != S::Op::Replace ? S::op_name(shape.op) : "Magic Wand";
+        if (m_recording >= 0) toast("Magic Wand: done, but not recorded -- an action can't repeat it yet");   // s094
         start_job(label, [this, w, x, y, layers, src, blank, im, mf, old, op = shape.op, label](core::Jobs::Token& t)
                              -> core::Jobs::Landing {
             const auto cancel = [&t] { return t.cancelled(); };
@@ -77,6 +82,22 @@ void Shell::on_shape(const CanvasView::Shape& shape) {
     }
     const std::string label = shape.op != S::Op::Replace ? S::op_name(shape.op)
                             : shape.kind == K::Rect ? "Rectangle Select" : shape.kind == K::Ellipse ? "Ellipse Select" : "Lasso";
+    if (m_recording >= 0 && im.width > 0 && im.height > 0 && !shape.pts.empty()) {   // s094: the drawn shape, as fractions of the canvas
+        namespace A = core::actions;
+        std::vector<S::Pt> frac;
+        const double W = im.width, H = im.height;
+        if (shape.kind == K::Lasso) {
+            for (const auto& p : shape.pts) frac.push_back({p.x / W, p.y / H});
+        } else {   // the box's corners -- the marquee's whole pixels, as it snaps
+            const auto& p = shape.pts;
+            double x0 = std::min(p.front().x, p.back().x), x1 = std::max(p.front().x, p.back().x);
+            double y0 = std::min(p.front().y, p.back().y), y1 = std::max(p.front().y, p.back().y);
+            if (shape.kind == K::Rect) { x0 = std::lround(x0); y0 = std::lround(y0); x1 = std::lround(x1); y1 = std::lround(y1); }
+            frac = {{x0 / W, y0 / H}, {x1 / W, y1 / H}};
+        }
+        if ((shape.kind == K::Lasso && frac.size() >= 3) || (shape.kind != K::Lasso && frac.size() == 2))
+            rec(A::select_shape(shape.kind == K::Rect ? A::Drawn::Rect : shape.kind == K::Ellipse ? A::Drawn::Ellipse : A::Drawn::Lasso, shape.op, frac));
+    }
     start_job(label, [this, shape, im, mf, old, label](core::Jobs::Token& t) -> core::Jobs::Landing {
         pixel::TileMap m;
         const auto& p = shape.pts;

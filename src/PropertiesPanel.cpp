@@ -70,9 +70,7 @@ PropertiesPanel::PropertiesPanel(core::Document& doc, core::DocJournal& journal)
         grid->attach(*l, 0, row);
     };
 
-    std::vector<Glib::ustring> labels;
-    for (const auto& b : core::blend_modes()) labels.emplace_back(b.label);
-    m_blend.set_model(Gtk::StringList::create(labels));
+    blend_list(true);
     m_blend.set_hexpand(true);
     m_blend.property_selected().signal_changed().connect(sigc::mem_fun(*this, &PropertiesPanel::on_blend));
     label("Blend", 0);
@@ -521,9 +519,9 @@ void PropertiesPanel::paint() {
     m_blend.set_sensitive(editable);
     m_opacity.set_sensitive(editable);
     m_fill.set_sensitive(editable);
-    const auto& modes = core::blend_modes();
-    for (std::size_t i = 0; i < modes.size(); ++i)
-        if (modes[i].mode == l->blend) m_blend.set_selected(static_cast<guint>(i));
+    blend_list(l->kind == core::Kind::Group);   // s094: Pass Through only offered to a group
+    for (std::size_t i = 0; i < m_blend_modes.size(); ++i)
+        if (m_blend_modes[i] == l->blend) m_blend.set_selected(static_cast<guint>(i));
     if (!m_journal.in_gesture()) m_opacity.set_value(l->opacity);
     m_fill.set_value(l->fill);
     m_lock_alpha.set_active(l->locks & core::lock::Alpha);
@@ -923,11 +921,29 @@ void PropertiesPanel::set_histogram(const Id& id, const core::adjust::Histogram&
 void PropertiesPanel::on_blend() {
     if (m_painting || primary().empty()) return;
     const auto i = m_blend.get_selected();
-    const auto& modes = core::blend_modes();
-    if (i >= modes.size()) return;
-    // Refused (Pass Through on a layer, a lock): paint puts the menu back.
-    if (!L::set_blend(m_journal, m_doc, m_sel, modes[i].mode)) paint();
-    else rec(core::actions::set_blend(modes[i].mode));   // s084
+    if (i >= m_blend_modes.size()) return;
+    const auto mode = m_blend_modes[i];
+    // Refused (Pass Through on a mixed pick, a lock): paint puts the menu back.
+    if (!L::set_blend(m_journal, m_doc, m_sel, mode)) paint();
+    else rec(core::actions::set_blend(mode));   // s084
+}
+
+// s094: the Blend list -- every mode for a group; a layer's without Pass
+// Through (it was offered, then refused with the menu snapping back).
+void PropertiesPanel::blend_list(bool groups) {
+    std::vector<core::Blend> want;
+    std::vector<Glib::ustring> labels;
+    for (const auto& b : core::blend_modes()) {
+        if (!groups && b.mode == core::Blend::PassThrough) continue;
+        want.push_back(b.mode);
+        labels.emplace_back(b.label);
+    }
+    if (want == m_blend_modes) return;
+    const bool was = m_painting;
+    m_painting = true;   // the model's change re-selects; not a pick
+    m_blend_modes = std::move(want);
+    m_blend.set_model(Gtk::StringList::create(labels));
+    m_painting = was;
 }
 
 void PropertiesPanel::on_opacity() {

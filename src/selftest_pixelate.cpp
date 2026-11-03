@@ -400,4 +400,39 @@ void selftest_pixelate(const Check& check) {
         check("displace: never live -- add_live and a filter layer refuse it",
               !L::add_live(j, d, "L4", dp) && L::add_filter_layer(j, d, dp, "L4").empty(), "");
     }
+
+    std::cout << "\n-- filters: Mosaic, Fragment, Wind reach the alpha (s094) --\n";
+    {
+        // A red square 25..44 on clear: Mosaic's 10 px cells 20..29 hold a quarter of it.
+        const auto sq = P::TileMap(f32(), 120, 60).fill({25, 25, 20, 20}, P::rgba(1, 0, 0, 1));
+        auto mo = F::fresh(FilterKind::Mosaic); mo.radius = 10;
+        const auto m = F::filtered(sq, mo, nullptr);
+        check("alpha: Mosaic -- a clear pixel in a part-covered cell takes the cell's coverage, in the square's colour",
+              m && std::abs(m->get(21, 21).c[3] - 0.25f) < 1e-4f && std::abs(m->get(21, 21).c[0] - 1.f) < 1e-4f, m ? num(m->get(21, 21).c[3]) : "");
+        check("alpha: Mosaic -- a cell wholly inside stays opaque; one wholly outside stays clear",
+              m && m->get(35, 35).c[3] == 1.f && m->get(5, 5).c[3] == 0.f, "");
+        const auto ml = F::filtered(sq, mo, nullptr, true);
+        check("alpha: Mosaic under Lock Alpha -- the outline kept (the clear pixel stays clear)", ml && ml->get(21, 21).c[3] == 0.f && ml->get(30, 30).c[3] == 1.f, "");
+        const P::Rect view{10, 10, 50, 40};
+        check("alpha: Mosaic -- the preview's rectangle == the result there", m && same_in(*m, *F::filtered(sq, mo, nullptr, false, &view), view), "");
+        const auto fr = F::filtered(sq, F::fresh(FilterKind::Fragment), nullptr);
+        check("alpha: Fragment -- 4 px outside the square, two of the four copies: half covered",
+              fr && std::abs(fr->get(47, 35).c[3] - 0.5f) < 1e-4f && fr->get(60, 35).c[3] == 0.f, fr ? num(fr->get(47, 35).c[3]) : "");
+        // Wind from the right: a white bar 100..109 blows into the clear to its left, in white.
+        const auto bar = P::TileMap(f32(), 200, 60).fill({100, 20, 10, 20}, P::rgba(1, 1, 1, 1));
+        const auto wd = F::fresh(FilterKind::Wind);
+        const auto w = F::filtered(bar, wd, nullptr);
+        check("alpha: Wind -- the bar's edge blows into the clear downwind, white, fading; nothing upwind",
+              w && w->get(98, 30).c[3] > 0.3f && w->get(98, 30).c[3] < 1.f && std::abs(w->get(98, 30).c[0] - 1.f) < 1e-4f && w->get(112, 30).c[3] == 0.f,
+              w ? num(w->get(98, 30).c[3]) : "");
+        const auto wl = F::filtered(bar, wd, nullptr, true);
+        check("alpha: Wind under Lock Alpha -- the clear stays clear", wl && wl->get(98, 30).c[3] == 0.f, "");
+        // An opaque picture: Wind's colour as before (the trail of straight colour).
+        const auto dot = P::TileMap(f32(), 200, 60).fill({0, 0, 200, 60}, P::rgba(0, 0, 0, 1)).fill({100, 30, 1, 1}, P::rgba(1, 1, 1, 1));
+        const auto wo = F::filtered(dot, wd, nullptr);
+        check("alpha: Wind on an opaque picture -- alpha stays 1 everywhere it was", wo && wo->get(97, 30).c[3] == 1.f && wo->get(150, 10).c[3] == 1.f, "");
+        auto cr = F::fresh(FilterKind::Crystallize); cr.radius = 10;
+        const auto c = F::filtered(sq, cr, nullptr);
+        check("alpha: the others keep it -- Crystallize leaves the clear clear", c && c->get(5, 5).c[3] == 0.f && c->get(21, 21).c[3] == 0.f, "");
+    }
 }
