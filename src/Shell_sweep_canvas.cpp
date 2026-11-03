@@ -2,8 +2,10 @@
 #include "Log.hpp"
 #include "core/Selection.hpp"
 #include "core/Tools.hpp"
+#include "Registry.hpp"
 
 #include <glibmm/main.h>
+#include <gtkmm/listbox.h>
 #include <gtkmm/window.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/x11/gdkx.h>
@@ -40,6 +42,14 @@ B drag(std::vector<std::array<double, 2>> pts, const std::string& mods = {}) { r
 B click(double x, double y, int n = 1, const std::string& mods = {}) { return {K::Click, {}, n, {{x, y}}, mods}; }
 B key(const std::string& k) { return {K::Key, k, 0, {}, {}}; }
 B type(const std::string& t) { return {K::Type, t, 0, {}, {}}; }
+// s092: the panels. A row of a named list (x: a fraction of its width -- the
+// eye at the left, the name further in), clicked n times; a row dragged onto
+// another; a named slider dragged from one fraction of its width to another.
+B row(const std::string& list, int i, double x = 0.6, int n = 1) { return {K::Row, list, i, {{x, static_cast<double>(n)}}, {}}; }
+B row_drag(const std::string& list, int from, int to) { return {K::RowDrag, list, from, {{0.6, static_cast<double>(to)}}, {}}; }
+// s092: the setup is done -- the scene's expected step is counted from here.
+B mark() { return {K::Mark, {}, 0, {}, {}}; }
+B slide(const std::string& name, double x0, double x1) { return {K::Slide, name, 0, {{x0, 0.5}, {x1, 0.5}}, {}}; }
 
 std::vector<Shell::SweepScene> scenes() {
     const std::vector<std::array<double, 2>> stroke = {{0.25, 0.35}, {0.35, 0.42}, {0.45, 0.45}, {0.55, 0.42}, {0.65, 0.35}};
@@ -55,19 +65,19 @@ std::vector<Shell::SweepScene> scenes() {
         {"clone stamp (Alt-click a source)", true, {tool("clone"), click(0.2, 0.2, 1, "alt"), drag(stroke)}},
         {"heal: spot", true, {tool("heal", 0), drag(stroke)}},
         {"heal: healing (Alt-click a source)", true, {tool("heal", 1), click(0.2, 0.2, 1, "alt"), drag(stroke)}},
-        {"heal: patch (a selection dragged)", true, {tool("select", 0), drag(box), tool("heal", 2), drag({{0.5, 0.5}, {0.45, 0.4}, {0.4, 0.3}})}},
+        {"heal: patch (a selection dragged)", true, {tool("select", 0), drag(box), mark(), tool("heal", 2), drag({{0.5, 0.5}, {0.45, 0.4}, {0.4, 0.3}})}},
         {"gradient: linear", true, {tool("gradient", 0), drag({{0.2, 0.5}, {0.5, 0.5}, {0.8, 0.5}})}},
         {"gradient: radial", true, {tool("gradient", 1), drag({{0.5, 0.5}, {0.6, 0.55}, {0.7, 0.6}})}},
         // ── select ──
         {"select: rectangle", true, {tool("select", 0), drag(box)}},
-        {"select: rectangle, Shift adds", true, {tool("select", 0), drag(box), drag({{0.1, 0.1}, {0.2, 0.15}, {0.25, 0.2}}, "shift")}},
+        {"select: rectangle, Shift adds", true, {tool("select", 0), drag(box), mark(), drag({{0.1, 0.1}, {0.2, 0.15}, {0.25, 0.2}}, "shift")}},
         {"select: ellipse", true, {tool("select", 1), drag(box)}},
         {"select: lasso", true, {tool("select", 2), drag(loop)}},
         {"select: wand", true, {tool("select", 3), click(0.5, 0.5)}},
         {"select: colour range", false, {tool("select", 4), click(0.5, 0.5)}},
         {"select: magnetic", true, {tool("select", 5), click(0.3, 0.3), click(0.7, 0.3), click(0.6, 0.7), key("Return")}},
         {"select: object (needs its model)", false, {tool("select", 6), drag(box)}},
-        {"refine brush (on a selection)", true, {tool("select", 0), drag(box), tool("refine"), drag({{0.3, 0.5}, {0.5, 0.5}, {0.7, 0.5}})}},
+        {"refine brush (on a selection)", true, {tool("select", 0), drag(box), mark(), tool("refine"), drag({{0.3, 0.5}, {0.5, 0.5}, {0.7, 0.5}})}},
         // ── move / crop ──
         {"move", true, {tool("move"), drag(nudge)}},
         {"crop: a box, Enter", true, {tool("crop", 0), drag({{0.1, 0.1}, {0.5, 0.5}, {0.85, 0.85}}), key("Return")}},
@@ -87,6 +97,16 @@ std::vector<Shell::SweepScene> scenes() {
         {"text: a click, typed, Esc", true, {tool("text"), click(0.3, 0.3), type("Sweep"), key("Escape")}},
         {"pen: three anchors, closed", true, {tool("pen", 0), click(0.3, 0.3), click(0.7, 0.3), click(0.5, 0.7), click(0.3, 0.3)}},
         {"pen: anchors, Enter", true, {tool("pen", 0), click(0.3, 0.6), drag({{0.6, 0.6}, {0.65, 0.5}, {0.7, 0.4}}), key("Return")}},
+        // ── the panels (s092) ──
+        {"layers: a click picks the row below", false, {action("layer-duplicate"), action("layer-duplicate"), mark(), row("layers.list", 1)}},
+        {"layers: the eye hides a layer", true, {action("layer-duplicate"), action("layer-duplicate"), mark(), row("layers.list", 1, 0.06)}},
+        {"layers: a row dragged two down", true, {action("layer-duplicate"), action("layer-duplicate"), mark(), row_drag("layers.list", 0, 2)}},
+        {"layers: double-click renames, typed, Enter", true, {action("layer-duplicate"), action("layer-duplicate"), mark(), row("layers.list", 1, 0.6, 2), key("ctrl+a"), type("Swept"), key("Return")}},
+        {"properties: opacity dragged", true, {slide("properties.opacity", 0.9, 0.35)}},
+        {"properties: fill dragged", true, {slide("properties.fill", 0.9, 0.5)}},
+        {"properties: lock alpha", true, {widget("properties.lock.alpha")}},
+        {"properties: blend picked from the list", true, {widget("properties.blend"), key("Down"), key("Down"), key("Return")}},
+        {"history: a stroke, then the row before it", false, {tool("brush"), drag(stroke), row("dock.tabs", 2, 0.5), row("history.list", 0)}},
         // ── sample / view (no step) ──
         {"eyedropper", false, {tool("eyedropper"), click(0.5, 0.5)}},
         {"hand", false, {tool("hand"), drag(nudge)}},
@@ -116,8 +136,10 @@ bool Shell::widget_point(Gtk::Widget& w, double x, double y, double& wx, double&
 }
 
 void Shell::start_canvas_sweep() {
-    open_demo();
-    sweep_setup();
+    sweep_open([this] { start_canvas_run(); });
+}
+
+void Shell::start_canvas_run() {
     const char* f = std::getenv("KLIMT_FINGERS");
     m_fingers = f ? f : "";
     auto lg = log::get(log::Area::Shell);
@@ -185,12 +207,12 @@ void Shell::canvas_beat() {
     }
     const auto& sc = m_scenes[m_scene_at];
     if (m_beat_at == 0) {
-        if (!has_image()) { open_demo(); sweep_setup(); }
-        m_sweep_mark = m_journal.mark();
+        if (!has_image()) { sweep_open([this] { canvas_beat(); }); return; }   // a scene closed the picture
+        m_sweep_mark = m_expect_mark = m_journal.mark();
         if (lg) lg->info("sweep: canvas [{}/{}] {}", m_scene_at + 1, m_scenes.size(), sc.name);
     }
     if (m_beat_at >= sc.beats.size()) {   // the scene's end: what landed, a picture, then undone
-        const bool landed = m_journal.mark() != m_sweep_mark;
+        const bool landed = m_journal.mark() != m_expect_mark;
         if (landed && lg) lg->info("sweep:   a step: \"{}\"", m_journal.undo_label());
         if (!landed && lg) lg->info("sweep:   no step");
         if (landed != sc.step) {
@@ -232,6 +254,10 @@ void Shell::canvas_beat() {
         activate_action("win." + b.s);
         canvas_step();
         return;
+    case K::Mark:
+        m_expect_mark = m_journal.mark();
+        canvas_step();
+        return;
     case K::Widget: {
         Gtk::Widget* w = nullptr;
         std::function<void(Gtk::Widget&)> find = [&](Gtk::Widget& p) {
@@ -239,7 +265,8 @@ void Shell::canvas_beat() {
             if (std::string(p.get_name()) == b.s && p.get_mapped()) { w = &p; return; }
             for (auto* c = p.get_first_child(); c; c = c->get_next_sibling()) find(*c);
         };
-        find(*this);
+        if (auto* r = registry::find(b.s); r && r->get_mapped()) w = r;   // s092: the registry first (a name it knows)
+        else find(*this);
         double x = 0, y = 0;
         if (!w || !widget_point(*w, w->get_width() / 2.0, w->get_height() / 2.0, x, y)) {
             if (lg) lg->warn("sweep:   NO WIDGET \"{}\" on show", b.s);
@@ -248,6 +275,52 @@ void Shell::canvas_beat() {
             return;
         }
         o << "click 1 " << static_cast<int>(x) << ' ' << static_cast<int>(y) << " -";
+        break;
+    }
+    case K::Row: case K::RowDrag: {   // s092
+        auto* lb = dynamic_cast<Gtk::ListBox*>(registry::find(b.s));
+        Gtk::Widget* r = lb && lb->get_mapped() ? lb->get_row_at_index(b.v) : nullptr;
+        if (!lb && b.k == K::Row) {   // not a list: the i-th child of a named box (the dock's tabs)
+            Gtk::Widget* box = nullptr;
+            std::function<void(Gtk::Widget&)> find = [&](Gtk::Widget& p) {
+                if (box) return;
+                if (std::string(p.get_name()) == b.s && p.get_mapped()) { box = &p; return; }
+                for (auto* c = p.get_first_child(); c; c = c->get_next_sibling()) find(*c);
+            };
+            find(*this);
+            r = box ? box->get_first_child() : nullptr;
+            for (int i = 0; r && i < b.v; ++i) r = r->get_next_sibling();
+        }
+        auto* r2 = lb && b.k == K::RowDrag ? lb->get_row_at_index(static_cast<int>(b.pts[0][1])) : nullptr;
+        double x = 0, y = 0, x2 = 0, y2 = 0;
+        if (!r || !r->get_mapped() || (b.k == K::RowDrag && (!r2 || !r2->get_mapped())) ||
+            !widget_point(*r, r->get_width() * b.pts[0][0], r->get_height() / 2.0, x, y)) {
+            if (lg) lg->warn("sweep:   NO ROW {} of \"{}\" on show", b.v, b.s);
+            ++m_scene_bad;
+            canvas_step();
+            return;
+        }
+        if (b.k == K::Row) {
+            o << "click " << static_cast<int>(b.pts[0][1]) << ' ' << static_cast<int>(x) << ' ' << static_cast<int>(y) << " -";
+            break;
+        }
+        widget_point(*r2, r2->get_width() * 0.6, r2->get_height() * 0.75, x2, y2);   // its lower part: below it
+        o << "drag - " << static_cast<int>(x) << ' ' << static_cast<int>(y) << ' ' << static_cast<int>(x) << ' ' << static_cast<int>(y + 12)
+          << ' ' << static_cast<int>(x2) << ' ' << static_cast<int>(y2);
+        break;
+    }
+    case K::Slide: {   // s092
+        auto* w = registry::find(b.s);
+        double x = 0, y = 0, x2 = 0, y2 = 0;
+        if (!w || !w->get_mapped() || !widget_point(*w, w->get_width() * b.pts[0][0], w->get_height() / 2.0, x, y)) {
+            if (lg) lg->warn("sweep:   NO WIDGET \"{}\" on show", b.s);
+            ++m_scene_bad;
+            canvas_step();
+            return;
+        }
+        widget_point(*w, w->get_width() * b.pts[1][0], w->get_height() / 2.0, x2, y2);
+        o << "drag - " << static_cast<int>(x) << ' ' << static_cast<int>(y) << ' ' << static_cast<int>((x + x2) / 2) << ' ' << static_cast<int>(y)
+          << ' ' << static_cast<int>(x2) << ' ' << static_cast<int>(y2);
         break;
     }
     case K::Drag: {
@@ -286,6 +359,7 @@ void Shell::canvas_cleanup() {
     while (m_journal.can_undo() && m_journal.mark() != m_sweep_mark) m_journal.undo();
     if (!m_sweep_layer.empty() && m_doc.get(m_sweep_layer)) m_layers.select({m_sweep_layer}, false);
     activate_action("win.zoom-fit");
+    m_dock_stack.set_visible_child("layers");   // s092: a scene may have shown History
     update_layer_actions();
 }
 

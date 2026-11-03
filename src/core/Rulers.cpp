@@ -113,7 +113,11 @@ std::vector<Tick> ticks(Unit u, double dpi, double extent, double origin, double
     // Minor divisions: as fine as stays 4+ screen px apart.
     const bool binary = u == Unit::Inches;
     int div = 1;
-    for (const int n : binary ? std::initializer_list<int>{8, 4, 2} : std::initializer_list<int>{10, 5, 2})
+    // s092 (ASan: stack-use-after-scope): the two initializer_lists of a
+    // ?: -- their arrays died with the ?:, the loop read them after. Arrays
+    // that live as long as the program.
+    static constexpr int kBinary[] = {8, 4, 2}, kDecimal[] = {10, 5, 2};
+    for (const int n : binary ? kBinary : kDecimal)
         if (step / n * ppu * zoom >= 4) { div = n; break; }
     if (u == Unit::Pixels) while (div > 1 && step / div < 1) div /= 2;   // never between pixels
     const double minor = step / div;

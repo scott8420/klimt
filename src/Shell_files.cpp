@@ -155,6 +155,11 @@ void Shell::ask_unsaved(const std::string& doing, std::function<void()> go) {
 // s020: every tab with unsaved changes asks, in turn (each shown first).
 bool Shell::on_close_request() {
     text_close();   // s046
+    // s092 (the photo sweep: Layer > Rename, then quit -- an Adwaita
+    // CRITICAL): a layer name being typed committed on its field's focus-out
+    // while the window was coming down -- a step after the unsaved-changes
+    // question, the title already gone. It lands now, and is asked about.
+    m_layers.finish_rename();
     if (m_closing) { save_session(); return false; }   // s023: the tabs, for next time
     if (file_job_busy()) return true;
     bool any = false;

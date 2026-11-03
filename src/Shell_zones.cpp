@@ -86,6 +86,10 @@ void Shell::build_shell() {  // zone: header + rail | strip/canvas | dock + stat
     header->pack_start(m_open_button);
 
     m_title = ADW_WINDOW_TITLE(adw_window_title_new("Untitled", ""));
+    // s092 (the photo sweep -- an Adwaita CRITICAL on quitting): a Layers
+    // repaint queued from idle ran after the window's widgets were disposed
+    // and named the title. GLib nulls this pointer when the title goes.
+    g_object_add_weak_pointer(G_OBJECT(m_title), reinterpret_cast<gpointer*>(&m_title));
     gtk_header_bar_set_title_widget(header->gobj(), GTK_WIDGET(m_title));
 
     m_menu_button.set_icon_name("open-menu-symbolic");
@@ -239,6 +243,7 @@ Gtk::Widget& Shell::build_dock() {  // zone
     auto lower = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
 
     auto tabs = Gtk::make_managed<Gtk::StackSwitcher>();
+    tabs->set_name("dock.tabs");   // s092: the canvas sweep clicks its buttons (Layers, Channels, History, Actions)
     tabs->set_stack(m_dock_stack);
     tabs->set_halign(Gtk::Align::CENTER);
     tabs->set_margin_top(8);

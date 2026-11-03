@@ -1,4 +1,9 @@
 #include "LayersPanel.hpp"
+
+#include <gtkmm/eventcontrollerlegacy.h>
+#include <gtkmm/settings.h>
+
+#include <functional>
 #include "Log.hpp"
 #include "core/Clip.hpp"   // s080: the clipping path tag
 #include "core/Smart.hpp"  // s082: the smart badge
@@ -86,6 +91,20 @@ LayersPanel::LayersPanel(core::Document& doc, core::DocJournal& journal)
         press->signal_pressed().connect([this](int, double, double) { m_input_at = std::chrono::steady_clock::now(); });
         press->signal_released().connect([this](int, double, double) { m_input_at = std::chrono::steady_clock::now(); });
         m_list.add_controller(press);
+        // s092 (the canvas sweep: a double-click on a name, then a crash about
+        // one time in four): the second press starts the rename, whose rebuild
+        // ran from idle BEFORE the button came up -- the row the list's own
+        // press / release tracking still held was gone. The raw events say
+        // when a press was; queue_repaint waits out its double-click (and asks
+        // the pointer itself whether a button is still down -- a flag set
+        // here missed the release a row drag takes, and held the rows stale).
+        auto raw = Gtk::EventControllerLegacy::create();
+        raw->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+        raw->signal_event().connect([this](const Glib::RefPtr<const Gdk::Event>& e) {
+            if (e->get_event_type() == Gdk::Event::Type::BUTTON_PRESS) m_pressed_at = std::chrono::steady_clock::now();
+            return false;
+        }, false);
+        m_list.add_controller(raw);
         auto typed = Gtk::EventControllerKey::create();
         typed->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
         typed->signal_key_pressed().connect([this](guint, guint, Gdk::ModifierType) {
@@ -255,10 +274,29 @@ void LayersPanel::select(const std::vector<Id>& ids, bool keys) {
 void LayersPanel::queue_repaint() {
     if (m_repaint_queued) return;
     m_repaint_queued = true;
-    Glib::signal_idle().connect_once([this]() {
-        m_repaint_queued = false;
-        repaint();
-    });
+    Glib::signal_idle().connect_once([this]() { repaint_when_up(0); });
+}
+
+// s092: the rows are rebuilt only with no button down on them (a release
+// lost somewhere can't hold them for longer than 2 s) ...
+void LayersPanel::repaint_when_up(int waited) {
+    // ... nor within a double-click time of a press: a click gesture on a row
+    // is still counting clicks that long (the rename crash above).
+    int dct = 400;
+    if (auto st = Gtk::Settings::get_default()) dct = st->property_gtk_double_click_time().get_value();
+    const bool counting = std::chrono::steady_clock::now() - m_pressed_at < std::chrono::milliseconds(dct + 50);
+    bool held = false;
+    if (auto d = Gdk::Display::get_default())
+        if (auto seat = d->get_default_seat())
+            if (auto ptr = seat->get_pointer())
+                held = (ptr->get_modifier_state() & (Gdk::ModifierType::BUTTON1_MASK | Gdk::ModifierType::BUTTON2_MASK |
+                                                     Gdk::ModifierType::BUTTON3_MASK)) != Gdk::ModifierType{};
+    if ((held || counting) && waited < 100) {
+        Glib::signal_timeout().connect_once([this, waited] { repaint_when_up(waited + 1); }, 20);
+        return;
+    }
+    m_repaint_queued = false;
+    repaint();
 }
 
 void LayersPanel::repaint() {
@@ -435,27 +473,12 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
     }
 
     if (id == m_renaming) {
-        auto field = Gtk::make_managed<Gtk::Entry>();
-        field->set_name("layers.rename");
-        field->set_text(l.name);
-        field->set_hexpand(true);
-        field->signal_activate().connect([this, field] { commit_rename(field->get_text()); });
-        auto leave = Gtk::EventControllerFocus::create();
-        leave->signal_leave().connect([this, field] { commit_rename(field->get_text()); });
-        field->add_controller(leave);
-        auto esc = Gtk::EventControllerKey::create();
-        esc->signal_key_pressed().connect([this](guint keyval, guint, Gdk::ModifierType) {
-            if (keyval != GDK_KEY_Escape) return false;
-            m_renaming.clear();
-            m_keys_to_list = true;
-            queue_repaint();
-            return true;
-        }, false);
-        field->add_controller(esc);
+        auto* field = rename_field(l.name);
         box->append(*field);
         m_rename_field = field;
     } else {
         auto name = Gtk::make_managed<Gtk::Label>(l.name.empty() ? "Untitled" : l.name);
+        name->set_name("layers.name");   // s092: start_rename finds it (the field goes beside it)
         name->set_xalign(0.0f);
         name->set_hexpand(true);
         name->set_ellipsize(Pango::EllipsizeMode::END);
@@ -737,13 +760,69 @@ void LayersPanel::toggle_clip() {
     if (l) L::set_clipped(m_journal, m_doc, primary(), !l->clipped);
 }
 
+// The name as a field: Enter or leaving it renames, Esc leaves it be.
+Gtk::Entry* LayersPanel::rename_field(const std::string& text) {
+    auto field = Gtk::make_managed<Gtk::Entry>();
+    field->set_name("layers.rename");
+    field->set_text(text);
+    field->set_hexpand(true);
+    // s092: only the field on show renames -- one a rebuild replaced still
+    // told its focus leaving, and renamed back to the old name (the editing ended).
+    field->signal_activate().connect([this, field] { if (field == m_rename_field) commit_rename(field->get_text()); });
+    auto leave = Gtk::EventControllerFocus::create();
+    leave->signal_leave().connect([this, field] { if (field == m_rename_field) commit_rename(field->get_text()); });
+    field->add_controller(leave);
+    auto esc = Gtk::EventControllerKey::create();
+    esc->signal_key_pressed().connect([this](guint keyval, guint, Gdk::ModifierType) {
+        if (keyval != GDK_KEY_Escape) return false;
+        m_renaming.clear();
+        m_keys_to_list = true;
+        queue_repaint();
+        return true;
+    }, false);
+    field->add_controller(esc);
+    return field;
+}
+
 void LayersPanel::rename_primary() { if (!primary().empty()) start_rename(primary()); }
 
 void LayersPanel::start_rename(const Id& id) {
-    if (!m_doc.get(id)) return;
+    const auto l = m_doc.get(id);
+    if (!l) return;
     m_renaming = id;
-    if (std::find(m_sel.begin(), m_sel.end(), id) == m_sel.end()) m_sel = {id};
+    const bool was_selected = std::find(m_sel.begin(), m_sel.end(), id) != m_sel.end();
+    if (!was_selected) m_sel = {id};
+    // s092 (the canvas sweep: a double-click on a name crashed about one time
+    // in four, deep in GTK's style pass): the rename rebuilt every row while
+    // the name's double-click gesture was still counting clicks on it. The
+    // field goes in beside the name, in its own row; nothing is destroyed.
+    // A rebuild already on its way builds the field itself (it waits out the
+    // double-click, below) -- one in place now would only be replaced.
+    if (was_selected && !m_rename_field && !m_repaint_queued)
+        for (auto* c = m_list.get_first_child(); c; c = c->get_next_sibling()) {
+            if (std::string(c->get_name()) != id) continue;
+            Gtk::Widget* name = nullptr;
+            std::function<void(Gtk::Widget&)> find = [&](Gtk::Widget& w) {
+                if (name) return;
+                if (std::string(w.get_name()) == "layers.name") { name = &w; return; }
+                for (auto* k = w.get_first_child(); k; k = k->get_next_sibling()) find(*k);
+            };
+            find(*c);
+            auto* box = name ? dynamic_cast<Gtk::Box*>(name->get_parent()) : nullptr;
+            if (!box) break;
+            auto* field = rename_field(l->name);
+            box->insert_child_after(*field, *name);
+            name->set_visible(false);
+            m_rename_field = field;
+            field->grab_focus();
+            field->select_region(0, -1);
+            return;
+        }
     queue_repaint();
+}
+
+void LayersPanel::finish_rename() {
+    if (!m_renaming.empty() && m_rename_field) commit_rename(m_rename_field->get_text());
 }
 
 void LayersPanel::commit_rename(const std::string& text) {
@@ -757,3 +836,4 @@ void LayersPanel::commit_rename(const std::string& text) {
 }
 
 }  // namespace klimt
+

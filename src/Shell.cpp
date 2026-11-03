@@ -36,6 +36,8 @@ Shell::Shell()
 }
 
 Shell::~Shell() {
+    // s092: the title outliving us (it shouldn't) mustn't write into freed memory.
+    if (m_title) { g_object_remove_weak_pointer(G_OBJECT(m_title), reinterpret_cast<gpointer*>(&m_title)); m_title = nullptr; }
     m_te_blink.disconnect();   // s046
     if (m_im) { g_signal_handlers_disconnect_by_data(m_im, this); g_object_unref(m_im); m_im = nullptr; }
     // s014 m4: a divider dragged just before quitting is still remembered.

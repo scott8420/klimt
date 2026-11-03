@@ -8,6 +8,8 @@
 #include <gtkmm/window.h>
 
 #include <cstdlib>
+#include <functional>
+#include <memory>
 #include <set>
 
 // Shell_sweep.cpp -- THE REGRESSION SWEEP (s090; docs/regression.md).
@@ -49,9 +51,43 @@ Gtk::Button* ok_of(Gtk::Widget& w) {
 }
 }  // namespace
 
+// s092: what the sweeps work on -- the demo, or KLIMT_SWEEP_FILE=photo.jpg
+// (the demo is flat shapes: a filter that wants texture, a heal tool, found
+// nothing to do). Opening a file is a job: `then` runs once it has landed.
+void Shell::sweep_open(std::function<void()> then) {
+    const char* file = std::getenv("KLIMT_SWEEP_FILE");
+    if (!file || !*file) {
+        open_demo();
+        sweep_setup();
+        then();
+        return;
+    }
+    m_open_waits = 0;
+    if (auto lg = log::get(log::Area::Shell)) lg->info("sweep: opening {}", file);
+    open_path(file);
+    auto poll = std::make_shared<std::function<void()>>();
+    *poll = [this, then, poll, path = std::string(file)] {
+        if (has_image() && !file_job_busy() && m_jobs.active() == 0) {
+            sweep_setup();
+            then();
+            return;
+        }
+        if (++m_open_waits > 600) {
+            if (auto lg = log::get(log::Area::Shell)) lg->warn("sweep: {} didn't open in 60 s -- stopped", path);
+            m_closing = true;
+            close();
+            return;
+        }
+        Glib::signal_timeout().connect_once([poll] { (*poll)(); }, 100);
+    };
+    Glib::signal_timeout().connect_once([poll] { (*poll)(); }, 100);
+}
+
 void Shell::start_sweep() {
-    open_demo();
-    sweep_setup();
+    sweep_open([this] { start_sweep_run(); });
+}
+
+void Shell::start_sweep_run() {
     const char* only = std::getenv("KLIMT_SWEEP_ONLY");
     m_sweep.clear();
     for (const auto& c : core::commands())
@@ -61,7 +97,7 @@ void Shell::start_sweep() {
     m_sweep_landed = 0;
     m_sweep_ok = std::getenv("KLIMT_SWEEP_OK") != nullptr;
     if (auto lg = log::get(log::Area::Shell)) lg->info("sweep: {} commands{}", m_sweep.size(), m_sweep_ok ? ", each dialog's OK pressed" : "");
-    Glib::signal_timeout().connect_once([this] { sweep_step(); }, 800);
+    Glib::signal_timeout().connect_once([this] { m_sweep_mark = m_journal.mark(); sweep_step(); }, 800);
 }
 
 // The demo set up for the verbs to find what they need: a pixel layer picked
@@ -136,7 +172,10 @@ void Shell::sweep_step() {
         Glib::signal_timeout().connect_once([this] { m_closing = true; close(); }, 500);
         return;
     }
-    if (!has_image()) { open_demo(); sweep_setup(); }   // a command closed the picture
+    if (!has_image()) {   // a command closed the picture
+        sweep_open([this] { m_sweep_mark = m_journal.mark(); sweep_step(); });
+        return;
+    }
     if (!m_sweep_layer.empty() && m_doc.get(m_sweep_layer) && m_layers.primary() != m_sweep_layer) m_layers.select({m_sweep_layer}, false);
     // KLIMT_SWEEP=2: a selection before every command (a late job's landing
     // can leave the picture without one), and the greying brought up to date.

@@ -70,6 +70,7 @@ public:
     void lower();
     void toggle_clip();
     void rename_primary();   // F2 / double-click: the name becomes a field
+    void finish_rename();   // s092: a name being typed lands now (the window closing -- before its widgets go)
 
     // s012: LAYER MASKS on the rows. The mask chip: a click paints the MASK
     // (the Brush, Eraser and Fill go to it) -- clicking the layer's own icon
@@ -95,8 +96,10 @@ private:
     std::function<void(const core::actions::Act&)> m_recorder;   // s084
     void rec(const core::actions::Act& a) { if (m_recorder) m_recorder(a); }
     void repaint();
+    void repaint_when_up(int waited);   // s092
     Gtk::ListBoxRow* build_row(const Id& id);
     void start_rename(const Id& id);
+    Gtk::Entry* rename_field(const std::string& text);   // s092: the name as a field (a repaint, or in place)
     void commit_rename(const std::string& text);
     void on_rows_selected();
     std::vector<Id> in_walk_order(const std::vector<Id>& ids) const;
@@ -123,6 +126,7 @@ private:
     // put back.
     std::chrono::steady_clock::time_point m_input_at{};
     bool              m_repaint_queued = false;
+    std::chrono::steady_clock::time_point m_pressed_at{};   // s092: the last press on the list
     bool              m_keys_to_list = false;
     std::function<void()> m_changed;
     std::vector<Id>   m_dragging;               // what the drag in flight carries
@@ -141,3 +145,4 @@ private:
 };
 
 }  // namespace klimt
+
