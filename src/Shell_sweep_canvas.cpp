@@ -116,7 +116,7 @@ std::vector<Shell::SweepScene> scenes() {
         {"properties: opacity dragged", true, {slide("properties.opacity", 0.9, 0.35)}},
         {"properties: fill dragged", true, {slide("properties.fill", 0.9, 0.5)}},
         {"properties: lock alpha", true, {widget("properties.lock.alpha")}},
-        {"properties: blend picked from the list", true, {widget("properties.blend"), key("Down"), key("Down"), key("Return")}},
+        {"properties: blend picked from the list", true, {widget("properties.blend"), key("End"), key("Return")}},
         {"history: a stroke, then the row before it", false, {tool("brush"), drag(stroke), tab(2), row("history.list", 0)}},
         // ── channels (s093) ──
         {"channels: the selection saved", true, {tool("select", 0), drag(box), mark(), tab(1), widget("dock.channels.save")}, "channels=1"},
@@ -147,6 +147,7 @@ std::vector<Shell::SweepScene> scenes() {
         {"actions: new, Select All recorded, stop", true, {tab(3), widget("actions.new"), action("select-all"), widget("actions.stop")}, "actions+1"},
         {"actions: a drawn box recorded (s094)", true, {tab(3), widget("actions.new"), tool("select", 0), drag(box), widget("actions.stop")}, "recorded=select.shape"},
         {"actions: a drawn lasso recorded (s094)", true, {tab(3), widget("actions.new"), tool("select", 2), drag(loop), widget("actions.stop")}, "recorded=select.shape"},
+        {"actions: a Wand click recorded (s095)", true, {tab(3), widget("actions.new"), tool("select", 3), click(0.5, 0.5), widget("actions.stop")}, "recorded=select.wand"},
         {"actions: a starter played", true, {tab(3), row("actions.list", 0, 0.95), widget("actions.play")}},
         {"actions: a step switched off", false, {tab(3), row_button("actions.list", 0, 0), row_button("actions.list", 1, 0)}, "step0off"},
         {"actions: double-click renames, typed, Enter", false, {tab(3), row("actions.list", 0, 0.4, 2), key("ctrl+a"), type("Swept"), key("Return")}, "action0=Swept"},

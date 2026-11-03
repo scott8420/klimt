@@ -80,6 +80,12 @@ Act select_invert();
 // selection already there (Shift adds ...).
 enum class Drawn { Rect, Ellipse, Lasso };
 Act select_shape(Drawn kind, select::Op op, const std::vector<select::Pt>& frac);
+// s095: a Magic Wand click -- where (fractions of the canvas), its tolerance
+// (0..255), Contiguous, All layers; played on the picked layer (or what you
+// see), as the tool does.
+Act select_wand(double fx, double fy, int tolerance, bool contiguous, bool all_layers, select::Op op);
+// s095: Object Select -- the box round the thing, as fractions of the canvas.
+Act select_object(double fx0, double fy0, double fx1, double fy1, select::Op op);
 Act select_subject();
 Act remove_background();
 Act content_aware_fill();   // s088: LaMa through the selection, a new layer above the picked one   // s087: the picked layer's mask from the model   // s086: the local model (libs/seg) -- inside the selection when there is one

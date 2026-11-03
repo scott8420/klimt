@@ -95,6 +95,7 @@ const std::vector<Verb>& verbs() {
         {"select.all", "Select All"},          {"select.none", "Deselect"},
         {"select.invert", "Inverse"},          {"select.feather", "Feather"},
         {"select.shape", "Rectangle / Ellipse / Lasso"},   // s094
+        {"select.wand", "Magic Wand"},         {"select.object", "Object Select"},   // s095
         {"select.subject", "Select Subject"},  {"layer.remove_bg", "Remove Background"},
         {"edit.fill_ca", "Content-Aware Fill"},
         {"select.fill", "Fill"},               {"layer.new", "New Layer"},
@@ -164,6 +165,24 @@ Act select_shape(Drawn kind, select::Op op, const std::vector<select::Pt>& frac)
     static const char* ops[] = {"", " (Add)", " (Subtract)", " (Intersect)"};
     label += ops[o];
     return make("select.shape", {{"kind", kinds[k]}, {"op", o}, {"pts", pts}}, label);
+}
+namespace {
+const char* op_words(select::Op op) {   // s095: the panel's suffix
+    static const char* ops[] = {"", " (Add)", " (Subtract)", " (Intersect)"};
+    return ops[std::clamp(static_cast<int>(op), 0, 3)];
+}
+double frac4(double v) { return std::round(std::clamp(v, -1.0, 2.0) * 10000) / 10000; }
+}  // namespace
+Act select_wand(double fx, double fy, int tol, bool contiguous, bool all_layers, select::Op op) {   // s095
+    tol = std::clamp(tol, 0, 255);
+    std::string label = "Magic Wand  " + std::to_string(tol) + (contiguous ? "" : ", not contiguous") + (all_layers ? ", all layers" : "") + op_words(op);
+    return make("select.wand", {{"x", frac4(fx)}, {"y", frac4(fy)}, {"tolerance", tol}, {"contiguous", contiguous}, {"all_layers", all_layers},
+                                {"op", static_cast<int>(op)}}, label);
+}
+Act select_object(double fx0, double fy0, double fx1, double fy1, select::Op op) {   // s095
+    const std::string label = "Object Select  " + num(std::round(std::abs(fx1 - fx0) * 1000) / 10) + " × " +
+                              num(std::round(std::abs(fy1 - fy0) * 1000) / 10) + " % of the canvas" + op_words(op);
+    return make("select.object", {{"box", json::array({frac4(fx0), frac4(fy0), frac4(fx1), frac4(fy1)})}, {"op", static_cast<int>(op)}}, label);
 }
 Act select_subject() { return make("select.subject", json::object(), "Select Subject"); }
 Act remove_background() { return make("layer.remove_bg", json::object(), "Remove Background"); }
@@ -368,6 +387,46 @@ bool run(DocJournal& j, Document& d, Document::Id& picked, const Act& act, std::
                                                  subject::edge_for(im.width, im.height), error, cancelled);
             if (!hide) return false;
             layers::set_mask(j, d, picked, std::move(*hide), "Remove Background");
+            return true;
+        }
+        if (v == "select.wand") {   // s095: the click on THIS canvas, as the tool
+            const int o = a.value("op", 0);
+            if (o < 0 || o > 3) { error = "an unknown way to combine"; return false; }
+            const int x = static_cast<int>(std::floor(a.value("x", -1.0) * im.width)), y = static_cast<int>(std::floor(a.value("y", -1.0) * im.height));
+            if (x < 0 || y < 0 || x >= im.width || y >= im.height) { error = "the click is off this picture"; return false; }
+            const bool all = a.value("all_layers", false);
+            std::optional<pixel::TileMap> from;
+            if (all) {
+                from = file::flatten(im, d.snapshot());
+                if (!from) { error = "cancelled"; return false; }
+            } else {
+                const auto l = picked.empty() ? std::nullopt : d.get(picked);
+                if (!l || !draws_pixels(l->kind)) { error = "pick a layer (or record with All layers)"; return false; }
+                from = l->pixels ? *l->pixels : d.blank();
+            }
+            auto m = select::wand_mask(*from, d.mask_format(), x, y, static_cast<float>(std::clamp(a.value("tolerance", 32), 0, 255)) / 255.f,
+                                       a.value("contiguous", true), cancelled);
+            if (!m) { error = "cancelled"; return false; }
+            select::set(j, d, select::combine(d.selection(), *m, static_cast<select::Op>(o)), "Magic Wand");
+            return true;
+        }
+        if (v == "select.object") {   // s095: the box on THIS canvas
+            if (!seg::available()) { error = "Klimt was built without ONNX Runtime"; return false; }
+            const int o = a.value("op", 0);
+            if (o < 0 || o > 3) { error = "an unknown way to combine"; return false; }
+            if (!a.contains("box") || !a.at("box").is_array() || a.at("box").size() != 4) { error = "no box"; return false; }
+            const auto& b = a.at("box");
+            const int x0 = std::max(0, static_cast<int>(std::floor(b[0].get<double>() * im.width))), y0 = std::max(0, static_cast<int>(std::floor(b[1].get<double>() * im.height)));
+            const int x1 = std::min(im.width, static_cast<int>(std::ceil(b[2].get<double>() * im.width))), y1 = std::min(im.height, static_cast<int>(std::ceil(b[3].get<double>() * im.height)));
+            if (x1 - x0 < 4 || y1 - y0 < 4) { error = "the box is too small on this picture"; return false; }
+            const std::string dir = seg::default_dir();
+            const auto* m = seg::best_subject(dir);
+            if (!m) { error = "no subject model in " + dir; return false; }
+            const auto flat = file::flatten(im, d.snapshot());
+            if (!flat) { error = "cancelled"; return false; }
+            auto mk = subject::object(*flat, {x0, y0, x1 - x0, y1 - y0}, d.mask_format(), *m, seg::path_of(*m, dir), error, cancelled);
+            if (!mk) return false;
+            select::set(j, d, select::combine(d.selection(), *mk, static_cast<select::Op>(o)), "Object Select");
             return true;
         }
         if (v == "select.subject") {   // s086

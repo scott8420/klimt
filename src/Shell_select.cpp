@@ -43,7 +43,12 @@ void Shell::on_shape(const CanvasView::Shape& shape) {
     const auto mf = m_doc.mask_format();
     const auto old = m_doc.selection_ptr();
     if (shape.object && shape.kind == K::Rect && shape.pts.size() >= 2) {   // s089
-        if (m_recording >= 0) toast("Object Select: done, but not recorded -- an action can't repeat it yet");   // s094
+        if (m_recording >= 0 && im.width > 0 && im.height > 0) {   // s095: the box, as fractions of the canvas
+            const auto& p = shape.pts;
+            const double W = im.width, H = im.height;
+            rec(core::actions::select_object(std::min(p.front().x, p.back().x) / W, std::min(p.front().y, p.back().y) / H,
+                                             std::max(p.front().x, p.back().x) / W, std::max(p.front().y, p.back().y) / H, shape.op));
+        }
         object_select(shape);
         return;
     }
@@ -60,7 +65,8 @@ void Shell::on_shape(const CanvasView::Shape& shape) {
         const auto src = w.all_layers ? nullptr : l->pixels;
         const auto blank = m_doc.blank();
         const std::string label = shape.op != S::Op::Replace ? S::op_name(shape.op) : "Magic Wand";
-        if (m_recording >= 0) toast("Magic Wand: done, but not recorded -- an action can't repeat it yet");   // s094
+        if (m_recording >= 0)   // s095: where (fractions of the canvas) and how
+            rec(core::actions::select_wand((x + 0.5) / im.width, (y + 0.5) / im.height, w.tolerance, w.contiguous, w.all_layers, shape.op));
         start_job(label, [this, w, x, y, layers, src, blank, im, mf, old, op = shape.op, label](core::Jobs::Token& t)
                              -> core::Jobs::Landing {
             const auto cancel = [&t] { return t.cancelled(); };

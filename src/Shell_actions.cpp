@@ -93,7 +93,7 @@ void Shell::on_actions(ActionsPanel::Do d, int action, int step, const std::stri
             m_rec_made.clear();
             m_actions_panel.pick(m_recording);
             save_actions();
-            toast("Recording “" + m_actions.back().name + "” -- filters, adjustments, sizes, selections (menu, Rectangle, Ellipse, Lasso), Fill, layers; ■ in Actions stops");
+            toast("Recording “" + m_actions.back().name + "” -- filters, adjustments, sizes, selections (the menu's and the Select tool's), Fill, layers; ■ in Actions stops");
             break;
         }
         case ActionsPanel::Do::Record: {

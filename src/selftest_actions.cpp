@@ -11,6 +11,7 @@
 #include "core/Undo.hpp"
 #include "formats/Formats.hpp"
 #include "pixel/Pixel.hpp"
+#include "seg/Seg.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -247,5 +248,35 @@ void selftest_actions(const Check& check) {
         const std::string f = (scratch() / "conf2" / "actions.json").string();
         const std::vector<ac::Action> lib{{"Drawn", {box, add, ell, tri}}};
         check("actions: drawn selections kept in the library and read back", ac::save(f, lib) && ac::load(f) == lib, "");
+    }
+    // ── s095: the Magic Wand and Object Select recorded ──────────────────
+    {
+        using SP = core::select::Pt;
+        Doc t;
+        const auto W = t.d.image().width, H = t.d.image().height;
+        core::Document::Id picked = "L1";
+        std::string err;
+        // A red box on the picked layer, nothing selected after.
+        const auto box = ac::select_shape(ac::Drawn::Rect, core::select::Op::Replace, {SP{0.25, 0.25}, SP{0.5, 0.5}});
+        const bool made = ac::run(t.j, t.d, picked, box, err) && ac::run(t.j, t.d, picked, ac::fill_selection(red), err) &&
+                          ac::run(t.j, t.d, picked, ac::select_none(), err);
+        const auto wand = ac::select_wand(0.375, 0.375, 0, true, false, core::select::Op::Replace);
+        check("actions: a Wand click names itself", wand.verb == "select.wand" && ac::known("select.wand") && wand.label == "Magic Wand  0", wand.label);
+        const bool ran = made && ac::run(t.j, t.d, picked, wand, err);
+        const auto* sel = t.d.selection();
+        check("actions: a Wand click played -- the red box selected, corner to corner",
+              ran && sel && core::select::coverage(*sel, W / 4, H / 4) == 1.f && core::select::coverage(*sel, W / 2 - 1, H / 2 - 1) == 1.f &&
+                  core::select::coverage(*sel, W * 3 / 8, H * 3 / 8) == 1.f, err);
+        const auto off = ac::select_wand(1.5, 0.5, 32, true, false, core::select::Op::Replace);
+        check("actions: a Wand click off this picture refused, in words", !ac::run(t.j, t.d, picked, off, err) && err == "the click is off this picture", err);
+        const auto obj = ac::select_object(0.1, 0.1, 0.6, 0.5, core::select::Op::Add);
+        check("actions: Object Select names itself -- its box's share, its Add",
+              obj.verb == "select.object" && ac::known("select.object") && obj.label == "Object Select  50 × 40 % of the canvas (Add)", obj.label);
+        if (!klimt::seg::available())
+            check("actions: Object Select without ONNX Runtime -- refused, in words",
+                  !ac::run(t.j, t.d, picked, obj, err) && err == "Klimt was built without ONNX Runtime", err);
+        const std::string f = (scratch() / "conf3" / "actions.json").string();
+        const std::vector<ac::Action> lib{{"Clicked", {wand, obj}}};
+        check("actions: Wand and Object acts kept in the library and read back", ac::save(f, lib) && ac::load(f) == lib, "");
     }
 }

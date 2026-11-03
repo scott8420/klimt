@@ -243,7 +243,7 @@ void ActionsPanel::sync_buttons() {
     if (rec && m_recording < static_cast<int>(m_all.size())) {
         const auto& a = m_all[static_cast<std::size_t>(m_recording)];
         m_status.set_text("Recording “" + a.name + "” -- " + std::to_string(a.acts.size()) +
-                          " steps. Filters, adjustments, Image / Canvas Size, turns, selections (the menu's; Rectangle, Ellipse, Lasso drawn), Fill, layers and masks are kept; ■ stops.");
+                          " steps. Filters, adjustments, Image / Canvas Size, turns, selections (the menu's and the Select tool's), Fill, layers and masks are kept; ■ stops.");
         m_status.remove_css_class("dim-label");
         m_status.add_css_class("error");
     } else {
