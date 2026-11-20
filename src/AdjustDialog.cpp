@@ -63,4 +63,11 @@ void AdjustDialog::ask(core::AdjustKind k, const std::string& layer) {
     present();
 }
 
+void AdjustDialog::ask_from(const core::Adjust& start, const std::string& what) {
+    set_title(std::string(core::adjust::label(start.kind)) + " -- " + what);
+    m_editor.set(core::Adjust{});
+    m_editor.set(start);
+    present();
+}
+
 }  // namespace klimt

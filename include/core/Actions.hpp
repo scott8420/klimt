@@ -29,6 +29,7 @@
 // GTK-free; the library is a JSON file (`load` / `save`).
 #include "core/Canvas.hpp"
 #include "core/Document.hpp"
+#include "core/Merge.hpp"   // s096
 #include "core/Selection.hpp"   // s094
 #include "core/Snapshot.hpp"
 #include "formats/Formats.hpp"
@@ -65,6 +66,7 @@ Act image_size(int w, int h, double dpi, canvas::Filter f, int from_w, int from_
 Act canvas_size(int w, int h, int anchor_x, int anchor_y, int from_w, int from_h);
 Act turn(int t);   // xform::Turn as int (Clockwise, CounterClockwise, Half, FlipHorizontal, FlipVertical)
 Act rotate_canvas(double degrees);
+Act set_mode(pixel::Mode m);   // s096: Image > Mode (Grayscale ...)
 Act apply_adjust(const Adjust& a);
 Act adjust_layer(const Adjust& a);
 Act apply_auto(adjust::AutoMethod m);
@@ -94,6 +96,9 @@ Act fill_selection(const pixel::Px& colour);   // straight, in the document's ch
 Act new_layer(const std::string& name);
 Act duplicate_layer();
 Act delete_layer();
+// s096: Merge Down (the picked layer into the one below), Merge Visible,
+// Flatten Image, Stamp Visible -- the result is picked.
+Act merge(merge::How h);
 Act add_mask(layers::MaskFrom from);
 Act set_opacity(int percent);
 Act set_blend(Blend b);
@@ -101,6 +106,20 @@ Act set_blend(Blend b);
 // Properties): the act that made it takes them (the panel's line too).
 void retune(Act& a, const Adjust& now);
 void retune(Act& a, const Filter& now);
+
+// ── s096: editing an action's steps ─────────────────────────────────────
+// Move step `from` so it ends at `to` (both in 0..n-1). False: out of range or no move.
+bool move_act(Action& a, int from, int to);
+// A copy of step `i` just after it. False: out of range.
+bool duplicate_act(Action& a, int i);
+// The settings a step holds, when it holds an adjustment or a filter
+// (Image > Adjustments, New Adjustment Layer, Filter > ..., live, filter layer).
+std::optional<Adjust> adjust_of(const Act& a);
+std::optional<Filter> filter_of(const Act& a);
+// The same step with new settings -- its kind, its tick and its label made again
+// ("Gaussian Blur  2 px" -> "Gaussian Blur  5 px").
+Act with_adjust(const Act& a, const Adjust& now);
+Act with_filter(const Act& a, const Filter& now);
 
 // ── playing ───────────────────────────────────────────────────────────────
 struct Played {
@@ -151,7 +170,10 @@ struct BatchResult {
     std::vector<std::string> lines;   // "photo.jpg: step 2, Fill: nothing is selected"
     bool cancelled = false;
 };
-// Run it (a worker). `progress` 0..1 over the files; `at` names the file in hand.
+// s096: how many files run at once -- the cores, up to 8; 1 when the action
+// holds a local AI model step (ONNX Runtime takes every core itself).
+int batch_lanes(const Action& a, std::size_t files);
+// Run it (a worker; several files at once -- batch_lanes). `progress` 0..1 over the files; `at` names the file in hand.
 BatchResult run_batch(const Batch& b, const Action& a, const std::function<bool()>& cancelled = {},
                       const std::function<void(double)>& progress = {},
                       const std::function<void(const std::string&)>& at = {});

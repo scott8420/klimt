@@ -1,5 +1,7 @@
 #include "Shell.hpp"
 #include "Log.hpp"
+#include "AdjustDialog.hpp"   // s096: a step's settings
+#include "FilterDialog.hpp"
 
 #include <glibmm/main.h>
 #include <glibmm/miscutils.h>
@@ -58,13 +60,70 @@ void Shell::rec(A::Act a, const core::Document::Id& made) {
     if (m_recording < 0 || m_recording >= static_cast<int>(m_actions.size())) return;
     rec_retune();
     auto& acts = m_actions[static_cast<std::size_t>(m_recording)].acts;
+    // s096: recording into the middle -- after the step picked when ● was pressed.
+    if (m_rec_at > static_cast<int>(acts.size())) m_rec_at = -1;
+    std::size_t at = m_rec_at < 0 ? acts.size() : static_cast<std::size_t>(m_rec_at);
     // A slider walked by the keys, a menu tried twice: the last one stands.
-    if (!acts.empty() && acts.back().verb == a.verb && (a.verb == "layer.opacity" || a.verb == "layer.blend")) acts.pop_back();
-    acts.push_back(std::move(a));
-    if (!made.empty()) m_rec_made.push_back({acts.size() - 1, made});
-    if (auto lg = log::get(log::Area::Shell)) lg->info("action: recorded {} ({})", acts.back().label, acts.back().verb);
+    if (at > 0 && acts[at - 1].verb == a.verb && (a.verb == "layer.opacity" || a.verb == "layer.blend")) {
+        acts.erase(acts.begin() + static_cast<std::ptrdiff_t>(at - 1));
+        shift_made(static_cast<int>(at), -1);
+        --at;
+        if (m_rec_at >= 0) --m_rec_at;
+    }
+    shift_made(static_cast<int>(at), +1);
+    acts.insert(acts.begin() + static_cast<std::ptrdiff_t>(at), std::move(a));
+    if (m_rec_at >= 0) ++m_rec_at;
+    if (!made.empty()) m_rec_made.push_back({at, made});
+    if (auto lg = log::get(log::Area::Shell)) lg->info("action: recorded {} ({}) at {}", acts[at].label, acts[at].verb, at);
     save_actions();
     sync_actions();
+}
+
+// s096: the made-layer refs of the action being recorded, at or after `at`, move by `by`.
+void Shell::shift_made(int at, int by) {
+    for (auto& [i, id] : m_rec_made)
+        if (static_cast<int>(i) >= at) i = static_cast<std::size_t>(std::max(0, static_cast<int>(i) + by));
+}
+
+// s096: a step's settings, in the dialog its kind uses (preview off -- it
+// isn't this picture's); OK puts them in the step.
+void Shell::edit_step(int action, int step) {
+    if (action < 0 || action >= static_cast<int>(m_actions.size())) return;
+    const auto& acts = m_actions[static_cast<std::size_t>(action)].acts;
+    if (step < 0 || step >= static_cast<int>(acts.size())) return;
+    const auto& act = acts[static_cast<std::size_t>(step)];
+    const std::string where = "step " + std::to_string(step + 1) + " of \u201c" + m_actions[static_cast<std::size_t>(action)].name + "\u201d";
+    const auto take = [this, action, step](A::Act now) {
+        if (action >= static_cast<int>(m_actions.size()) || step >= static_cast<int>(m_actions[static_cast<std::size_t>(action)].acts.size())) return;
+        auto& slot = m_actions[static_cast<std::size_t>(action)].acts[static_cast<std::size_t>(step)];
+        if (slot == now) return;
+        slot = std::move(now);
+        save_actions();
+        sync_actions();
+        toast("\u201c" + slot.label + "\u201d: its settings changed");
+    };
+    if (const auto adj = A::adjust_of(act)) {
+        m_step_adjust = std::make_unique<AdjustDialog>(*this);
+        m_step_adjust->offer_preview(false);
+        m_step_adjust->signal_ok().connect([this, take, action, step](const core::Adjust& a) {
+            if (action < static_cast<int>(m_actions.size()) && step < static_cast<int>(m_actions[static_cast<std::size_t>(action)].acts.size()))
+                take(A::with_adjust(m_actions[static_cast<std::size_t>(action)].acts[static_cast<std::size_t>(step)], a));
+        });
+        m_step_adjust->ask_from(*adj, where);
+        return;
+    }
+    if (const auto f = A::filter_of(act)) {
+        m_step_filter = std::make_unique<FilterDialog>(*this);
+        if (has_image()) m_step_filter->set_image_size(m_doc.image().width, m_doc.image().height);
+        m_step_filter->step_mode();   // no Preview, no Live box: the step says what it is
+        m_step_filter->signal_ok().connect([this, take, action, step](const core::Filter& nf) {
+            if (action < static_cast<int>(m_actions.size()) && step < static_cast<int>(m_actions[static_cast<std::size_t>(action)].acts.size()))
+                take(A::with_filter(m_actions[static_cast<std::size_t>(action)].acts[static_cast<std::size_t>(step)], nf));
+        });
+        m_step_filter->ask(*f, where);
+        return;
+    }
+    toast("\u201c" + act.label + "\u201d has no settings to change here -- record it again");
 }
 
 // The adjustment / filter layers a recorded act made: their settings as they
@@ -90,6 +149,7 @@ void Shell::on_actions(ActionsPanel::Do d, int action, int step, const std::stri
             if (m_recording >= 0) { toast("Actions: stop recording first (■)"); return; }
             m_actions.push_back({A::next_name(m_actions), {}});
             m_recording = static_cast<int>(m_actions.size()) - 1;
+            m_rec_at = -1;
             m_rec_made.clear();
             m_actions_panel.pick(m_recording);
             save_actions();
@@ -101,7 +161,12 @@ void Shell::on_actions(ActionsPanel::Do d, int action, int step, const std::stri
             if (!have) { on_actions(ActionsPanel::Do::New, -1, -1, {}); return; }
             m_recording = action;
             m_rec_made.clear();
-            toast("Recording into “" + m_actions[ai].name + "” -- what you do next is added; ■ stops");
+            // s096: a step picked -- the new steps go in after it.
+            m_rec_at = step >= 0 && step < static_cast<int>(m_actions[ai].acts.size()) ? step + 1 : -1;
+            if (m_rec_at >= 0)
+                toast("Recording into “" + m_actions[ai].name + "” after step " + std::to_string(step + 1) + " -- what you do next goes in there; ■ stops");
+            else
+                toast("Recording into “" + m_actions[ai].name + "” -- what you do next is added; ■ stops");
             break;
         }
         case ActionsPanel::Do::Stop: {
@@ -110,6 +175,7 @@ void Shell::on_actions(ActionsPanel::Do d, int action, int step, const std::stri
             const auto& a = m_actions[static_cast<std::size_t>(m_recording)];
             toast("“" + a.name + "”: " + std::to_string(a.acts.size()) + (a.acts.size() == 1 ? " step" : " steps") + " recorded");
             m_recording = -1;
+            m_rec_at = -1;
             m_rec_made.clear();
             save_actions();
             break;
@@ -129,6 +195,7 @@ void Shell::on_actions(ActionsPanel::Do d, int action, int step, const std::stri
                         keep.push_back({static_cast<int>(i) > step ? i - 1 : i, id});
                     }
                     m_rec_made = std::move(keep);
+                    if (m_rec_at > step) --m_rec_at;
                 }
                 m_actions_panel.pick(action, -1);
                 toast("“" + label + "” taken out of “" + m_actions[ai].name + "”");
@@ -155,6 +222,33 @@ void Shell::on_actions(ActionsPanel::Do d, int action, int step, const std::stri
             break;
         case ActionsPanel::Do::Batch:
             on_batch();
+            return;
+        case ActionsPanel::Do::Move: {   // s096
+            const int to = m_actions_panel.target();
+            if (!have || m_action_playing || !A::move_act(m_actions[ai], step, to)) return;
+            if (action == m_recording) {   // the made-layer refs follow their steps
+                for (auto& [i, id] : m_rec_made) {
+                    const int k = static_cast<int>(i);
+                    if (k == step) i = static_cast<std::size_t>(to);
+                    else if (step < to && k > step && k <= to) i = static_cast<std::size_t>(k - 1);
+                    else if (step > to && k >= to && k < step) i = static_cast<std::size_t>(k + 1);
+                }
+                m_rec_at = -1;   // the insertion point is moot now: the end
+            }
+            m_actions_panel.pick(action, to);
+            save_actions();
+            break;
+        }
+        case ActionsPanel::Do::Duplicate: {   // s096
+            if (!have || m_action_playing || !A::duplicate_act(m_actions[ai], step)) return;
+            if (action == m_recording) { shift_made(step + 1, +1); if (m_rec_at > step) ++m_rec_at; }
+            m_actions_panel.pick(action, step + 1);
+            save_actions();
+            toast("“" + m_actions[ai].acts[static_cast<std::size_t>(step)].label + "” duplicated");
+            break;
+        }
+        case ActionsPanel::Do::Edit:   // s096
+            if (have && !m_action_playing) edit_step(action, step);
             return;
     }
     sync_actions();

@@ -248,7 +248,9 @@ Gtk::Widget& Shell::build_dock() {  // zone
     auto tabs = Gtk::make_managed<Gtk::StackSwitcher>();
     tabs->set_name("dock.tabs");   // s092: the canvas sweep clicks its buttons (Layers, Channels, History, Actions)
     tabs->set_stack(m_dock_stack);
-    tabs->set_halign(Gtk::Align::CENTER);
+    tabs->set_halign(Gtk::Align::FILL);   // s096: icons, so the strip spans the dock without setting its width
+    tabs->set_margin_start(8);
+    tabs->set_margin_end(8);
     tabs->set_margin_top(8);
     tabs->set_margin_bottom(4);
     lower->append(*tabs);
@@ -267,6 +269,32 @@ Gtk::Widget& Shell::build_dock() {  // zone
     m_actions_panel.set_margin_end(8);
     m_actions_panel.set_margin_bottom(8);
     m_dock_stack.add(m_actions_panel, "actions", "Actions");
+    // s096 (Scott: "can the tabs be icons so the sidebar does not take up too
+    // much space"): the tab strip set the dock's narrowest width -- four
+    // word buttons. Now icons, each with a hint that teaches the panel.
+    {
+        const struct { const char* name; const char* icon; const char* hint; } tabs_info[] = {
+            {"layers", "klimt-tab-layers-symbolic",
+             "Layers -- the picture's layers, groups, masks, adjustment and filter layers.\n"
+             "Drag a row to reorder; double-click a name to rename; the eye shows / hides."},
+            {"channels", "klimt-tab-channels-symbolic",
+             "Channels -- the colour channels and your saved selections.\n"
+             "Ctrl-click one to load it as a selection; the button below saves the selection."},
+            {"history", "klimt-tab-history-symbolic",
+             "History -- every step you've taken in this picture.\n"
+             "Click a step to go back to it (Ctrl+Z / Ctrl+Shift+Z step by one)."},
+            {"actions", "klimt-tab-actions-symbolic",
+             "Actions -- record steps (+), play them on another picture (\u25b6),\n"
+             "or run them over a folder: File > Automate > Batch."},
+        };
+        for (const auto& t : tabs_info) m_dock_stack.get_page(*m_dock_stack.get_child_by_name(t.name))->property_icon_name() = t.icon;
+        // The switcher's buttons, in page order: the hints on them.
+        int i = 0;
+        for (auto* b = tabs->get_first_child(); b && i < 4; b = b->get_next_sibling(), ++i) {
+            b->set_tooltip_text(tabs_info[i].hint);
+            b->set_name(std::string("dock.tab.") + tabs_info[i].name);
+        }
+    }
     m_dock_stack.set_vexpand(true);
     lower->append(m_dock_stack);
     auto split = Gtk::make_managed<Gtk::Paned>(Gtk::Orientation::VERTICAL);
@@ -341,6 +369,15 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     m_edit_menu->append("Redo", "win.redo");
     m_edit_menu->append("Fade…", "win.fade");   // s020: relabelled with the step it fades
     menu->append_section(m_edit_menu);
+    {   // s096: the clipboard
+        auto cb = Gio::Menu::create();
+        cb->append("Cut", "win.cut");
+        cb->append("Copy", "win.copy");
+        cb->append("Copy Merged", "win.copy-merged");
+        cb->append("Paste", "win.paste");
+        cb->append("Paste in Place", "win.paste-in-place");
+        menu->append_section(cb);
+    }
     auto edit = Gio::Menu::create();
     edit->append("Fill with Foreground", "win.fill-fg");
     edit->append("Fill with Background", "win.fill-bg");
@@ -372,6 +409,14 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     layer->append("Rename", "win.layer-rename");
     layer->append("Sort by Name", "win.layer-sort");
     layer->append("Delete", "win.layer-delete");
+    {   // s096: merge and flatten
+        auto mg = Gio::Menu::create();
+        mg->append("Merge Down", "win.layer-merge-down");
+        mg->append("Merge Visible", "win.layer-merge-visible");
+        mg->append("Stamp Visible", "win.layer-stamp-visible");
+        mg->append("Flatten Image", "win.layer-flatten");
+        layer->append_section(mg);
+    }
     // s012: Layer > Layer Mask.
     auto lm = Gio::Menu::create();
     auto lm_add = Gio::Menu::create();

@@ -1,4 +1,5 @@
 #include "Shell.hpp"
+#include "core/Merge.hpp"   // s096
 #include "Log.hpp"
 
 #include <adwaita.h>
@@ -183,6 +184,15 @@ void Shell::update_layer_actions() {
     on("layer-lower", any);
     on("layer-clip", any);
     on("layer-rename", any);
+    {   // s096: merge and flatten -- greyed exactly when core::merge refuses
+        namespace M = core::merge;
+        const auto pick = m_layers.primary();
+        const bool doc_in = has_image();
+        on("layer-merge-down", doc_in && M::refusal(m_doc, M::How::Down, pick).empty());
+        on("layer-merge-visible", doc_in && M::refusal(m_doc, M::How::Visible, pick).empty());
+        on("layer-flatten", doc_in && M::refusal(m_doc, M::How::Flatten, pick).empty());
+        on("layer-stamp-visible", doc_in && M::refusal(m_doc, M::How::Stamp, pick).empty());
+    }
 }
 
 // Undo / Redo say what they would do, and grey when there is nothing.

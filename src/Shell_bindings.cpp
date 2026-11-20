@@ -413,6 +413,17 @@ void Shell::bind_actions() {  // bindings
     layer("layer-clip",      &LayersPanel::toggle_clip);
     layer("layer-rename",    &LayersPanel::rename_primary);
     m_layer_acts["layer-sort"] = add_action("layer-sort", [this] { on_sort(false); });
+    // s096: merge and flatten (core::merge::How: Down, Visible, Flatten, Stamp).
+    // s096: the clipboard (keys in the window's capture handler, so a text box keeps its own).
+    m_layer_acts["cut"]            = add_action("cut",            [this] { on_copy(false, true); });
+    m_layer_acts["copy"]           = add_action("copy",           [this] { on_copy(false, false); });
+    m_layer_acts["copy-merged"]    = add_action("copy-merged",    [this] { on_copy(true, false); });
+    m_layer_acts["paste"]          = add_action("paste",          [this] { on_paste(false); });
+    m_layer_acts["paste-in-place"] = add_action("paste-in-place", [this] { on_paste(true); });
+    m_layer_acts["layer-merge-down"]    = add_action("layer-merge-down",    [this] { on_merge(0); });
+    m_layer_acts["layer-merge-visible"] = add_action("layer-merge-visible", [this] { on_merge(1); });
+    m_layer_acts["layer-flatten"]       = add_action("layer-flatten",       [this] { on_merge(2); });
+    m_layer_acts["layer-stamp-visible"] = add_action("layer-stamp-visible", [this] { on_merge(3); });
     add_action("layer-sort-slow", [this] { on_sort(true); });
 
     // The pool's wake is a worker's call; the Dispatcher hops it to the UI
@@ -520,6 +531,12 @@ void Shell::bind_actions() {  // bindings
             // own Delete first).
             else if ((keyval == GDK_KEY_a || keyval == GDK_KEY_A) && mods == CTRL)          act = "win.select-all";
             else if ((keyval == GDK_KEY_t || keyval == GDK_KEY_T) && mods == CTRL)          act = "win.free-transform";
+            // s096: the clipboard.
+            else if ((keyval == GDK_KEY_x || keyval == GDK_KEY_X) && mods == CTRL)          act = "win.cut";
+            else if ((keyval == GDK_KEY_c || keyval == GDK_KEY_C) && mods == CTRL)          act = "win.copy";
+            else if ((keyval == GDK_KEY_c || keyval == GDK_KEY_C) && mods == (CTRL | SHIFT)) act = "win.copy-merged";
+            else if ((keyval == GDK_KEY_v || keyval == GDK_KEY_V) && mods == CTRL)          act = "win.paste";
+            else if ((keyval == GDK_KEY_v || keyval == GDK_KEY_V) && mods == (CTRL | SHIFT)) act = "win.paste-in-place";
             else if ((keyval == GDK_KEY_x || keyval == GDK_KEY_X) && mods == (CTRL | SHIFT)) act = "win.liquify";   // s076
             // s078: Photoshop's -- Auto Tone Shift+Ctrl+L, Auto Contrast Alt+Shift+Ctrl+L, Auto Color Shift+Ctrl+B.
             else if ((keyval == GDK_KEY_l || keyval == GDK_KEY_L) && mods == (CTRL | SHIFT))       act = "win.auto-tone";

@@ -125,6 +125,8 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Edit", "", {}, "Ctrl+Z", "Undo -- anywhere but a text box (which keeps its own)"},
         {"Edit", "", {}, "Ctrl+Shift+Z  /  Ctrl+Y", "Redo"},
         // s008 -- doc-only: the window hears them, so a text box keeps its own.
+        {"Edit", "", {}, "Ctrl+X  /  Ctrl+C  /  Ctrl+Shift+C", "Cut / Copy / Copy Merged -- the selection (Copy: the whole layer when nothing is)"},   // s096
+        {"Edit", "", {}, "Ctrl+V  /  Ctrl+Shift+V", "Paste as a new layer -- centred / in place"},
         {"Edit", "", {}, "Alt+Backspace", "Fill the selection (or the layer) with the foreground colour"},
         {"Edit", "", {}, "Ctrl+Backspace", "Fill with the background colour"},
         {"Edit", "", {}, "Delete  /  Backspace  (on the canvas)", "Delete the selected pixels"},
@@ -172,6 +174,8 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Layer", "win.layer-clip",      {"<Ctrl><Alt>g"}, "", "Clip to the layer below / release"},
         {"Layer", "win.layer-raise",     {"<Ctrl>bracketright"}, "", "Bring forward"},
         {"Layer", "win.layer-lower",     {"<Ctrl>bracketleft"}, "", "Send backward"},
+        {"Layer", "win.layer-merge-down", {"<Ctrl>e"}, "", "Merge Down -- into the layer below"},   // s096
+        {"Layer", "win.layer-stamp-visible", {"<Ctrl><Shift><Alt>e"}, "", "Stamp Visible -- what you see, as a new layer"},
         // Doc-only: the panel's list hears these itself, so a text box keeps them.
         {"Layer", "", {}, "Delete  /  Backspace", "Delete the selected layers (in the Layers list) -- with a pixel selection, its pixels"},
         {"Layer", "", {}, "F2", "Rename (in the Layers list)"},

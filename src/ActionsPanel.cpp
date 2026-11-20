@@ -9,6 +9,11 @@
 #include <gtkmm/label.h>
 #include <gtkmm/listboxrow.h>
 #include <gtkmm/separator.h>
+#include <gtkmm/dragsource.h>
+#include <gtkmm/droptarget.h>
+#include <gtkmm/eventcontrollerkey.h>
+#include <gtkmm/widgetpaintable.h>
+#include <gdkmm/contentprovider.h>
 
 // ActionsPanel.cpp -- the Actions tab (s084). Rows are rebuilt from the
 // library on every show() (it is small); a click picks, the arrow opens an
@@ -48,9 +53,31 @@ ActionsPanel::ActionsPanel()
     // played as well, and the play's repaint rebuilt the row under the
     // double-click (s092's Layers crash, the same shape).
     m_list.set_activate_on_single_click(false);
+    // s096: Alt+Up / Alt+Down move the picked step.
+    auto keys = Gtk::EventControllerKey::create();
+    keys->signal_key_pressed().connect([this](guint key, guint, Gdk::ModifierType mods) {
+        const bool alt = (mods & Gdk::ModifierType::ALT_MASK) == Gdk::ModifierType::ALT_MASK;
+        if (!alt || m_action < 0 || m_step < 0) return false;
+        if (key == GDK_KEY_Up) { move_step(m_action, m_step, m_step - 1); return true; }
+        if (key == GDK_KEY_Down) { move_step(m_action, m_step, m_step + 1); return true; }
+        return false;
+    }, false);
+    m_list.add_controller(keys);
+    m_menu = Gtk::make_managed<Gtk::Popover>();
+    m_menu->set_parent(*this);
+    m_menu->set_has_arrow(false);
     m_list.signal_row_activated().connect([this](Gtk::ListBoxRow*) {
         if (m_painting) return;
-        Glib::signal_timeout().connect_once([this] { if (!m_renaming) ask(Do::Play); }, 50);   // the name's editing starts first
+        Glib::signal_timeout().connect_once([this] {
+            if (m_renaming) return;
+            // s096: a double-click on an adjustment or filter step opens its settings.
+            if (m_action >= 0 && m_action < static_cast<int>(m_all.size()) && m_step >= 0 &&
+                m_step < static_cast<int>(m_all[static_cast<std::size_t>(m_action)].acts.size())) {
+                const auto& act = m_all[static_cast<std::size_t>(m_action)].acts[static_cast<std::size_t>(m_step)];
+                if (core::actions::adjust_of(act) || core::actions::filter_of(act)) { ask(Do::Edit); return; }
+            }
+            ask(Do::Play);
+        }, 50);   // the name's editing starts first
     });
     m_scroll.set_child(m_list);
     m_scroll.set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
@@ -68,7 +95,8 @@ ActionsPanel::ActionsPanel()
     foot->set_margin_top(4);
     m_stop = foot_button("media-playback-stop-symbolic", "actions.stop", "Stop recording");
     m_record = foot_button("media-record-symbolic", "actions.record",
-                           "Record -- what you do next is added to the picked action (a new one when none is picked)");
+                           "Record -- what you do next is added to the picked action (a new one when none is picked);\n"
+                           "a step picked: the new steps go in after it");
     m_play = foot_button("media-playback-start-symbolic", "actions.play",
                          "Play the picked action on this image -- one step (Ctrl+Z undoes it all); a step picked: from that step on");
     m_stop->signal_clicked().connect([this] { ask(Do::Stop); });
@@ -91,6 +119,83 @@ ActionsPanel::ActionsPanel()
     foot->append(*m_delete);
     append(*foot);
     sync_buttons();
+}
+
+ActionsPanel::~ActionsPanel() {
+    if (m_menu) m_menu->unparent();
+}
+
+void ActionsPanel::move_step(int action, int from, int to) {
+    if (m_playing || action < 0 || action >= static_cast<int>(m_all.size())) return;
+    const int n = static_cast<int>(m_all[static_cast<std::size_t>(action)].acts.size());
+    if (from < 0 || from >= n || to < 0 || to >= n || from == to) return;
+    m_action = action;
+    m_step = from;
+    m_target = to;
+    Glib::signal_idle().connect_once([this] { ask(Do::Move); });
+}
+
+// s096: a step's menu -- Move Up / Down, Duplicate, Edit Settings…, Delete.
+// The popover is the panel's (a row is rebuilt under it); each choice closes
+// it first, then asks on idle.
+void ActionsPanel::step_menu(int action, int step, double x, double y, Gtk::Widget& from) {
+    if (m_playing || action < 0 || action >= static_cast<int>(m_all.size())) return;
+    const auto& acts = m_all[static_cast<std::size_t>(action)].acts;
+    if (step < 0 || step >= static_cast<int>(acts.size())) return;
+    m_action = action;
+    m_step = step;
+    const auto& act = acts[static_cast<std::size_t>(step)];
+    const bool editable = core::actions::adjust_of(act) || core::actions::filter_of(act);
+    auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
+    const auto item = [&](const char* label, bool on, std::function<void()> f) {
+        auto b = Gtk::make_managed<Gtk::Button>(label);
+        b->add_css_class("flat");
+        b->set_halign(Gtk::Align::FILL);
+        if (auto* l = dynamic_cast<Gtk::Label*>(b->get_child())) l->set_xalign(0.0f);
+        b->set_sensitive(on);
+        b->signal_clicked().connect([this, f] { m_menu->popdown(); Glib::signal_idle().connect_once(f); });
+        box->append(*b);
+    };
+    const int n = static_cast<int>(acts.size());
+    item("Edit Settings\u2026", editable, [this] { ask(Do::Edit); });
+    item("Move Up  (Alt+\u2191)", step > 0, [this, action, step] { move_step(action, step, step - 1); });
+    item("Move Down  (Alt+\u2193)", step < n - 1, [this, action, step] { move_step(action, step, step + 1); });
+    item("Duplicate", true, [this] { ask(Do::Duplicate); });
+    item("Delete", true, [this] { ask(Do::Delete); });
+    m_menu->set_child(*box);
+    double px = x, py = y;
+    from.translate_coordinates(*this, x, y, px, py);
+    m_menu->set_pointing_to(Gdk::Rectangle(static_cast<int>(px), static_cast<int>(py), 1, 1));
+    m_menu->popup();
+}
+
+// s096: drag a step onto another of the same action -- it lands there.
+void ActionsPanel::step_dnd(Gtk::ListBoxRow& row, int action, int step) {
+    auto src = Gtk::DragSource::create();
+    src->set_actions(Gdk::DragAction::MOVE);
+    src->signal_prepare().connect([this, action, step](double, double) -> Glib::RefPtr<Gdk::ContentProvider> {
+        if (m_playing || m_renaming) return nullptr;
+        m_drag = {action, step};
+        Glib::Value<Glib::ustring> v;
+        v.init(v.value_type());
+        v.set(std::to_string(action) + ":" + std::to_string(step));
+        return Gdk::ContentProvider::create(v);
+    }, false);
+    src->signal_drag_begin().connect([s = src.get(), r = &row](const Glib::RefPtr<Gdk::Drag>&) {
+        s->set_icon(Gtk::WidgetPaintable::create(*r), 20, 10);
+    });
+    src->signal_drag_end().connect([this](const Glib::RefPtr<Gdk::Drag>&, bool) { m_drag = {-1, -1}; });
+    row.add_controller(src);
+    auto tgt = Gtk::DropTarget::create(Glib::Value<Glib::ustring>::value_type(), Gdk::DragAction::MOVE);
+    tgt->signal_motion().connect([this, action, step](double, double) {
+        return m_drag.first == action && m_drag.second != step ? Gdk::DragAction::MOVE : Gdk::DragAction{};
+    }, false);
+    tgt->signal_drop().connect([this, action, step](const Glib::ValueBase&, double, double) {
+        if (m_drag.first != action || m_drag.second == step) return false;
+        move_step(action, m_drag.second, step);
+        return true;
+    }, false);
+    row.add_controller(tgt);
 }
 
 void ActionsPanel::ask(Do d, const std::string& text) {
@@ -209,6 +314,15 @@ void ActionsPanel::paint() {
             if (!core::actions::known(act.verb)) l->set_tooltip_text("A step this Klimt doesn't know (“" + act.verb + "”) -- it stops the action");
             sbox->append(*l);
             srow->set_child(*sbox);
+            srow->set_tooltip_text(std::string("Right-click: edit, move, duplicate, delete -- or drag it to another place")
+                                   + (core::actions::adjust_of(act) || core::actions::filter_of(act) ? "; double-click: its settings" : ""));
+            {   // s096: right-click -- the step's menu
+                auto rc = Gtk::GestureClick::create();
+                rc->set_button(3);
+                rc->signal_pressed().connect([this, ia, is, srow](int, double x, double y) { step_menu(ia, is, x, y, *srow); });
+                srow->add_controller(rc);
+            }
+            step_dnd(*srow, ia, is);
             m_list.append(*srow);
             m_rows.push_back({ia, is});
             if (ia == m_action && is == m_step) picked = srow;

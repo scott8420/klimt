@@ -51,6 +51,11 @@ const std::vector<Command>& commands() {
             {"Previous Tab", "File", "win.tab-prev", "", "switch document image other back", "Ctrl+Shift+Tab"},
             {"Undo", "Edit", "win.undo", "", "back revert", "Ctrl+Z"},
             {"Fade", "Edit", "win.fade", "", "last filter stroke opacity blend mode lessen weaken", "Ctrl+Shift+F"},
+            {"Cut", "Edit", "win.cut", "", "clipboard cut out move pixels selection", "Ctrl+X"},   // s096
+            {"Copy", "Edit", "win.copy", "", "clipboard copy pixels selection layer", "Ctrl+C"},
+            {"Copy Merged", "Edit", "win.copy-merged", "", "clipboard copy merged visible all layers composite", "Ctrl+Shift+C"},
+            {"Paste", "Edit", "win.paste", "", "clipboard paste new layer insert", "Ctrl+V"},
+            {"Paste in Place", "Edit", "win.paste-in-place", "", "clipboard paste in place same position", "Ctrl+Shift+V"},
             {"Fill with Foreground", "Edit", "win.fill-fg", "", "paint colour bucket", "Alt+Backspace"},
             {"Fill with Background", "Edit", "win.fill-bg", "", "paint colour bucket", "Ctrl+Backspace"},
             {"Delete Selected Pixels", "Edit", "win.delete-selection", "", "clear erase cut", "Delete"},
@@ -276,6 +281,10 @@ const std::vector<Command>& commands() {
             {"New Layer", "Layer", "win.layer-new", "", "add create", ""},
             {"New Group", "Layer", "win.layer-new-group", "", "folder set add", ""},
             {"Duplicate", "Layer", "win.layer-duplicate", "", "copy clone", ""},
+            {"Merge Down", "Layer", "win.layer-merge-down", "", "merge combine join flatten layer below", ""},   // s096
+            {"Merge Visible", "Layer", "win.layer-merge-visible", "", "merge combine flatten visible shown layers", ""},
+            {"Stamp Visible", "Layer", "win.layer-stamp-visible", "", "stamp merge copy visible new layer composite", ""},
+            {"Flatten Image", "Layer", "win.layer-flatten", "", "flatten merge all layers one background", ""},
             {"Group Layers", "Layer", "win.layer-group", "", "folder combine", ""},
             {"Ungroup", "Layer", "win.layer-ungroup", "", "release folder", ""},
             {"Clip / Release", "Layer", "win.layer-clip", "", "clipping mask", ""},

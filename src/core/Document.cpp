@@ -18,6 +18,8 @@
 #include "core/Gradient.hpp"    // s012: the Gradient tool
 #include "core/Heal.hpp"        // s015 m3: the healing brushes
 #include "core/Live.hpp"        // s018: live filters
+#include "core/Merge.hpp"       // s096: merge and flatten
+#include "core/Clipboard.hpp"   // s096: paste
 
 #include <algorithm>
 #include <set>
@@ -1602,6 +1604,19 @@ const std::vector<Verb>& verbs() {
              [](Document& d) { load_text_layer(d, "Hope", 60, false); }},
         {"text_turn",       [](DocJournal& j, Document& d) { xform::turn(j, d, xform::Turn::Clockwise); },
              [](Document& d) { load_text_layer(d, "Judith", 48, false); }},
+        // s096: merge and flatten (core/Merge.hpp).
+        {"merge_down",    [](DocJournal& j, Document& d) { merge::run(j, d, merge::How::Down, "L4"); }},
+        {"merge_visible", [](DocJournal& j, Document& d) { merge::run(j, d, merge::How::Visible, "L4"); }},
+        {"flatten_image", [](DocJournal& j, Document& d) { merge::run(j, d, merge::How::Flatten, "L4"); }},
+        {"paste",          [](DocJournal& j, Document& d) {
+             clipboard::Piece p; p.x = 10; p.y = 20;
+             p.pixels = std::make_shared<const pixel::TileMap>(pixel::TileMap(pixel::Format{pixel::Depth::U8, pixel::Mode::RGB, true}, 40, 30).fill({0, 0, 40, 30}, pixel::rgba(0, 0, 1)));
+             clipboard::paste(j, d, p, "L5", false); }},
+        {"paste_in_place", [](DocJournal& j, Document& d) {
+             clipboard::Piece p; p.x = 10; p.y = 20;
+             p.pixels = std::make_shared<const pixel::TileMap>(pixel::TileMap(pixel::Format{pixel::Depth::U8, pixel::Mode::RGB, true}, 40, 30).fill({0, 0, 40, 30}, pixel::rgba(0, 0, 1)));
+             clipboard::paste(j, d, p, "L4", true); }},
+        {"stamp_visible", [](DocJournal& j, Document& d) { merge::run(j, d, merge::How::Stamp, "L5"); }},
         // s082: smart layers.
         {"smart_place", [](DocJournal& j, Document& d) {
              place_smart(j, d, pixel::TileMap(pixel::Format{pixel::Depth::U8, pixel::Mode::RGB, true}, 60, 40).fill({0, 0, 60, 40}, pixel::rgba(0, 0.5f, 1)), "p.png", 72, {}, 0, 0, "L4"); }},

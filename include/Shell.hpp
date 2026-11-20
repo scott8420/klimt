@@ -2,6 +2,7 @@
 #include "widgets/Widgets.hpp"
 #include "core/Document.hpp"   // the document (layer tree) + its journal
 #include "core/Jobs.hpp"       // the worker pool, pumped by a Dispatcher
+#include "core/Clipboard.hpp"  // s096: Cut / Copy / Paste
 #include "core/File.hpp"       // s007: documents in and out of files
 #include "core/Composite.hpp"  // s007: dirty tiles
 #include "core/Profile.hpp"    // s069: the proof's press
@@ -160,6 +161,10 @@ private:
     void on_place(bool linked);                  // category: files: s082 File > Place Embedded / Place Linked (the chooser)
     void place_path(const std::string& path, bool linked, const std::string& replace_id, const std::string& label);   // category: files: s082 read it (a job), then place / replace
     void on_smart(const std::string& verb);
+    void on_copy(bool merged, bool cut);         // category: layers: s096 Copy (Ctrl+C), Copy Merged (Ctrl+Shift+C), Cut (Ctrl+X)
+    void on_paste(bool in_place);                // category: layers: s096 Paste (Ctrl+V), Paste in Place (Ctrl+Shift+V)
+    void paste_piece(const core::clipboard::Piece& p, bool in_place);   // category: layers: s096 the new layer, placed on a worker
+    void on_merge(int how);                      // category: layers: s096 Merge Down / Visible, Flatten Image, Stamp Visible (core::merge::How)
     void check_links();                          // category: files: s082 a linked picture changed / gone -> the rows, Properties, one toast
     std::map<std::string, std::int64_t> m_link_said;   // s082: the stamps already told of (the file's path -> its stamp)      // category: layers: s082 Layer > Smart Layer > convert / rasterize / replace / update / embed
     void on_save();                              // category: files: Save -- Save As when never saved
@@ -667,6 +672,11 @@ private:
     bool m_action_playing = false;
     void build_actions();                        // category: actions: the library, the panel's wiring
     void rec(core::actions::Act a, const core::Document::Id& made = {});   // category: actions: recording? -- the act joins the action
+    int  m_rec_at = -1;                             // s096: where recorded steps go in (-1: the end)
+    std::unique_ptr<AdjustDialog> m_step_adjust;    // s096: a step's adjustment, edited in the Actions tab
+    std::unique_ptr<FilterDialog> m_step_filter;    // s096: a step's filter, edited
+    void edit_step(int action, int step);        // category: actions: s096 a step's settings in their dialog
+    void shift_made(int at, int by);             // category: actions: s096 the recorded-layer refs at / after `at` shift
     void rec_retune();                           // category: actions: the layers recorded acts made -- their settings now
     void on_actions(ActionsPanel::Do d, int action, int step, const std::string& text);   // category: actions: the panel asked
     void play_action(std::size_t action, std::size_t from);   // category: actions: a JOB -- played on a copy, ONE step lands
@@ -708,6 +718,7 @@ private:
     core::Jobs::Id              m_filter_job = 0;
     std::uint32_t               m_filter_seed = 0;
     bool                        m_filter_live = false;
+    std::optional<core::clipboard::Piece> m_clip;     // s096: what Klimt last put on the clipboard (full depth, where it came from)
     std::optional<core::Styles> m_style_clip;            // s019: Copy Layer Style   // s018: the dialog's Live box, remembered
     std::optional<std::size_t>  m_filter_edit;           // s018: the live filter the dialog edits
     core::Jobs::Id              m_filter_landing = 0;   // OK's job: the preview stays until it lands

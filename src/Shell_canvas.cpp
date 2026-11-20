@@ -177,6 +177,8 @@ void Shell::on_profile_convert() {
 
 void Shell::on_mode(pixel::Mode m) {
     if (!has_image() || m_doc.image().format.mode == m) return;
+    if (core::profile::convert_refusal(m_doc.image(), core::profile::mode_profile(m)).empty())
+        rec(core::actions::set_mode(m));   // s096: recorded in actions
     convert_to(core::profile::mode_profile(m), conversion_render());   // s070: the working space, Colour Settings' intent
 }
 

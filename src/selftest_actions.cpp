@@ -13,6 +13,10 @@
 #include "pixel/Pixel.hpp"
 #include "seg/Seg.hpp"
 
+#include <cmath>
+#include <cstdio>
+#include <thread>
+#include <atomic>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -205,9 +209,108 @@ void selftest_actions(const Check& check) {
         const auto rk = ac::run_batch(k, web);
         const auto ko = core::file::open((scratch() / "klimt" / "a.klimt").string(), err);
         check("actions: batch -- as .klimt", rk.done == 2 && ko && ko->image.width == 200, err);
-        int n = 0;
+        std::atomic<int> n{0};   // s096: asked from several lanes at once
         const auto rc = ac::run_batch(b, web, [&n] { return ++n > 1; });
         check("actions: batch -- cancelled, said", rc.cancelled, "");
+    }
+    // ── s096: many files at once -- each right, the report in the files' order ──
+    {
+        const auto in = scratch() / "many", out = scratch() / "many_out";
+        fs::create_directories(in);
+        for (int i = 0; i < 24; ++i) {
+            char nm[32];
+            std::snprintf(nm, sizeof nm, "p%02d.png", i);
+            write_png((in / nm).string(), 40 + 2 * i, 60, P::rgba(0.1f * static_cast<float>(i % 10), 0.5f, 0.5f));
+        }
+        write_png((in / "p05x.png").string(), 10, 10, P::rgba(1, 0, 0));
+        ac::Batch b;
+        b.source = in.string();
+        b.dest = out.string();
+        b.kind = F::Kind::PNG;
+        const auto web = ac::starters()[0];
+        check("actions: batch -- lanes: more than one on a machine with cores, never more than 8",
+              ac::batch_lanes(web, 25) >= std::min(2u, std::max(1u, std::thread::hardware_concurrency())) && ac::batch_lanes(web, 25) <= 8,
+              std::to_string(ac::batch_lanes(web, 25)));
+        check("actions: batch -- lanes: one for one file", ac::batch_lanes(web, 1) == 1, "");
+        const ac::Action ai{"Subject", {ac::select_subject()}};
+        check("actions: batch -- lanes: one when a local model runs", ac::batch_lanes(ai, 25) == 1, "");
+        const auto r = ac::run_batch(b, web);
+        bool all = r.done == 25 && r.failed == 0;
+        std::string err, bad;
+        for (int i = 0; i < 24 && all; ++i) {
+            char nm[32];
+            std::snprintf(nm, sizeof nm, "p%02d.png", i);
+            const auto o = core::file::open((out / nm).string(), err);
+            if (!o || o->image.width != (40 + 2 * i) / 2 || o->image.height != 30) { all = false; bad = nm; }
+        }
+        check("actions: batch -- 25 files at once, each at half its own size", all, std::to_string(r.done) + " done " + bad);
+        const ac::Action fail{"Feather nothing", {ac::select_none(), ac::feather(3)}};
+        b.overwrite = true;
+        const auto rf = ac::run_batch(b, fail);
+        bool ordered = rf.lines.size() == 25;
+        for (std::size_t i = 1; ordered && i < rf.lines.size(); ++i) if (rf.lines[i - 1] > rf.lines[i]) ordered = false;
+        check("actions: batch -- the failures listed in the files' order", rf.failed == 25 && ordered, rf.lines.empty() ? "" : rf.lines[0]);
+    }
+    // ── s096: editing an action's steps ────────────────────────────────────
+    {
+        core::Filter blur;
+        blur.kind = core::FilterKind::GaussianBlur;
+        blur.radius = 2;
+        core::Adjust mix = core::adjust::fresh(core::AdjustKind::Levels);
+        ac::Action a{"Edit me", {ac::select_all(), ac::apply_filter(blur), ac::apply_adjust(mix), ac::feather(3)}};
+        check("actions: move a step down -- it lands there, the rest close up",
+              ac::move_act(a, 0, 2) && a.acts[0].verb == "filter.apply" && a.acts[1].verb == "adjust.apply" && a.acts[2].verb == "select.all" && a.acts[3].verb == "select.feather", "");
+        check("actions: move a step up", ac::move_act(a, 3, 0) && a.acts[0].verb == "select.feather" && a.acts[1].verb == "filter.apply", "");
+        check("actions: a move out of range -- refused", !ac::move_act(a, 0, 4) && !ac::move_act(a, -1, 0) && !ac::move_act(a, 1, 1), "");
+        check("actions: duplicate a step -- the copy just after it",
+              ac::duplicate_act(a, 1) && a.acts.size() == 5 && a.acts[1] == a.acts[2] && a.acts[3].verb == "adjust.apply", "");
+        const auto f = ac::filter_of(a.acts[1]);
+        check("actions: a filter step's settings read back", f && f->kind == core::FilterKind::GaussianBlur && std::fabs(f->radius - 2) < 1e-9, "");
+        check("actions: an adjustment step's settings read back", ac::adjust_of(a.acts[3]) && ac::adjust_of(a.acts[3])->kind == core::AdjustKind::Levels, "");
+        check("actions: a step without settings -- none", !ac::adjust_of(a.acts[0]) && !ac::filter_of(a.acts[0]), "");
+        core::Filter wider = *f;
+        wider.radius = 7;
+        a.acts[1].on = false;
+        const auto edited = ac::with_filter(a.acts[1], wider);
+        check("actions: a filter step edited -- its kind, its tick kept, the new radius",
+              edited.verb == "filter.apply" && !edited.on && ac::filter_of(edited) && std::fabs(ac::filter_of(edited)->radius - 7) < 1e-9, edited.label);
+        const auto live = ac::with_filter(ac::live_filter(blur), wider);
+        check("actions: a live filter step stays live", live.verb == "filter.live", live.verb);
+        const auto lay = ac::with_adjust(ac::adjust_layer(mix), mix);
+        check("actions: an adjustment-layer step stays one", lay.verb == "adjust.layer", lay.verb);
+    }
+    // ── s096: Mode > Grayscale recorded; a Gray picture written Gray ──────
+    {
+        const auto in = scratch() / "gray_in", out = scratch() / "gray_out";
+        fs::create_directories(in);
+        write_png((in / "g.png").string(), 64, 48, P::rgba(0.8f, 0.2f, 0.1f));
+        ac::Batch b;
+        b.source = in.string();
+        b.dest = out.string();
+        b.kind = F::Kind::PNG;
+        const ac::Action gray{"Red to Gray", {ac::set_mode(P::Mode::Gray)}};
+        check("actions: Mode: Grayscale -- an act, named", gray.acts[0].verb == "image.mode" && gray.acts[0].label == "Mode: Grayscale", gray.acts[0].label);
+        const auto r = ac::run_batch(b, gray);
+        std::string err;
+        const auto o = core::file::open((out / "g.png").string(), err);
+        // The PNG's own header: byte 25 is its colour type (0 Gray, 2 RGB, 4 / 6 with alpha).
+        const auto colour_type = [](const fs::path& f) {
+            std::ifstream in(f, std::ios::binary);
+            char h[26] = {};
+            in.read(h, 26);
+            return in ? static_cast<int>(static_cast<unsigned char>(h[25])) : -1;
+        };
+        check("actions: batch -- Mode: Grayscale, the PNG written Gray, one channel (no alpha: nothing clear)",
+              r.done == 1 && o && o->image.format.mode == P::Mode::Gray && colour_type(out / "g.png") == 0,
+              std::to_string(colour_type(out / "g.png")));
+        const auto rgb_in = core::file::open((in / "g.png").string(), err);
+        if (rgb_in) {
+            core::file::export_image((scratch() / "opaque.png").string(), F::Kind::PNG, rgb_in->image, rgb_in->layers, err);
+            const auto back = core::file::open((scratch() / "opaque.png").string(), err);
+            check("actions: an opaque RGB picture exported -- RGB, no alpha channel",
+                  back && back->image.format.mode == P::Mode::RGB && colour_type(scratch() / "opaque.png") == 2,
+                  std::to_string(colour_type(scratch() / "opaque.png")));
+        }
     }
     // ── s094: a selection drawn on the canvas, as fractions of it ─────────
     {

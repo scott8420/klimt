@@ -222,17 +222,20 @@ LayersPanel::LayersPanel(core::Document& doc, core::DocJournal& journal)
     more_model->append("Clip / Release", "win.layer-clip");
     more_model->append("Rename", "win.layer-rename");
     more_model->append("Sort by Name", "win.layer-sort");
+    // s096: forward / backward moved in here (the bar set the dock's width); keys Ctrl+] / Ctrl+[.
+    auto order = Gio::Menu::create();
+    order->append("Bring Forward", "win.layer-raise");
+    order->append("Send Backward", "win.layer-lower");
+    more_model->append_section(order);
     auto more = Gtk::make_managed<Gtk::MenuButton>();
     more->set_icon_name("view-more-symbolic");
     more->set_menu_model(more_model);
-    more->set_tooltip_text("Group, ungroup, clip, rename, sort");
+    more->set_tooltip_text("Group, ungroup, clip, rename, sort; bring forward / send backward (Ctrl+] / Ctrl+[)");
     more->add_css_class("flat");
     bar->append(*more);
     auto sp = Gtk::make_managed<Gtk::Box>();
     sp->set_hexpand(true);
     bar->append(*sp);
-    verb("go-up-symbolic", nullptr, "win.layer-raise", "Bring forward (Ctrl+])");
-    verb("go-down-symbolic", nullptr, "win.layer-lower", "Send backward (Ctrl+[)");
     verb("user-trash-symbolic", nullptr, "win.layer-delete", "Delete (Delete)");
     append(*bar);
 }

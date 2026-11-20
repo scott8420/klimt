@@ -19,6 +19,11 @@
     <file preprocess="xml-stripblanks" alias="klimt-link-symbolic.svg">icons/scalable/apps/klimt-link-symbolic.svg</file>   <!-- s059: hand-filled; source icons-src/layer-link.svg -->
     <file preprocess="xml-stripblanks" alias="klimt-adjustment-symbolic.svg">icons/scalable/apps/klimt-adjustment-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-filter-layer-symbolic.svg">icons/scalable/apps/klimt-filter-layer-symbolic.svg</file>
+    <!-- s096: the dock's tabs as icons (hand-drawn filled paths) -->
+    <file preprocess="xml-stripblanks" alias="klimt-tab-layers-symbolic.svg">icons/scalable/apps/klimt-tab-layers-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="klimt-tab-channels-symbolic.svg">icons/scalable/apps/klimt-tab-channels-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="klimt-tab-history-symbolic.svg">icons/scalable/apps/klimt-tab-history-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="klimt-tab-actions-symbolic.svg">icons/scalable/apps/klimt-tab-actions-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-subject-symbolic.svg">icons/scalable/apps/klimt-subject-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-brush-symbolic.svg">icons/scalable/apps/klimt-tool-brush-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="klimt-tool-smudge-symbolic.svg">icons/scalable/apps/klimt-tool-smudge-symbolic.svg</file>

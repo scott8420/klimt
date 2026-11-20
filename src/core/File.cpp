@@ -1582,6 +1582,25 @@ std::optional<P::TileMap> flatten(const Image& im, const std::map<Document::Id, 
     return P::TileMap::from_tiles(f, im.width, im.height, std::move(grid));
 }
 
+namespace {
+// s096: every pixel fully opaque (a tile not held is clear -- not opaque).
+bool opaque(const P::TileMap& m) {
+    if (!m.format().alpha) return true;
+    const auto ai = static_cast<std::size_t>(m.format().colour_channels());
+    for (int row = 0; row < m.rows(); ++row)
+        for (int col = 0; col < m.cols(); ++col) {
+            const auto t = m.tile(col, row);
+            if (!t) return false;
+            const int x0 = col * P::kTile, y0 = row * P::kTile;
+            const int w = std::min(P::kTile, m.width() - x0), h = std::min(P::kTile, m.height() - y0);
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x)
+                    if (t->get(x, y).c[ai] < 0.9995f) return false;   // 1 - half a 16-bit step: float round-off is opaque
+        }
+    return true;
+}
+}  // namespace
+
 bool export_image(const std::string& path, formats::Kind kind, const Image& im,
                   const std::map<Document::Id, Layer>& layers, std::string& error,
                   const formats::Progress& p, const formats::WriteOptions& o) {
@@ -1591,20 +1610,34 @@ bool export_image(const std::string& path, formats::Kind kind, const Image& im,
     }
     auto flat = flatten(im, layers, p);
     if (!flat) { error = "cancelled"; return false; }
+    // s096 (Scott: "grayscale png instead of rgb so the file is 1/3 size"): a
+    // Gray picture is written Gray -- one channel, not three equal ones (the
+    // compositor's pixels are RGB with R = G = B there). And a picture with
+    // no clear pixel anywhere is written without its alpha channel.
+    if (im.format.mode == P::Mode::Gray && kind != formats::Kind::JPEG)
+        flat = transfer::converted(*flat, P::Format{flat->format().depth, P::Mode::Gray, true});
+    if (kind != formats::Kind::JPEG && opaque(*flat)) {
+        const P::Format f = flat->format();
+        flat = transfer::converted(*flat, P::Format{f.depth, f.mode, false});
+    }
     formats::Raster r;
     r.dpi = im.dpi;
-    // The profile describes the document's mode; the flat image is RGB, so
-    // only an RGB document's profile still fits it.
-    if (im.icc && im.format.mode == P::Mode::RGB) r.icc = *im.icc;
+    // The profile describes the document's mode: an RGB document's fits the
+    // flat RGB image, a Gray one's the Gray image written.
+    if (im.icc && (im.format.mode == P::Mode::RGB || (im.format.mode == P::Mode::Gray && flat->format().mode == P::Mode::Gray)))
+        r.icc = *im.icc;
     if (kind == formats::Kind::TIFF) r.photoshop = clip::resources(im, layers);   // s080: the paths, the clipping path
     if (kind == formats::Kind::JPEG) {
         // No alpha in a JPEG: what shows through is white, as on paper.
-        const P::Format f{P::Depth::U8, P::Mode::RGB, false};
+        const bool gray = im.format.mode == P::Mode::Gray;   // s096: a Gray picture, a Gray JPEG
+        const P::Format f{P::Depth::U8, gray ? P::Mode::Gray : P::Mode::RGB, false};
         r.pixels = P::TileMap(f, im.width, im.height).paint({0, 0, im.width, im.height}, [&](int x, int y, const P::Px&) {
             const P::Px s = flat->get(x, y);
             const float a = s.c[3];
+            if (gray) { P::Px g{}; g.c[0] = s.c[0] * a + 1 - a; return g; }
             return P::rgba(s.c[0] * a + 1 - a, s.c[1] * a + 1 - a, s.c[2] * a + 1 - a);
         });
+        if (gray && im.icc) r.icc = *im.icc;
     } else {
         r.pixels = std::move(*flat);
     }

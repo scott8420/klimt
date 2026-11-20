@@ -36,6 +36,8 @@ public:
     void set_live(bool live, bool editing);
     bool live() const { return m_editing || (m_live.get_active() && core::filter::livable(m_f.kind)); }   // s043 m4: never Displace
     bool editing() const { return m_editing; }
+    // s096: an action's step -- no Preview, no Live box (the step says what it is).
+    void step_mode() { m_step = true; m_preview.set_active(false); m_preview.set_visible(false); m_live.set_visible(false); }
     bool preview() const { return m_preview.get_active(); }
     const core::Filter& value() const { return m_f; }
     void set_busy(bool b);   // the preview is being made
@@ -113,6 +115,7 @@ private:
     widgets::Label       m_busy;
     Gtk::CheckButton     m_preview{"Preview"};
     Gtk::CheckButton     m_live{"Live -- editable later"};   // s018
+    bool                 m_step = false;   // s096
     bool                 m_editing = false;
     widgets::Button      m_ok_button, m_cancel_button;
     sigc::signal<void()> m_changed, m_closed;

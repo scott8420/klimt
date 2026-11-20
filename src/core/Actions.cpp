@@ -5,6 +5,8 @@
 #include "core/File.hpp"
 #include "core/Filter.hpp"
 #include "core/Live.hpp"
+#include "core/Profile.hpp"   // s096: Image > Mode
+#include "core/Merge.hpp"   // s096
 #include "core/RoundTrip.hpp"
 #include "core/Raw.hpp"
 #include "core/Subject.hpp"
@@ -15,6 +17,9 @@
 #include "core/Undo.hpp"
 #include "json.hpp"
 
+#include <thread>
+#include <mutex>
+#include <atomic>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -89,6 +94,7 @@ const std::vector<Verb>& verbs() {
     static const std::vector<Verb> v = {
         {"image.size", "Image Size"},          {"canvas.size", "Canvas Size"},
         {"canvas.turn", "Rotate / Flip Canvas"}, {"canvas.rotate", "Rotate Canvas"},
+        {"image.mode", "Mode"},   // s096
         {"adjust.apply", "Adjustment"},        {"adjust.layer", "New Adjustment Layer"},
         {"adjust.auto", "Auto"},               {"filter.apply", "Filter"},
         {"filter.live", "Live Filter"},        {"filter.layer", "New Filter Layer"},
@@ -102,6 +108,8 @@ const std::vector<Verb>& verbs() {
         {"layer.duplicate", "Duplicate Layer"}, {"layer.delete", "Delete Layer"},
         {"layer.mask", "Add Mask"},            {"layer.opacity", "Opacity"},
         {"layer.blend", "Blend Mode"},
+        {"layer.merge_down", "Merge Down"},    {"layer.merge_visible", "Merge Visible"},   // s096
+        {"layer.flatten", "Flatten Image"},    {"layer.stamp", "Stamp Visible"},
     };
     return v;
 }
@@ -128,6 +136,15 @@ Act turn(int t) {
     return make("canvas.turn", {{"turn", kTurnKeys[t]}}, kTurnNames[t]);
 }
 Act rotate_canvas(double degrees) { return make("canvas.rotate", {{"degrees", degrees}}, "Rotate Canvas  " + num(degrees) + "°"); }
+namespace {
+const char* const kModeKeys[] = {"rgb", "gray", "cmyk", "lab"};
+const char* const kModeNames[] = {"RGB Colour", "Grayscale", "CMYK Colour", "Lab Colour"};
+int mode_index(pixel::Mode m) { return m == pixel::Mode::Gray ? 1 : m == pixel::Mode::CMYK ? 2 : m == pixel::Mode::Lab ? 3 : 0; }
+}  // namespace
+Act set_mode(pixel::Mode m) {   // s096
+    const int i = mode_index(m);
+    return make("image.mode", {{"mode", kModeKeys[i]}}, std::string("Mode: ") + kModeNames[i]);
+}
 Act apply_adjust(const Adjust& a) {
     return make("adjust.apply", {{"adjust", json::parse(file::adjust_text(a))}}, std::string(adjust::label(a.kind)));
 }
@@ -192,6 +209,10 @@ Act fill_selection(const P::Px& c) { return make("select.fill", {{"colour", colo
 Act new_layer(const std::string& name) { return make("layer.new", {{"name", name}}, "New Layer “" + name + "”"); }
 Act duplicate_layer() { return make("layer.duplicate", json::object(), "Duplicate Layer"); }
 Act delete_layer() { return make("layer.delete", json::object(), "Delete Layer"); }
+Act merge(merge::How h) {   // s096
+    static const char* keys[] = {"layer.merge_down", "layer.merge_visible", "layer.flatten", "layer.stamp"};
+    return make(keys[static_cast<int>(h)], json::object(), merge::label(h));
+}
 Act add_mask(layers::MaskFrom from) {
     const int i = std::clamp(static_cast<int>(from), 0, 3);
     return make("layer.mask", {{"from", kMaskKeys[i]}}, kMaskNames[i]);
@@ -215,6 +236,49 @@ void retune(Act& a, const Filter& now) {
     a.args = j.dump();
 }
 
+// ── s096: editing an action's steps ─────────────────────────────────────
+bool move_act(Action& a, int from, int to) {
+    const int n = static_cast<int>(a.acts.size());
+    if (from < 0 || from >= n || to < 0 || to >= n || from == to) return false;
+    Act moving = std::move(a.acts[static_cast<std::size_t>(from)]);
+    a.acts.erase(a.acts.begin() + from);
+    a.acts.insert(a.acts.begin() + to, std::move(moving));
+    return true;
+}
+
+bool duplicate_act(Action& a, int i) {
+    if (i < 0 || i >= static_cast<int>(a.acts.size())) return false;
+    const Act copy = a.acts[static_cast<std::size_t>(i)];
+    a.acts.insert(a.acts.begin() + i + 1, copy);
+    return true;
+}
+
+std::optional<Adjust> adjust_of(const Act& a) {
+    if (a.verb != "adjust.apply" && a.verb != "adjust.layer") return std::nullopt;
+    const json j = json::parse(a.args, nullptr, false);
+    if (!j.is_object() || !j.contains("adjust")) return std::nullopt;
+    return file::adjust_parse(j["adjust"].dump());
+}
+
+std::optional<Filter> filter_of(const Act& a) {
+    if (a.verb != "filter.apply" && a.verb != "filter.live" && a.verb != "filter.layer") return std::nullopt;
+    const json j = json::parse(a.args, nullptr, false);
+    if (!j.is_object() || !j.contains("filter")) return std::nullopt;
+    return file::filter_parse(j["filter"].dump());
+}
+
+Act with_adjust(const Act& a, const Adjust& now) {
+    Act n = a.verb == "adjust.layer" ? adjust_layer(now) : apply_adjust(now);
+    n.on = a.on;
+    return n;
+}
+
+Act with_filter(const Act& a, const Filter& now) {
+    Act n = a.verb == "filter.live" ? live_filter(now) : a.verb == "filter.layer" ? filter_layer(now) : apply_filter(now);
+    n.on = a.on;
+    return n;
+}
+
 // ── playing ───────────────────────────────────────────────────────────────
 bool run(DocJournal& j, Document& d, Document::Id& picked, const Act& act, std::string& error,
          const std::function<bool()>& cancelled) {
@@ -232,6 +296,15 @@ bool run(DocJournal& j, Document& d, Document::Id& picked, const Act& act, std::
         return true;
     };
     try {
+        if (v == "image.mode") {   // s096: Image > Mode -- the working space, as the menu
+            const std::string k = a.value("mode", std::string("rgb"));
+            const pixel::Mode m = k == "gray" ? pixel::Mode::Gray : k == "cmyk" ? pixel::Mode::CMYK : k == "lab" ? pixel::Mode::Lab : pixel::Mode::RGB;
+            if (d.image().format.mode == m) return true;   // already: nothing to do
+            const auto to = profile::mode_profile(m);
+            if (const auto why = profile::convert_refusal(d.image(), to); !why.empty()) { error = why; return false; }
+            if (!profile::convert(j, d, to)) { error = "the conversion was refused"; return false; }
+            return true;
+        }
         if (v == "image.size") {
             int w = a.at("w").get<int>(), h = a.at("h").get<int>();
             if (a.value("relative", false) && a.contains("sx")) {   // by the recorded ratio
@@ -450,6 +523,15 @@ bool run(DocJournal& j, Document& d, Document::Id& picked, const Act& act, std::
         if (v == "select.fill") {
             if (!pixels_ok()) return false;
             layers::fill_selection(j, d, picked, colour_from(a.value("colour", json::array())));
+            return true;
+        }
+        if (v == "layer.merge_down" || v == "layer.merge_visible" || v == "layer.flatten" || v == "layer.stamp") {   // s096
+            const auto h = v == "layer.merge_down" ? merge::How::Down : v == "layer.merge_visible" ? merge::How::Visible
+                         : v == "layer.flatten" ? merge::How::Flatten : merge::How::Stamp;
+            if (const auto why = merge::refusal(d, h, picked); !why.empty()) { error = why; return false; }
+            const auto id = merge::run(j, d, h, picked);
+            if (id.empty()) { error = "refused"; return false; }
+            picked = id;
             return true;
         }
         if (v == "layer.new") {
@@ -675,26 +757,49 @@ std::string refusal(const Batch& b, const Action& a) {
     return {};
 }
 
+// s096 (Scott: "it's pretty slow -- can it use background threads and as many
+// cores as it can"): several files at once. Each file is opened, played and
+// written by one worker on its own private Document -- nothing is shared but
+// the action (read only) -- so `lanes` files are in hand at a time. The
+// results are gathered in the files' order, so the report reads as before.
+int batch_lanes(const Action& a, std::size_t files) {
+    // The local AI models (ONNX Runtime) run one picture at a time and take
+    // every core themselves: an action holding one goes a file at a time.
+    for (const auto& act : a.acts)
+        if (act.on && (act.verb == "select.subject" || act.verb == "select.object" || act.verb == "layer.remove_bg" ||
+                       act.verb == "edit.fill_ca"))
+            return 1;
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    // Each lane holds a whole picture (and its undo-free copies) in memory:
+    // capped at 8, so a folder of big scans doesn't run the machine out.
+    return static_cast<int>(std::max<std::size_t>(1, std::min<std::size_t>({static_cast<std::size_t>(hw), std::size_t{8}, files})));
+}
+
 BatchResult run_batch(const Batch& b, const Action& a, const std::function<bool()>& cancelled,
                       const std::function<void(double)>& progress, const std::function<void(const std::string&)>& at) {
     BatchResult r;
     const auto files = sources(b);
     const std::size_t n = files.size();
-    for (std::size_t i = 0; i < n; ++i) {
-        if (cancelled && cancelled()) { r.cancelled = true; break; }
+    if (n == 0) return r;
+    enum class Out { None, Done, Skipped, Failed, Cancelled };
+    struct Outcome { Out out = Out::None; std::string line; };
+    std::vector<Outcome> outcomes(n);
+    std::atomic<std::size_t> next{0}, finished{0};
+    std::atomic<bool> stop{false};
+    std::mutex at_mu;
+    const auto halted = [&] { if (stop) return true; if (cancelled && cancelled()) { stop = true; return true; } return false; };
+
+    const auto one = [&](std::size_t i) -> Outcome {
         const std::string& src = files[i];
         const std::string name = fs::path(src).filename().string();
-        if (at) at(name);
+        if (at) { std::lock_guard<std::mutex> lk(at_mu); at(name); }
         const std::string dst = target_of(b, src);
         std::error_code ec;
-        if (fs::exists(dst, ec) && !b.overwrite) {
-            ++r.skipped;
-            r.lines.push_back(name + ": skipped -- " + fs::path(dst).filename().string() + " is there already");
-            continue;
-        }
+        if (fs::exists(dst, ec) && !b.overwrite)
+            return {Out::Skipped, name + ": skipped -- " + fs::path(dst).filename().string() + " is there already"};
         std::string err;
         auto c = file::open(src, err);
-        if (!c) { ++r.failed; r.lines.push_back(name + ": couldn't open -- " + err); continue; }
+        if (!c) return {Out::Failed, name + ": couldn't open -- " + err};
         Document d;
         {
             Document::Loading load(d);
@@ -702,13 +807,10 @@ BatchResult run_batch(const Batch& b, const Action& a, const std::function<bool(
             d.replace_channels(std::move(c->channels));
         }
         const auto start = snapshot::take(d, "start");
-        const auto inner = [&](double f) { if (progress) progress((static_cast<double>(i) + 0.8 * f) / static_cast<double>(n)); };
-        const auto played = play(start, top_of(d), a, cancelled, inner);
+        const auto played = play(start, top_of(d), a, halted);
         if (!played.ok) {
-            if (cancelled && cancelled()) { r.cancelled = true; break; }
-            ++r.failed;
-            r.lines.push_back(name + ": " + played.error);
-            continue;
+            if (halted()) return {Out::Cancelled, {}};
+            return {Out::Failed, name + ": " + played.error};
         }
         Document out;
         load_into(out, played.result);
@@ -721,16 +823,38 @@ BatchResult run_batch(const Batch& b, const Action& a, const std::function<bool(
         fs::create_directories(fs::path(dst).parent_path(), ec);
         std::vector<std::string> notes;
         formats::Progress fp;
-        fp.cancelled = cancelled;
+        fp.cancelled = halted;
         if (!roundtrip::save_back(dst, b.kind, w, err, notes, fp, b.options)) {
-            if (cancelled && cancelled()) { r.cancelled = true; break; }
-            ++r.failed;
-            r.lines.push_back(name + ": couldn't write " + fs::path(dst).filename().string() + " -- " + err);
-            continue;
+            if (halted()) return {Out::Cancelled, {}};
+            return {Out::Failed, name + ": couldn't write " + fs::path(dst).filename().string() + " -- " + err};
         }
-        ++r.done;
-        if (progress) progress(static_cast<double>(i + 1) / static_cast<double>(n));
+        return {Out::Done, {}};
+    };
+    const auto lane = [&] {
+        for (;;) {
+            if (halted()) return;
+            const std::size_t i = next++;
+            if (i >= n) return;
+            outcomes[i] = one(i);
+            const std::size_t f = ++finished;
+            if (progress) progress(static_cast<double>(f) / static_cast<double>(n));
+        }
+    };
+    const int lanes = batch_lanes(a, n);
+    std::vector<std::thread> pool;
+    for (int t = 1; t < lanes; ++t) pool.emplace_back(lane);
+    lane();
+    for (auto& t : pool) t.join();
+
+    for (const auto& o : outcomes) {
+        switch (o.out) {
+            case Out::Done: ++r.done; break;
+            case Out::Skipped: ++r.skipped; r.lines.push_back(o.line); break;
+            case Out::Failed: ++r.failed; r.lines.push_back(o.line); break;
+            case Out::Cancelled: case Out::None: break;
+        }
     }
+    r.cancelled = stop.load();
     return r;
 }
 

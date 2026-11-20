@@ -84,7 +84,7 @@ void FilterDialog::ask(const core::Filter& start, const std::string& layer) {
     m_f = F::normalised(start);
     m_threshold = m_f.threshold;
     m_angle = m_f.angle;
-    set_title(std::string(F::label(m_f.kind)) + (m_editing ? " (live)" : "") + " -- “" + layer + "”");
+    set_title(std::string(F::label(m_f.kind)) + (m_editing ? " (live)" : "") + (m_step ? " -- " + layer : " -- “" + layer + "”"));
     // s043 m4: Displace's map lists this document's layers -- built anew each time.
     if (kind_changed || m_rows.empty() || m_f.kind == FilterKind::Displace) rebuild();
     else if (m_depth) { m_syncing = true; m_depth->set_model(depth_model()); m_syncing = false; }   // s041 m4: this document's channels
@@ -100,7 +100,7 @@ void FilterDialog::ask(const core::Filter& start, const std::string& layer) {
 void FilterDialog::set_live(bool live, bool editing) {
     m_editing = editing;
     m_live.set_active(live);
-    m_live.set_visible(!editing);
+    m_live.set_visible(!editing && !m_step);
 }
 
 void FilterDialog::row(const char* name, const char* label, double lo, double hi, int digits, bool log, const char* unit, double* field) {

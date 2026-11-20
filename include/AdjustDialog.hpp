@@ -19,6 +19,9 @@ public:
     ~AdjustDialog() override;
     // Ask for one of kind k, about the layer `title` names.
     void ask(core::AdjustKind k, const std::string& layer);
+    // s096: these settings to begin with (an action's step), titled `what`.
+    void ask_from(const core::Adjust& start, const std::string& what);
+    void offer_preview(bool on) { m_preview.set_visible(on); if (!on) m_preview.set_active(false); }
     void set_histogram(const core::adjust::Histogram& h) { m_editor.set_histogram(h); }
     bool preview() const { return m_preview.get_active(); }
     const core::Adjust& value() const { return m_editor.value(); }
