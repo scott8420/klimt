@@ -382,4 +382,71 @@ void selftest_actions(const Check& check) {
         const std::vector<ac::Action> lib{{"Clicked", {wand, obj}}};
         check("actions: Wand and Object acts kept in the library and read back", ac::save(f, lib) && ac::load(f) == lib, "");
     }
+    // ── s097: Crop recorded, in pixels ─────────────────────────────────────
+    {
+        Doc t;   // 600 x 400
+        const auto size_of = [](const ac::Played& p) {
+            const auto im = p.ok ? p.result.records.at(core::kImageId).image : nullptr;
+            return im ? std::to_string(im->width) + " x " + std::to_string(im->height) : "(" + p.error + ")";
+        };
+        const auto c = ac::crop(100, 50, 300, 200, false, P::rgba(1, 1, 1));
+        check("actions: Crop names itself -- its size and where", c.verb == "canvas.crop" && ac::known("canvas.crop") &&
+              c.label == "Crop  300 × 200 px at 100, 50", c.label);
+        const auto p = ac::play(core::snapshot::take(t.d, "s"), "L1", {"Crop", {c}});
+        check("actions: Crop played -- 300 x 200", size_of(p) == "300 x 200", size_of(p));
+        const auto past = ac::play(core::snapshot::take(t.d, "s"), "L1", {"Wide", {ac::crop(-50, 0, 700, 400, false, P::rgba(1, 1, 1))}});
+        check("actions: Crop past the edge -- canvas added (700 x 400)", size_of(past) == "700 x 400", size_of(past));
+        const auto whole = ac::play(core::snapshot::take(t.d, "s"), "L1", {"Whole", {ac::crop(0, 0, 600, 400, false, P::rgba(1, 1, 1))}});
+        check("actions: Crop to the whole picture -- runs, nothing to do", whole.ok && size_of(whole) == "600 x 400", size_of(whole));
+        const auto zero = ac::play(core::snapshot::take(t.d, "s"), "L1", {"Zero", {ac::crop(0, 0, 0, 10, false, P::rgba(1, 1, 1))}});
+        check("actions: Crop with no width -- refused, in words", !zero.ok && !zero.error.empty(), zero.error);
+        using SP = core::select::Pt;
+        const auto box = ac::select_shape(ac::Drawn::Rect, core::select::Op::Replace, {SP{0.25, 0.25}, SP{0.75, 0.5}});
+        const auto cs = ac::crop_selection(false, P::rgba(1, 1, 1));
+        check("actions: Crop to Selection names itself", cs.verb == "canvas.crop_selection" && cs.label == "Crop to Selection", cs.label);
+        const auto ps = ac::play(core::snapshot::take(t.d, "s"), "L1", {"Box", {box, cs}});
+        check("actions: Crop to Selection played -- the box's size (300 x 100)", size_of(ps) == "300 x 100", size_of(ps));
+        const auto none = ac::play(core::snapshot::take(t.d, "s"), "L1", {"None", {ac::select_none(), cs}});
+        check("actions: Crop to Selection with nothing selected -- said",
+              !none.ok && none.error.find("nothing is selected") != std::string::npos, none.error);
+        const std::string f = (scratch() / "conf4" / "actions.json").string();
+        const std::vector<ac::Action> lib{{"Crops", {c, cs}}};
+        check("actions: Crop acts kept in the library and read back", ac::save(f, lib) && ac::load(f) == lib, "");
+    }
+    // ── s097: odd and even files apart ───────────────────────────────────
+    {
+        check("actions: parity -- the last number in the name",
+              ac::parity_of("/x/scan_0013.tif") == ac::Parity::Odd && ac::parity_of("page 12.png") == ac::Parity::Even &&
+                  ac::parity_of("/a1/cover.jpg") == ac::Parity::None && ac::parity_of("v2 page 7.png") == ac::Parity::Odd &&
+                  ac::parity_of("photo.jp2") == ac::Parity::None && ac::parity_of("p0.png") == ac::Parity::Even, "");
+        const auto in = scratch() / "pages", out = scratch() / "pages_out";
+        fs::create_directories(in);
+        write_png((in / "page_01.png").string(), 400, 200, P::rgba(0.2f, 0.4f, 0.8f));
+        write_png((in / "page_02.png").string(), 400, 200, P::rgba(0.8f, 0.4f, 0.2f));
+        write_png((in / "page_03.png").string(), 400, 200, P::rgba(0.2f, 0.8f, 0.4f));
+        write_png((in / "cover.png").string(), 400, 200, P::rgba(0.5f, 0.5f, 0.5f));
+        ac::Batch b;
+        b.source = in.string();
+        b.dest = out.string();
+        b.kind = F::Kind::PNG;
+        const ac::Action left{"Left", {ac::crop(0, 0, 150, 200, true, P::rgba(1, 1, 1))}};
+        const ac::Action right{"Right", {ac::crop(250, 0, 150, 100, true, P::rgba(1, 1, 1))}};
+        check("actions: odd / even -- every kind skipped: refused, saying how", !ac::refusal(b, ac::Split{}).empty(), ac::refusal(b, ac::Split{}));
+        const ac::Action empty{"Empty", {}};
+        check("actions: odd / even -- an action with no steps: refused", !ac::refusal(b, ac::Split{&left, &empty, nullptr}).empty(), "");
+        const ac::Split split{&left, &right, nullptr};
+        check("actions: odd / even -- runs", ac::refusal(b, split).empty(), ac::refusal(b, split));
+        const auto r = ac::run_batch(b, split);
+        std::string err;
+        const auto o1 = core::file::open((out / "page_01.png").string(), err);
+        const auto e2 = core::file::open((out / "page_02.png").string(), err);
+        const auto o3 = core::file::open((out / "page_03.png").string(), err);
+        check("actions: odd / even -- odd pages cropped left, even right, the cover left alone",
+              r.done == 3 && r.left == 1 && r.failed == 0 && r.lines.empty() && o1 && e2 && o3 && o1->image.width == 150 &&
+                  o1->image.height == 200 && o3->image.width == 150 && e2->image.width == 150 && e2->image.height == 100 &&
+                  !fs::exists(out / "cover.png"),
+              std::to_string(r.done) + " done, " + std::to_string(r.left) + " left");
+        const ac::Split all{&left, &left, &left};
+        check("actions: odd / even -- lanes as for one action", ac::batch_lanes(all, 25) == ac::batch_lanes(left, 25), "");
+    }
 }

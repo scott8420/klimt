@@ -47,7 +47,7 @@ namespace {
 // s012: a COMPACT number field (the -/+ spin buttons pushed options off a
 // 1280 px window): type a number, scroll over it, or drag its label sideways
 // to scrub (Photoshop's way; easy with a pen).
-void number_field(Gtk::Box& into, const char* label, int lo, int hi, int value, const char* unit, const char* tip,
+Gtk::Entry* number_field(Gtk::Box& into, const char* label, int lo, int hi, int value, const char* unit, const char* tip,
                   std::function<int()> get, std::function<void(int)> put) {
     auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 4);
     auto l = Gtk::make_managed<Gtk::Label>(label);
@@ -94,6 +94,7 @@ void number_field(Gtk::Box& into, const char* label, int lo, int hi, int value, 
     });
     l->add_controller(drag);
     into.append(*box);
+    return e;
 }
 }  // namespace
 
@@ -117,6 +118,60 @@ ContextStrip::ContextStrip() : widgets::Box("strip", Gtk::Orientation::HORIZONTA
 int ContextStrip::variant(const std::string& tool_id) const {
     const auto it = m_variant.find(tool_id);
     return it == m_variant.end() ? 0 : it->second;
+}
+
+// ── s097: the Crop box in numbers ────────────────────────────────────────
+// W, H, X, Y (pixels) follow the box on the canvas as it's drawn or dragged;
+// a number typed (Enter, or Tab away), scrolled or label-dragged moves the
+// box -- or makes one, from the whole picture, when there's none yet. The
+// Crop button (or Enter on the canvas) crops.
+void ContextStrip::crop_fields() {
+    auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+    box->set_name("strip.crop.box");
+    const auto put = [this](int CropBox::*f) {
+        return [this, f](int v) {
+            if (m_crop_box.*f == v) return;   // a focus leaving with nothing typed: no box made
+            CropBox b = m_crop_box;
+            b.*f = v;
+            b.on = true;
+            m_crop_box_signal.emit(b);
+        };
+    };
+    const auto get = [this](int CropBox::*f) { return [this, f] { return m_crop_box.*f; }; };
+    struct F { const char* label; int lo; int CropBox::*f; const char* tip; const char* name; };
+    static const F fs[] = {
+        {"W", 1, &CropBox::w, "The box's width, in pixels", "strip.crop.w"},
+        {"H", 1, &CropBox::h, "The box's height, in pixels", "strip.crop.h"},
+        {"X", -300000, &CropBox::x, "The box's left edge, pixels from the canvas's left (less than 0: past it -- canvas is added)", "strip.crop.x"},
+        {"Y", -300000, &CropBox::y, "The box's top edge, pixels from the canvas's top (less than 0: past it -- canvas is added)", "strip.crop.y"},
+    };
+    for (int i = 0; i < 4; ++i) {
+        const auto& f = fs[i];
+        auto* e = number_field(*box, f.label, f.lo, 300000, m_crop_box.*(f.f), "px", f.tip, get(f.f), put(f.f));
+        e->set_name(f.name);
+        e->set_width_chars(7);
+        e->set_max_width_chars(8);
+        m_crop_entry[i] = e;
+    }
+    append(*box);
+    auto go = Gtk::make_managed<Gtk::Button>("Apply");
+    go->set_name("strip.crop.apply");
+    go->set_tooltip_text("Crop to the box  (Enter, or double-click inside it)");
+    go->signal_clicked().connect([this] { m_crop_apply.emit(); });
+    append(*go);
+    show_crop_box(m_crop_box);
+}
+
+void ContextStrip::show_crop_box(const CropBox& b) {
+    m_crop_box = b;
+    const int CropBox::*fs[] = {&CropBox::w, &CropBox::h, &CropBox::x, &CropBox::y};
+    for (int i = 0; i < 4; ++i) {
+        auto* e = m_crop_entry[i];
+        if (!e || e->has_focus()) continue;   // what's being typed stays
+        e->set_text(std::to_string(b.*fs[i]) + "px");
+        // No box yet: the whole picture, dimmed -- type to make one.
+        if (b.on) e->remove_css_class("dim-label"); else e->add_css_class("dim-label");
+    }
 }
 
 ContextStrip::BrushOpts ContextStrip::brush(const std::string& tool) const {
@@ -339,6 +394,7 @@ void ContextStrip::show_transform(int kind) {
     m_variant_buttons.clear();
     m_xf_buttons.clear();
     m_liq_size = nullptr;   // s076
+    for (auto*& e : m_crop_entry) e = nullptr;   // s097
     while (auto* c = get_first_child()) remove(*c);
     auto name = Gtk::make_managed<Gtk::Label>();
     name->set_markup("<b>Free Transform</b>");
@@ -661,8 +717,10 @@ void ContextStrip::show_tool(const core::ToolSpec& t) {
         number_field(*this, "Opacity", 1, 100, m_gradient.opacity, "%", "The gradient's strength over what's there",
                      [this] { return m_gradient.opacity; }, [this](int v) { m_gradient.opacity = v; });
     }
-    if (t.id == "crop")   // s010
+    if (t.id == "crop") {   // s010
         with_settings("Settings", "What happens to the pixels outside the box");
+        crop_fields();   // s097: W, H, X, Y -- typed exactly
+    }
     if (t.id == "select" && variant("select") == 5) {   // s079: the Magnetic Lasso -- one dropdown (the strip never scrolls)
         auto mb = Gtk::make_managed<Gtk::MenuButton>();
         mb->set_name("strip.magnetic");

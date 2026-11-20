@@ -33,8 +33,21 @@ void Shell::run_canvas_job(const std::string& label, CanvasPlan plan) {
                 return;
             }
             update_summary();
+            sync_crop_fields();   // s097: the picture's new size in the Crop fields
         };
     });
+}
+
+// s097: the strip's W / H / X / Y -- the box, or (none yet) the whole picture.
+void Shell::sync_crop_fields() {
+    ContextStrip::CropBox b;
+    if (m_canvas.has_crop()) {
+        const auto r = m_canvas.crop_box();
+        b = {r.x, r.y, r.w, r.h, true};
+    } else if (has_image()) {
+        b = {0, 0, m_doc.image().width, m_doc.image().height, false};
+    }
+    m_strip.show_crop_box(b);
 }
 
 // The Crop tool's box, committed (Enter, a double-click, Image > Crop).
@@ -45,6 +58,7 @@ void Shell::on_crop_box(core::select::Pt a, core::select::Pt b) {
     if (const auto why = Cv::size_refusal(r.w, r.h); !why.empty()) { toast("Crop: " + why); return; }
     const auto bg = background_px();
     const bool del = m_strip.crop_deletes();
+    rec(core::actions::crop(r.x, r.y, r.w, r.h, del, bg));   // s097: in pixels
     run_canvas_job("Crop", [r, bg, del](const Cv::Before& b, core::Jobs::Token&) { return Cv::crop_plan(b, r, bg, del); });
 }
 
@@ -52,6 +66,7 @@ void Shell::on_crop_selection() {
     if (!m_doc.selection()) { toast("Crop to Selection: nothing is selected"); return; }
     const auto bg = background_px();
     const bool del = m_strip.crop_deletes();
+    rec(core::actions::crop_selection(del, bg));   // s097
     run_canvas_job("Crop", [bg, del](const Cv::Before& b, core::Jobs::Token&) -> std::optional<Cv::Reshape> {
         if (!b.mask) return std::nullopt;
         const auto r = Cv::bounds(*b.mask);

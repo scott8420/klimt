@@ -153,7 +153,7 @@ void Shell::on_actions(ActionsPanel::Do d, int action, int step, const std::stri
             m_rec_made.clear();
             m_actions_panel.pick(m_recording);
             save_actions();
-            toast("Recording “" + m_actions.back().name + "” -- filters, adjustments, sizes, selections (the menu's and the Select tool's), Fill, layers; ■ in Actions stops");
+            toast("Recording “" + m_actions.back().name + "” -- filters, adjustments, sizes, crops, selections (the menu's and the Select tool's), Fill, layers; ■ in Actions stops");
             break;
         }
         case ActionsPanel::Do::Record: {
@@ -297,12 +297,20 @@ void Shell::play_action(std::size_t action, std::size_t from) {
 // ── batch ─────────────────────────────────────────────────────────────────
 namespace {
 
+// s097: which action -- one for all, or (odd and even apart) one for each
+// kind of file; an index == the list's size is "Skip".
+struct BatchChoice {
+    bool split = false;
+    std::size_t one = 0, odd = 0, even = 0, none = 0;
+    bool none_set = false;   // `none` not chosen yet: Skip
+};
+
 // File > Automate > Batch…: which action, which folder, where to, as what.
 class BatchDialog : public Gtk::Window {
 public:
     BatchDialog(Gtk::Window& parent, const std::vector<A::Action>& actions, int picked, const A::Batch& last,
-                std::function<void(A::Batch, std::size_t)> go)
-        : m_actions(actions), m_batch(last), m_go(std::move(go)) {
+                const BatchChoice& choice, std::function<void(A::Batch, BatchChoice)> go)
+        : m_actions(actions), m_batch(last), m_choice(choice), m_go(std::move(go)) {
         m_dest_kept = m_batch.dest;
         set_title("Batch");
         set_name("batch");
@@ -322,6 +330,7 @@ public:
             g->attach(*l, 0, row);
         };
         label("Action");
+        m_action_l_widget = g->get_child_at(0, row);   // s097: hidden when odd / even are apart
         std::vector<Glib::ustring> names;
         for (const auto& a : actions) names.push_back(a.name + "  (" + std::to_string(a.acts.size()) + ")");
         m_action.set_model(Gtk::StringList::create(names));
@@ -329,6 +338,35 @@ public:
         m_action.set_hexpand(true);
         if (picked >= 0 && picked < static_cast<int>(actions.size())) m_action.set_selected(static_cast<guint>(picked));
         g->attach(m_action, 1, row++, 2, 1);
+
+        // s097 (Scott): odd- and even-numbered files apart -- left and right
+        // pages, each with its own crop. The last number in the name decides.
+        m_split.set_label("Odd and even files apart  (the last number in the name)");
+        m_split.set_name("batch.split");
+        m_split.set_tooltip_text("scan_0013.tif is odd, scan_0014.tif even; a name with no number (cover.jpg) gets the third. "
+                                 "Skip: those files are left alone");
+        m_split.set_active(m_choice.split);
+        m_split.signal_toggled().connect([this] { refresh(); });
+        g->attach(m_split, 1, row++, 2, 1);
+        std::vector<Glib::ustring> with_skip = names;
+        with_skip.push_back("Skip -- leave them");
+        const std::size_t skip = actions.size();
+        const auto split_row = [&](Gtk::Label& l, const char* text, Gtk::DropDown& dd, const char* name, std::size_t at) {
+            l.set_text(text);
+            l.set_xalign(1.0f);
+            l.add_css_class("dim-label");
+            g->attach(l, 0, row);
+            dd.set_model(Gtk::StringList::create(with_skip));
+            dd.set_name(name);
+            dd.set_hexpand(true);
+            dd.set_selected(static_cast<guint>(std::min(at, skip)));
+            dd.property_selected().signal_changed().connect([this] { refresh(); });
+            g->attach(dd, 1, row++, 2, 1);
+        };
+        const std::size_t first = picked >= 0 && picked < static_cast<int>(actions.size()) ? static_cast<std::size_t>(picked) : 0;
+        split_row(m_odd_l, "Odd", m_odd, "batch.odd", m_choice.split ? m_choice.odd : first);
+        split_row(m_even_l, "Even", m_even, "batch.even", m_choice.split ? m_choice.even : first);
+        split_row(m_none_l, "No number", m_none, "batch.none", m_choice.none_set ? m_choice.none : skip);
 
         label("Pictures in");
         m_source.set_name("batch.source");
@@ -403,12 +441,12 @@ public:
         m_run.add_css_class("suggested-action");
         m_run.signal_clicked().connect([this] {
             read();
-            const auto i = static_cast<std::size_t>(m_action.get_selected());
-            if (i >= m_actions.size() || !A::refusal(m_batch, m_actions[i]).empty()) return;
+            if (!why_not().empty()) return;
             auto go = m_go;
             auto b = m_batch;
+            auto c = m_choice;
             close();
-            go(b, i);
+            go(b, c);
         });
         buttons->append(*cancel);
         buttons->append(m_run);
@@ -421,15 +459,32 @@ public:
 private:
     std::vector<A::Action> m_actions;
     A::Batch m_batch;
-    std::function<void(A::Batch, std::size_t)> m_go;
+    BatchChoice m_choice;
+    std::function<void(A::Batch, BatchChoice)> m_go;
     std::vector<formats::Kind> m_kinds;
     Gtk::DropDown m_action, m_kind;
+    Gtk::CheckButton m_split;                    // s097
+    Gtk::DropDown m_odd, m_even, m_none;
+    Gtk::Label m_odd_l, m_even_l, m_none_l;
+    Gtk::Widget* m_action_l_widget = nullptr;
     Gtk::Button m_source, m_dest, m_run;
     Gtk::CheckButton m_sub, m_beside, m_folder, m_replace;
     Gtk::Entry m_suffix;
     Gtk::Label m_say;
 
+    const A::Action* at(std::size_t i) const { return i < m_actions.size() ? &m_actions[i] : nullptr; }
+    std::string why_not() const {
+        if (m_choice.split) return A::refusal(m_batch, A::Split{at(m_choice.odd), at(m_choice.even), at(m_choice.none)});
+        if (m_choice.one >= m_actions.size()) return "pick an action";
+        return A::refusal(m_batch, m_actions[m_choice.one]);
+    }
     void read() {
+        m_choice.split = m_split.get_active();   // s097
+        m_choice.one = m_action.get_selected();
+        m_choice.odd = m_odd.get_selected();
+        m_choice.even = m_even.get_selected();
+        m_choice.none = m_none.get_selected();
+        m_choice.none_set = true;
         m_batch.suffix = m_suffix.get_text();
         m_batch.overwrite = m_replace.get_active();
         m_batch.subfolders = m_sub.get_active();
@@ -450,15 +505,35 @@ private:
         m_dest.set_label(d.empty() ? "Choose a folder…" : fs::path(d).filename().string());
         m_dest.set_tooltip_text(d);
         m_dest.set_sensitive(m_folder.get_active());
-        const auto i = static_cast<std::size_t>(m_action.get_selected());
-        std::string why = i < m_actions.size() ? A::refusal(m_batch, m_actions[i]) : "pick an action";
+        // s097: one action, or odd / even / no number
+        m_action.set_visible(!m_choice.split);
+        if (m_action_l_widget) m_action_l_widget->set_visible(!m_choice.split);
+        for (Gtk::Widget* w : {static_cast<Gtk::Widget*>(&m_odd), static_cast<Gtk::Widget*>(&m_even), static_cast<Gtk::Widget*>(&m_none),
+                               static_cast<Gtk::Widget*>(&m_odd_l), static_cast<Gtk::Widget*>(&m_even_l), static_cast<Gtk::Widget*>(&m_none_l)})
+            w->set_visible(m_choice.split);
+        std::string why = why_not();
         if (why.empty() && m_folder.get_active() && m_batch.dest.empty()) why = "choose the folder to save to";
         if (why.empty()) {
-            const auto n = A::sources(m_batch).size();
-            m_say.set_text(n == 0 ? "No pictures Klimt opens in that folder."
-                                  : std::to_string(n) + (n == 1 ? " picture" : " pictures") + " -- the first: " +
-                                        fs::path(A::sources(m_batch).front()).filename().string() + " → " +
-                                        fs::path(A::target_of(m_batch, A::sources(m_batch).front())).filename().string());
+            const auto files = A::sources(m_batch);
+            const auto n = files.size();
+            std::string text = n == 0 ? "No pictures Klimt opens in that folder."
+                                      : std::to_string(n) + (n == 1 ? " picture" : " pictures") + " -- the first: " +
+                                            fs::path(files.front()).filename().string() + " → " +
+                                            fs::path(A::target_of(m_batch, files.front())).filename().string();
+            if (n > 0 && m_choice.split) {   // s097: how they divide
+                int odd = 0, even = 0, none = 0;
+                for (const auto& f : files) switch (A::parity_of(f)) {
+                    case A::Parity::Odd: ++odd; break;
+                    case A::Parity::Even: ++even; break;
+                    default: ++none; break;
+                }
+                const auto part = [&](int k, const char* what, std::size_t i) {
+                    return std::to_string(k) + " " + what + (at(i) ? " (" + at(i)->name + ")" : std::string(" (left alone)"));
+                };
+                text += "\n" + part(odd, "odd", m_choice.odd) + ", " + part(even, "even", m_choice.even) + ", " +
+                        part(none, "with no number", m_choice.none) + ".";
+            }
+            m_say.set_text(text);
             m_say.remove_css_class("error");
             m_run.set_sensitive(n > 0);
         } else {
@@ -493,18 +568,32 @@ void Shell::on_batch() {
     if (m_recording >= 0) { toast("Batch: stop recording first (■)"); return; }
     if (m_actions.empty()) { toast("Batch: no actions -- record one in the Actions tab first"); return; }
     static A::Batch last;   // the dialog as it was left, this run
+    static BatchChoice last_choice;   // s097
     if (last.options == formats::WriteOptions{}) last.options = m_prefs.export_options;
-    auto* dlg = new BatchDialog(*this, m_actions, m_actions_panel.picked_action(), last, [this](A::Batch b, std::size_t i) {
+    auto* dlg = new BatchDialog(*this, m_actions, m_actions_panel.picked_action(), last, last_choice, [this](A::Batch b, BatchChoice c) {
         last = b;
+        last_choice = c;
         b.options = m_prefs.export_options;   // the formats' settings as Export last used them
-        const A::Action a = m_actions[i];
-        const std::string label = "Batch “" + a.name + "”";
-        if (auto lg = log::get(log::Area::Shell)) lg->info("batch: {} over {} -> {}", a.name, b.source, b.dest.empty() ? "beside" : b.dest);
-        start_job(label, [this, a, b, label](core::Jobs::Token& t) -> core::Jobs::Landing {
+        // s097: the actions copied in (the library may change while it runs); index == size: Skip
+        const auto copy = [this](std::size_t i) { return i < m_actions.size() ? std::make_shared<const A::Action>(m_actions[i]) : nullptr; };
+        std::shared_ptr<const A::Action> one, odd, even, none;
+        std::string label;
+        if (c.split) {
+            odd = copy(c.odd); even = copy(c.even); none = copy(c.none);
+            label = "Batch odd / even";
+        } else {
+            one = copy(c.one);
+            if (!one) return;
+            label = "Batch “" + one->name + "”";
+        }
+        if (auto lg = log::get(log::Area::Shell)) lg->info("{} over {} -> {}", label, b.source, b.dest.empty() ? "beside" : b.dest);
+        start_job(label, [this, one, odd, even, none, b, label](core::Jobs::Token& t) -> core::Jobs::Landing {
+            const A::Split split = one ? A::Split{one.get(), one.get(), one.get()} : A::Split{odd.get(), even.get(), none.get()};
             auto r = std::make_shared<A::BatchResult>(
-                A::run_batch(b, a, [&t] { return t.cancelled(); }, [&t](double f) { t.progress(f); }));
+                A::run_batch(b, split, [&t] { return t.cancelled(); }, [&t](double f) { t.progress(f); }));
             return [this, r, label, b] {
                 std::string head = std::to_string(r->done) + (r->done == 1 ? " picture" : " pictures") + " done";
+                if (r->left) head += ", " + std::to_string(r->left) + " left alone";   // s097
                 if (r->skipped) head += ", " + std::to_string(r->skipped) + " skipped";
                 if (r->failed) head += ", " + std::to_string(r->failed) + " failed";
                 if (r->cancelled) head += " -- cancelled";

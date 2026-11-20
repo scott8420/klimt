@@ -66,6 +66,14 @@ Act image_size(int w, int h, double dpi, canvas::Filter f, int from_w, int from_
 Act canvas_size(int w, int h, int anchor_x, int anchor_y, int from_w, int from_h);
 Act turn(int t);   // xform::Turn as int (Clockwise, CounterClockwise, Half, FlipHorizontal, FlipVertical)
 Act rotate_canvas(double degrees);
+// s097: CROP -- the box in PIXELS (Scott: pixels), x / y its top-left corner
+// on the canvas. Played on any picture as the same pixels: a box reaching
+// past a smaller picture adds canvas there (the background colour), as the
+// tool does. `delete_cropped` as the tool's "Delete cropped pixels".
+Act crop(int x, int y, int w, int h, bool delete_cropped, const pixel::Px& background);
+// s097: Image > Crop (to the selection) -- played on the selection the
+// picture has then (a recorded selection before it, say).
+Act crop_selection(bool delete_cropped, const pixel::Px& background);
 Act set_mode(pixel::Mode m);   // s096: Image > Mode (Grayscale ...)
 Act apply_adjust(const Adjust& a);
 Act adjust_layer(const Adjust& a);
@@ -167,6 +175,7 @@ std::string target_of(const Batch& b, const std::string& source);
 std::string refusal(const Batch& b, const Action& a);
 struct BatchResult {
     int done = 0, skipped = 0, failed = 0;
+    int left = 0;   // s097: files of a kind with no action (odd / even / no number) -- left alone, as asked
     std::vector<std::string> lines;   // "photo.jpg: step 2, Fill: nothing is selected"
     bool cancelled = false;
 };
@@ -175,6 +184,25 @@ struct BatchResult {
 int batch_lanes(const Action& a, std::size_t files);
 // Run it (a worker; several files at once -- batch_lanes). `progress` 0..1 over the files; `at` names the file in hand.
 BatchResult run_batch(const Batch& b, const Action& a, const std::function<bool()>& cancelled = {},
+                      const std::function<void(double)>& progress = {},
+                      const std::function<void(const std::string&)>& at = {});
+
+// ── s097: ODD AND EVEN (Scott: left / right pages want their own crop) ──
+// The LAST number in a file's name decides: "scan_0013.tif" is odd,
+// "page 12.png" even, "cover.jpg" has none. Only the name before its
+// extension is read ("photo.jp2": none).
+enum class Parity { None, Odd, Even };
+Parity parity_of(const std::string& path);
+// Which action each kind of file gets; nullptr: those files are skipped (said).
+struct Split {
+    const Action* odd = nullptr;
+    const Action* even = nullptr;
+    const Action* none = nullptr;
+    const Action* of(const std::string& path) const;
+};
+std::string refusal(const Batch& b, const Split& s);
+int batch_lanes(const Split& s, std::size_t files);
+BatchResult run_batch(const Batch& b, const Split& s, const std::function<bool()>& cancelled = {},
                       const std::function<void(double)>& progress = {},
                       const std::function<void(const std::string&)>& at = {});
 

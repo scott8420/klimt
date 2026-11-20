@@ -9,6 +9,7 @@
 #include "core/BrushPresets.hpp"   // s021
 #include "core/ToolDefaults.hpp"   // s029
 
+#include <gtkmm/entry.h>   // s097
 #include <gtkmm/popover.h>
 #include <gtkmm/spinbutton.h>
 #include <gtkmm/menubutton.h>
@@ -44,6 +45,14 @@ public:
     const GradientOpts& gradient() const { return m_gradient; }
     // s010: the Crop tool's "Delete cropped pixels" (off: they're kept beyond the image).
     bool crop_deletes() const { return m_crop_delete; }
+    // s097: the Crop box in numbers. `on` false: no box yet (the fields show
+    // the whole picture). show_crop_box: the canvas's box (the Shell tells);
+    // signal_crop_box: a number was typed -- the box it asks for;
+    // signal_crop_apply: the strip's Crop button.
+    struct CropBox { int x = 0, y = 0, w = 0, h = 0; bool on = false; };
+    void show_crop_box(const CropBox& b);
+    sigc::signal<void(CropBox)>& signal_crop_box() { return m_crop_box_signal; }
+    sigc::signal<void()>& signal_crop_apply() { return m_crop_apply; }
     // s038: the Refine brush -- how far the rough area may cut into the
     // figure (Edge, px), the soft edge (px); its size is brush("refine").size.
     // s039 m3: `overlay` -- while the Refine tool is in hand, what is NOT
@@ -191,6 +200,11 @@ private:
     Wand m_wand;
     Magnetic m_magnetic;   // s079
     bool m_crop_delete = false;
+    CropBox m_crop_box;                       // s097
+    Gtk::Entry* m_crop_entry[4] = {};         // W, H, X, Y while the Crop tool's strip shows
+    sigc::signal<void(CropBox)> m_crop_box_signal;
+    sigc::signal<void()> m_crop_apply;
+    void crop_fields();
     RefineOpts m_refine;
     GradientOpts m_gradient;
     CloneOpts m_clone;

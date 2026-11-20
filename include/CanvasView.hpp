@@ -145,7 +145,11 @@ public:
     // reach past the canvas); Escape or another tool clears it.
     sigc::signal<void(core::select::Pt, core::select::Pt)>& signal_crop() { return m_crop_signal; }
     bool has_crop() const { return m_crop; }
-    void clear_crop() { m_crop = false; m_crop_mode = CropMode::None; queue_draw(); }
+    void clear_crop() { const bool was = m_crop; m_crop = false; m_crop_mode = CropMode::None; queue_draw(); if (was) m_crop_changed.emit(); }
+    // s097: the box as whole pixels (x, y its top-left), for the strip's
+    // W / H / X / Y; told whenever it moves, grows, appears or goes.
+    pixel::Rect crop_box() const;
+    sigc::signal<void()>& signal_crop_changed() { return m_crop_changed; }
     void set_crop(double x0, double y0, double x1, double y1);   // e.g. Crop to Selection's preview
     bool commit_crop();                                          // Enter: true if there was a box
     // s011 m3: the Crop tool's Straighten: drag along what should be level
@@ -443,6 +447,7 @@ private:
     void     draw_crop(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     int      crop_hit(double sx, double sy) const;      // edges under the pointer; -1 inside; 0 outside
     sigc::signal<void(core::select::Pt, core::select::Pt)> m_crop_signal;
+    sigc::signal<void()> m_crop_changed;   // s097
     bool             m_line = false;                    // s011: a Straighten line being dragged
     core::select::Pt m_line_a, m_line_b;
     sigc::signal<void(core::select::Pt, core::select::Pt)> m_straighten_signal;

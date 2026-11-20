@@ -106,6 +106,7 @@ void Shell::on_tool(const std::string& id) {  // view state: not a step
     if (const auto* t = core::find_tool(id)) {
         m_strip.show_tool(*t);
         m_canvas.set_tool(id, m_strip.variant(id));   // s007: Hand pans, Zoom zooms; s008: Select selects
+        if (id == "crop") sync_crop_fields();   // s097
         update_paths();   // s035: the Pen shows the active path
         m_canvas.set_brush_size(m_strip.brush(id).size);
         m_canvas.set_hint_mode(id == "refine" ? 1 : 0, m_strip.brush("refine").size / 2.0);   // s038: the Refine brush paints hints

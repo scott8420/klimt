@@ -93,6 +93,7 @@ void load_into(Document& d, const snapshot::Snapshot& s) {
 const std::vector<Verb>& verbs() {
     static const std::vector<Verb> v = {
         {"image.size", "Image Size"},          {"canvas.size", "Canvas Size"},
+        {"canvas.crop", "Crop"},               {"canvas.crop_selection", "Crop to Selection"},   // s097
         {"canvas.turn", "Rotate / Flip Canvas"}, {"canvas.rotate", "Rotate Canvas"},
         {"image.mode", "Mode"},   // s096
         {"adjust.apply", "Adjustment"},        {"adjust.layer", "New Adjustment Layer"},
@@ -134,6 +135,14 @@ Act canvas_size(int w, int h, int ax, int ay, int from_w, int from_h) {
 Act turn(int t) {
     t = std::clamp(t, 0, 4);
     return make("canvas.turn", {{"turn", kTurnKeys[t]}}, kTurnNames[t]);
+}
+Act crop(int x, int y, int w, int h, bool del, const P::Px& bg) {   // s097
+    std::string label = "Crop  " + std::to_string(w) + " × " + std::to_string(h) + " px at " + std::to_string(x) + ", " + std::to_string(y);
+    if (del) label += " (delete)";
+    return make("canvas.crop", {{"x", x}, {"y", y}, {"w", w}, {"h", h}, {"delete", del}, {"bg", colour_json(bg)}}, label);
+}
+Act crop_selection(bool del, const P::Px& bg) {   // s097
+    return make("canvas.crop_selection", {{"delete", del}, {"bg", colour_json(bg)}}, del ? "Crop to Selection (delete)" : "Crop to Selection");
 }
 Act rotate_canvas(double degrees) { return make("canvas.rotate", {{"degrees", degrees}}, "Rotate Canvas  " + num(degrees) + "°"); }
 namespace {
@@ -327,6 +336,24 @@ bool run(DocJournal& j, Document& d, Document::Id& picked, const Act& act, std::
             if (w == im.width && h == im.height) return true;
             P::Px bg = a.contains("bg") ? colour_from(a["bg"]) : P::rgba(1, 1, 1);
             if (!canvas::canvas_size(j, d, w, h, a.value("ax", 0), a.value("ay", 0), bg)) { error = "refused"; return false; }
+            return true;
+        }
+        if (v == "canvas.crop") {   // s097: the same pixels on any picture
+            const pixel::Rect r{a.value("x", 0), a.value("y", 0), a.value("w", 0), a.value("h", 0)};
+            if (const auto why = canvas::size_refusal(r.w, r.h); !why.empty()) { error = why; return false; }
+            if (r.x == 0 && r.y == 0 && r.w == im.width && r.h == im.height && !a.value("delete", false)) return true;   // the whole picture, kept: nothing to do (Delete still trims)
+            const P::Px bg = a.contains("bg") ? colour_from(a["bg"]) : P::rgba(1, 1, 1);
+            if (!canvas::crop(j, d, r, bg, a.value("delete", false))) { error = "refused"; return false; }
+            return true;
+        }
+        if (v == "canvas.crop_selection") {   // s097
+            const auto* m = d.selection();
+            if (!m) { error = "nothing is selected"; return false; }
+            const auto r = canvas::bounds(*m);
+            if (r.empty()) { error = "the selection is empty"; return false; }
+            if (r.x == 0 && r.y == 0 && r.w == im.width && r.h == im.height && !a.value("delete", false)) return true;
+            const P::Px bg = a.contains("bg") ? colour_from(a["bg"]) : P::rgba(1, 1, 1);
+            if (!canvas::crop(j, d, r, bg, a.value("delete", false))) { error = "refused"; return false; }
             return true;
         }
         if (v == "canvas.turn") {
@@ -746,9 +773,22 @@ std::string target_of(const Batch& b, const std::string& source) {
     return (dir / (src.stem().string() + b.suffix + ext)).string();
 }
 
+namespace {
+std::string folder_refusal(const Batch& b);
+}
 std::string refusal(const Batch& b, const Action& a) {
-    std::error_code ec;
     if (a.acts.empty()) return "the action has no steps";
+    return folder_refusal(b);
+}
+std::string refusal(const Batch& b, const Split& s) {   // s097
+    if (!s.odd && !s.even && !s.none) return "every file would be skipped -- pick an action for odd, even or no number";
+    for (const auto& [a, what] : {std::pair{s.odd, "odd"}, std::pair{s.even, "even"}, std::pair{s.none, "no number"}})
+        if (a && a->acts.empty()) return std::string("the action for ") + what + " has no steps";
+    return folder_refusal(b);
+}
+namespace {
+std::string folder_refusal(const Batch& b) {
+    std::error_code ec;
     if (b.source.empty() || !fs::is_directory(b.source, ec)) return "pick the folder of pictures";
     if (!b.dest.empty() && fs::exists(b.dest, ec) && !fs::is_directory(b.dest, ec)) return "the destination isn't a folder";
     if (b.kind != formats::Kind::Klimt && !formats::export_format(b.kind)) return "pick what to save them as";
@@ -756,19 +796,46 @@ std::string refusal(const Batch& b, const Action& a) {
     if (same && b.suffix.empty() && !b.overwrite) return "into the same folder: give the names a suffix (\"-web\"), or tick Replace";
     return {};
 }
+}  // namespace
+
+Parity parity_of(const std::string& path) {   // s097
+    const std::string stem = fs::path(path).stem().string();
+    std::size_t end = stem.size();
+    while (end > 0 && !std::isdigit(static_cast<unsigned char>(stem[end - 1]))) --end;
+    if (end == 0) return Parity::None;
+    return ((stem[end - 1] - '0') % 2) ? Parity::Odd : Parity::Even;
+}
+const Action* Split::of(const std::string& path) const {
+    switch (parity_of(path)) {
+        case Parity::Odd: return odd;
+        case Parity::Even: return even;
+        default: return none;
+    }
+}
 
 // s096 (Scott: "it's pretty slow -- can it use background threads and as many
 // cores as it can"): several files at once. Each file is opened, played and
 // written by one worker on its own private Document -- nothing is shared but
 // the action (read only) -- so `lanes` files are in hand at a time. The
 // results are gathered in the files' order, so the report reads as before.
-int batch_lanes(const Action& a, std::size_t files) {
-    // The local AI models (ONNX Runtime) run one picture at a time and take
-    // every core themselves: an action holding one goes a file at a time.
+namespace {
+bool holds_model(const Action& a) {
     for (const auto& act : a.acts)
         if (act.on && (act.verb == "select.subject" || act.verb == "select.object" || act.verb == "layer.remove_bg" ||
                        act.verb == "edit.fill_ca"))
-            return 1;
+            return true;
+    return false;
+}
+}  // namespace
+int batch_lanes(const Split& s, std::size_t files) {   // s097: one lane when any of them holds a model
+    for (const Action* a : {s.odd, s.even, s.none})
+        if (a && holds_model(*a)) return 1;
+    return batch_lanes(Action{}, files);   // no model: the cores
+}
+int batch_lanes(const Action& a, std::size_t files) {
+    // The local AI models (ONNX Runtime) run one picture at a time and take
+    // every core themselves: an action holding one goes a file at a time.
+    if (holds_model(a)) return 1;
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
     // Each lane holds a whole picture (and its undo-free copies) in memory:
     // capped at 8, so a folder of big scans doesn't run the machine out.
@@ -777,11 +844,16 @@ int batch_lanes(const Action& a, std::size_t files) {
 
 BatchResult run_batch(const Batch& b, const Action& a, const std::function<bool()>& cancelled,
                       const std::function<void(double)>& progress, const std::function<void(const std::string&)>& at) {
+    return run_batch(b, Split{&a, &a, &a}, cancelled, progress, at);
+}
+
+BatchResult run_batch(const Batch& b, const Split& split, const std::function<bool()>& cancelled,
+                      const std::function<void(double)>& progress, const std::function<void(const std::string&)>& at) {
     BatchResult r;
     const auto files = sources(b);
     const std::size_t n = files.size();
     if (n == 0) return r;
-    enum class Out { None, Done, Skipped, Failed, Cancelled };
+    enum class Out { None, Done, Skipped, Passed, Failed, Cancelled };
     struct Outcome { Out out = Out::None; std::string line; };
     std::vector<Outcome> outcomes(n);
     std::atomic<std::size_t> next{0}, finished{0};
@@ -793,6 +865,9 @@ BatchResult run_batch(const Batch& b, const Action& a, const std::function<bool(
         const std::string& src = files[i];
         const std::string name = fs::path(src).filename().string();
         if (at) { std::lock_guard<std::mutex> lk(at_mu); at(name); }
+        const Action* act = split.of(src);   // s097: odd / even / no number
+        if (!act) return {Out::Passed, {}};   // left alone, as asked: counted, not listed
+        const Action& a = *act;
         const std::string dst = target_of(b, src);
         std::error_code ec;
         if (fs::exists(dst, ec) && !b.overwrite)
@@ -840,7 +915,7 @@ BatchResult run_batch(const Batch& b, const Action& a, const std::function<bool(
             if (progress) progress(static_cast<double>(f) / static_cast<double>(n));
         }
     };
-    const int lanes = batch_lanes(a, n);
+    const int lanes = batch_lanes(split, n);
     std::vector<std::thread> pool;
     for (int t = 1; t < lanes; ++t) pool.emplace_back(lane);
     lane();
@@ -850,6 +925,7 @@ BatchResult run_batch(const Batch& b, const Action& a, const std::function<bool(
         switch (o.out) {
             case Out::Done: ++r.done; break;
             case Out::Skipped: ++r.skipped; r.lines.push_back(o.line); break;
+            case Out::Passed: ++r.left; break;   // s097
             case Out::Failed: ++r.failed; r.lines.push_back(o.line); break;
             case Out::Cancelled: case Out::None: break;
         }

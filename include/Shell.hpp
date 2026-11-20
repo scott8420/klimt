@@ -300,6 +300,7 @@ private:
     // ── canvas (s009 m2) ───────────────────────────────────────────────────
     using CanvasPlan = std::function<std::optional<core::canvas::Reshape>(const core::canvas::Before&, core::Jobs::Token&)>;
     void run_canvas_job(const std::string& label, CanvasPlan plan);   // category: canvas: plan on a worker, land as one step
+    void sync_crop_fields();   // s097: the strip's W / H / X / Y follow the canvas's box
     void on_crop_box(core::select::Pt a, core::select::Pt b);          // category: canvas: the Crop tool's box, committed
     void on_crop_selection();                    // category: canvas: Image > Crop to Selection
     void on_reveal_all();                        // category: canvas: Image > Reveal All (s010)

@@ -93,6 +93,8 @@ std::vector<Shell::SweepScene> scenes() {
         {"move", true, {tool("move"), drag(nudge)}},
         {"crop: a box, Enter", true, {tool("crop", 0), drag({{0.1, 0.1}, {0.5, 0.5}, {0.85, 0.85}}), key("Return")}},
         {"crop: a box, double-click inside", true, {tool("crop", 0), drag({{0.1, 0.1}, {0.5, 0.5}, {0.85, 0.85}}), click(0.5, 0.5, 2)}},
+        {"crop: W, H, X, Y typed, Apply (s097)", true, {tool("crop", 0), widget("strip.crop.w"), key("ctrl+a"), type("300"), key("Return"), widget("strip.crop.h"), key("ctrl+a"), type("200"), key("Return"),
+                     widget("strip.crop.x"), key("ctrl+a"), type("100"), key("Return"), widget("strip.crop.y"), key("ctrl+a"), type("120"), key("Return"), widget("strip.crop.apply")}, "image=300x200"},
         {"crop: straighten", true, {tool("crop", 1), drag({{0.2, 0.5}, {0.5, 0.52}, {0.8, 0.55}})}},
         // ── transform ──
         {"free transform: moved, Enter", true, {tool("move"), action("free-transform"), drag(nudge), key("Return")}},
@@ -148,6 +150,9 @@ std::vector<Shell::SweepScene> scenes() {
         {"actions: a drawn box recorded (s094)", true, {tab(3), widget("actions.new"), tool("select", 0), drag(box), widget("actions.stop")}, "recorded=select.shape"},
         {"actions: a drawn lasso recorded (s094)", true, {tab(3), widget("actions.new"), tool("select", 2), drag(loop), widget("actions.stop")}, "recorded=select.shape"},
         {"actions: a Wand click recorded (s095)", true, {tab(3), widget("actions.new"), tool("select", 3), click(0.5, 0.5), widget("actions.stop")}, "recorded=select.wand"},
+        {"actions: a typed Crop recorded (s097)", true, {tab(3), widget("actions.new"), tool("crop", 0), widget("strip.crop.w"), key("ctrl+a"), type("300"), key("Return"), widget("strip.crop.h"), key("ctrl+a"), type("200"), key("Return"),
+                     widget("strip.crop.x"), key("ctrl+a"), type("100"), key("Return"), widget("strip.crop.y"), key("ctrl+a"), type("120"), key("Return"),
+                     widget("strip.crop.apply"), widget("actions.stop")}, "recorded=canvas.crop"},
         {"actions: a starter played", true, {tab(3), row("actions.list", 0, 0.95), widget("actions.play")}},
         {"actions: a step switched off", false, {tab(3), row_button("actions.list", 0, 0), row_button("actions.list", 1, 0)}, "step0off"},
         {"actions: double-click renames, typed, Enter", false, {tab(3), row("actions.list", 0, 0.4, 2), key("ctrl+a"), type("Swept"), key("Return")}, "action0=Swept"},
@@ -236,6 +241,10 @@ std::string Shell::canvas_check(const std::string& what) {
         const auto& o = m_doc.channel_order();
         const auto l = o.empty() ? decltype(m_doc.get(o.front())){} : m_doc.get(o.front());
         return l && l->name == "Swept" ? std::string{} : "the saved channel is \"" + (l ? l->name : std::string{}) + "\"";
+    }
+    if (what.rfind("image=", 0) == 0) {   // s097: "image=300x200"
+        const std::string have = std::to_string(m_doc.image().width) + "x" + std::to_string(m_doc.image().height);
+        return have == what.substr(6) ? std::string{} : "the image is " + have;
     }
     if (what == "viewing=0") return m_channel_view == 0 ? std::string{} : "viewing channel " + std::to_string(m_channel_view);
     if (what == "outline-off") {

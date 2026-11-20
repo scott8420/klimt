@@ -78,6 +78,17 @@ void Shell::bind_actions() {  // bindings
     m_canvas.signal_stroke().connect(sigc::mem_fun(*this, &Shell::on_stroke));
     m_canvas.signal_move().connect(sigc::mem_fun(*this, &Shell::on_move));   // s009
     m_canvas.signal_crop().connect(sigc::mem_fun(*this, &Shell::on_crop_box));
+    // s097: the Crop box in numbers -- the strip follows the box; a number typed moves it.
+    m_canvas.signal_crop_changed().connect(sigc::mem_fun(*this, &Shell::sync_crop_fields));
+    m_strip.signal_crop_box().connect([this](ContextStrip::CropBox b) {
+        if (!has_image() || m_rail.tool() != "crop") return;
+        if (const auto why = core::canvas::size_refusal(b.w, b.h); !why.empty()) { toast("Crop: " + why); sync_crop_fields(); return; }
+        m_canvas.set_crop(b.x, b.y, b.x + b.w, b.y + b.h);
+    });
+    m_strip.signal_crop_apply().connect([this] {
+        if (!has_image()) { toast("Crop: no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
+        if (!m_canvas.commit_crop()) toast("Crop: no box -- drag one on the picture, or type W / H / X / Y");
+    });
     // s011: Free Transform and the one-shot transforms (Shell_transform.cpp).
     m_canvas.signal_transform().connect(sigc::mem_fun(*this, &Shell::on_xform_change));
     m_canvas.signal_transform_commit().connect(sigc::mem_fun(*this, &Shell::xform_commit));

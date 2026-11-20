@@ -177,10 +177,20 @@ void Shell::start() {
     if (const char* s = std::getenv("KLIMT_SWEEP"); s && (*s == '1' || *s == '2')) { start_sweep(); return; }   // s090 (2: with a selection made)
     if (const char* s = std::getenv("KLIMT_SWEEP"); s && std::string(s) == "canvas") { start_canvas_sweep(); return; }   // s091: scripts/sweep_canvas.sh
     if (has_image()) return;
-    Glib::signal_idle().connect_once([this] {
-        if (has_image()) return;
-        if (!restore_session()) on_new();   // s023: last time's tabs, else the New dialog
-    });
+    // s097 (Scott: the New dialog came up nearly off the screen): it waits
+    // for the window to be mapped and SIZED, then a beat for the window
+    // manager to place it -- a dialog shown over a window not yet placed is
+    // put where that window would be (off to one side). At most ~3 s.
+    auto tries = std::make_shared<int>(0);
+    Glib::signal_timeout().connect([this, tries] {
+        const bool placed = get_mapped() && get_width() > 1 && get_height() > 1;
+        if (!placed && ++*tries < 60) return true;   // again in 50 ms
+        Glib::signal_timeout().connect_once([this] {
+            if (has_image()) return;
+            if (!restore_session()) on_new();   // s023: last time's tabs, else the New dialog
+        }, 150);
+        return false;
+    }, 50);
 }
 
 // ── s023: the open tabs, remembered ─────────────────────────────────────────

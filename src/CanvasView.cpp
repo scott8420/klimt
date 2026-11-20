@@ -1160,6 +1160,7 @@ void CanvasView::crop_drag(double sx, double sy, bool shift) {
         if (m_crop_edges & 8) m_cy1 = std::max(std::round(snap_y(m_crop_from[3] + dy)), m_cy0 + 1);
     }
     queue_draw();
+    m_crop_changed.emit();   // s097: the strip's numbers follow the drag
 }
 
 void CanvasView::crop_release() {
@@ -1171,6 +1172,15 @@ void CanvasView::crop_release() {
     }
     m_crop_mode = CropMode::None;
     queue_draw();
+    m_crop_changed.emit();   // s097
+}
+
+pixel::Rect CanvasView::crop_box() const {   // s097
+    if (!m_crop) return {};
+    const double x0 = std::min(m_cx0, m_cx1), x1 = std::max(m_cx0, m_cx1);
+    const double y0 = std::min(m_cy0, m_cy1), y1 = std::max(m_cy0, m_cy1);
+    const int ix = static_cast<int>(std::lround(x0)), iy = static_cast<int>(std::lround(y0));
+    return {ix, iy, static_cast<int>(std::lround(x1)) - ix, static_cast<int>(std::lround(y1)) - iy};
 }
 
 void CanvasView::set_crop(double x0, double y0, double x1, double y1) {
@@ -1178,6 +1188,7 @@ void CanvasView::set_crop(double x0, double y0, double x1, double y1) {
     m_cx0 = std::min(x0, x1); m_cx1 = std::max(x0, x1);
     m_cy0 = std::min(y0, y1); m_cy1 = std::max(y0, y1);
     queue_draw();
+    m_crop_changed.emit();   // s097
 }
 
 bool CanvasView::commit_crop() {
@@ -1185,6 +1196,7 @@ bool CanvasView::commit_crop() {
     const core::select::Pt a{m_cx0, m_cy0}, b{m_cx1, m_cy1};
     m_crop = false;
     queue_draw();
+    m_crop_changed.emit();   // s097
     m_crop_signal.emit(a, b);
     return true;
 }
