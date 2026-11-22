@@ -1,5 +1,6 @@
 #include "formats/Formats.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -22,6 +23,20 @@ Kind sniff(const std::string& path) {
     // s083: a PDF -- Klimt opens the ones it wrote (core/RoundTrip.hpp).
     if (n >= 5 && std::memcmp(b, "%PDF-", 5) == 0) return Kind::PDF;
     if (n >= 12 && std::memcmp(b, "RIFF", 4) == 0 && std::memcmp(b + 8, "WEBP", 4) == 0) return Kind::WebP;
+    // s098: HEIF (HEIC, AVIF) -- an ISO box file whose first box is "ftyp"
+    // naming a HEIF brand, major or compatible (an MP4's isom / mp42 isn't).
+    if (n >= 16 && std::memcmp(b + 4, "ftyp", 4) == 0) {
+        static const char* const brands[] = {"heic", "heix", "hevc", "hevx", "heim", "heis", "hevm", "hevs",
+                                             "mif1", "msf1", "avif", "avis"};
+        const std::size_t box = (std::size_t{b[0]} << 24) | (std::size_t{b[1]} << 16) | (std::size_t{b[2]} << 8) | b[3];
+        const std::size_t end = std::min({box, n, sizeof b});
+        auto heif = [&](std::size_t at) {
+            for (const char* br : brands) if (std::memcmp(b + at, br, 4) == 0) return true;
+            return false;
+        };
+        if (heif(8)) return Kind::HEIF;
+        for (std::size_t at = 16; at + 4 <= end; at += 4) if (heif(at)) return Kind::HEIF;
+    }
     // A .klimt is a zip whose FIRST entry is "mimetype", stored, holding
     // "image/x-klimt" (OpenRaster's trick): the local header's 30 bytes, the
     // name, any extra field, then the data.
@@ -50,6 +65,7 @@ const char* kind_name(Kind k) {
         case Kind::PSD:   return "Photoshop";
         case Kind::PDF:   return "PDF";
         case Kind::EPS:   return "EPS";
+        case Kind::HEIF:  return "HEIC";
         case Kind::Unknown: break;
     }
     return "";
@@ -61,6 +77,7 @@ std::optional<Raster> read_image(const std::string& path, std::string& error, co
         case Kind::JPEG: return read_jpeg(path, error, p);
         case Kind::TIFF: return read_tiff(path, error, p);
         case Kind::WebP: return read_webp(path, error, p);
+        case Kind::HEIF: return read_heif(path, error, p);   // s098
         case Kind::Klimt: error = "a Klimt document, not an image"; return std::nullopt;
         case Kind::ORA:   error = "an OpenRaster document, not an image"; return std::nullopt;
         case Kind::PSD:   error = "a Photoshop document, not an image"; return std::nullopt;
@@ -68,7 +85,7 @@ std::optional<Raster> read_image(const std::string& path, std::string& error, co
         case Kind::Unknown: break;
     }
     std::ifstream in(path, std::ios::binary);
-    error = in ? "not a PNG, JPEG, TIFF or WebP file" : "can't be read";
+    error = in ? "not a PNG, JPEG, TIFF, WebP or HEIC file" : "can't be read";
     return std::nullopt;
 }
 

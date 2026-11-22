@@ -318,6 +318,7 @@ const char* writes_back(formats::Kind kind) {
         case formats::Kind::ORA: return "OpenRaster";
         case formats::Kind::Klimt: return "Klimt";
         case formats::Kind::EPS: return "EPS";
+        case formats::Kind::HEIF:   // s098: read only
         case formats::Kind::Unknown: break;
     }
     return nullptr;

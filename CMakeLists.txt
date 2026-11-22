@@ -3,7 +3,7 @@ project(klimt VERSION 0.1.0 LANGUAGES C CXX)
 
 # Klimt -- a raster image editor for GNOME (gtkmm 4). Started s001 from the
 # Cairn spine v1. The build string the About window and install.sh show:
-set(KLIMT_BUILD "s097")
+set(KLIMT_BUILD "s098")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -205,13 +205,19 @@ add_executable(klimt-thumbnailer src/thumbnailer.cpp)
 target_link_libraries(klimt-thumbnailer PRIVATE klimt_formats PkgConfig::LIBZIP)
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_liquify.cpp src/selftest_snapshot.cpp src/selftest_magnetic.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp src/selftest_psd.cpp src/selftest_psdadjust.cpp src/selftest_pdf.cpp src/selftest_colour.cpp src/selftest_clip.cpp src/selftest_trace.cpp src/selftest_smart.cpp src/selftest_roundtrip.cpp src/selftest_actions.cpp src/selftest_raw.cpp src/selftest_seg.cpp src/selftest_merge.cpp src/selftest_clipboard.cpp)
+add_executable(klimt_selftest src/selftest.cpp src/selftest_formats.cpp src/selftest_select.cpp src/selftest_move.cpp src/selftest_canvas.cpp src/selftest_pen.cpp src/selftest_bounds.cpp src/selftest_transform.cpp src/selftest_liquify.cpp src/selftest_snapshot.cpp src/selftest_magnetic.cpp src/selftest_masks.cpp src/selftest_gradient.cpp src/selftest_adjust.cpp src/selftest_filter.cpp src/selftest_retouch.cpp src/selftest_brush.cpp src/selftest_styles.cpp src/selftest_tabs.cpp src/selftest_fade.cpp src/selftest_partly.cpp src/selftest_presets.cpp src/selftest_transfer.cpp src/selftest_session.cpp src/selftest_groups.cpp src/selftest_range.cpp src/selftest_channels.cpp src/selftest_dynamics.cpp src/selftest_tooldefaults.cpp src/selftest_filterlayers.cpp src/selftest_rulers.cpp src/selftest_sharpen.cpp src/selftest_paths.cpp src/selftest_pixelate.cpp src/selftest_render.cpp src/selftest_text.cpp src/selftest_pyramid.cpp src/selftest_ora.cpp src/selftest_psd.cpp src/selftest_psdadjust.cpp src/selftest_pdf.cpp src/selftest_colour.cpp src/selftest_clip.cpp src/selftest_trace.cpp src/selftest_smart.cpp src/selftest_roundtrip.cpp src/selftest_actions.cpp src/selftest_raw.cpp src/selftest_seg.cpp src/selftest_merge.cpp src/selftest_clipboard.cpp src/selftest_heif.cpp)
 find_package(TIFF REQUIRED)   # s085: the selftest writes its own DNG
 target_link_libraries(klimt_selftest PRIVATE klimt_core Threads::Threads PkgConfig::LIBZIP ZLIB::ZLIB TIFF::TIFF)   # s085: TIFF -- the test writes its own DNG   # s049: reads the zips it writes
 # The selftest checks every tool's icon is in the resource bundle (s005).
 target_compile_definitions(klimt_selftest PRIVATE KLIMT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
                                                   KLIMT_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")   # s049: runs klimt-thumbnailer
 add_dependencies(klimt_selftest klimt-thumbnailer)
+# s098: the HEIC checks write their own HEICs with libheif's encoder.
+pkg_check_modules(HEIF QUIET IMPORTED_TARGET libheif)   # (libs/formats' find is its own scope)
+if(HEIF_FOUND)
+  target_compile_definitions(klimt_selftest PRIVATE KLIMT_HAVE_HEIF)
+  target_link_libraries(klimt_selftest PRIVATE PkgConfig::HEIF)
+endif()
 
 # ── App resources (gresource) -- the RESOURCE-PIPELINE paradigm ────────────────
 # glib-compile-resources embeds resources/klimt.gresource.xml into a C source;

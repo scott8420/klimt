@@ -3,7 +3,8 @@
 #   + (s007) libpng-devel libjpeg-turbo-devel libtiff-devel libzip-devel
 #   + (s049) libwebp-devel
 #   + (s067) lcms2-devel
-#   optional: (s085) LibRaw-devel -- camera RAW; (s086) onnxruntime-devel -- local AI
+#   optional: (s085) LibRaw-devel -- camera RAW; (s086) onnxruntime-devel -- local AI;
+#             (s098) libheif-devel + libheif-freeworld (RPM Fusion: the HEVC decoder) -- HEIC read
 #   (Ubuntu/Debian: libgtkmm-4.0-dev libadwaita-1-dev libspdlog-dev cmake g++ zip
 #    + libpng-dev libjpeg-turbo8-dev libtiff-dev libzip-dev libwebp-dev liblcms2-dev).
 # Optional, for faster builds: ccache ninja-build mold (or lld).

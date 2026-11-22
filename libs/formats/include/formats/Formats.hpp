@@ -22,7 +22,7 @@
 
 namespace klimt::formats {
 
-enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA, PSD, PDF, EPS };   // s049: WebP, OpenRaster; s050: Photoshop; s051: PDF (s083: sniffed -- Klimt opens the PDFs it wrote)
+enum class Kind { Unknown, PNG, JPEG, TIFF, Klimt, WebP, ORA, PSD, PDF, EPS, HEIF };   // s049: WebP, OpenRaster; s050: Photoshop; s051: PDF (s083: sniffed -- Klimt opens the PDFs it wrote)
 // By the file's first bytes, not its name (a .png that is a JPEG opens).
 Kind sniff(const std::string& path);
 // s051 (Scott: changing the chooser's format didn't change the name's
@@ -75,6 +75,12 @@ std::optional<Raster> read_jpeg(const std::string& path, std::string& error, con
 std::optional<Raster> read_tiff(const std::string& path, std::string& error, const Progress& p = {});
 // s049: WebP, lossy or lossless, 8-bit RGB(A); an animation's first frame.
 std::optional<Raster> read_webp(const std::string& path, std::string& error, const Progress& p = {});
+// s098: HEIC / HEIF (an iPhone's photo; AVIF too), READ only, on libheif --
+// optional at build time: heif_available() false and read_heif refuses in
+// words. The main picture, upright, 8-bit or (10 / 12-bit) 16-bit RGB(A).
+std::optional<Raster> read_heif(const std::string& path, std::string& error, const Progress& p = {});
+bool        heif_available();
+std::string heif_version();   // "" without libheif
 // s049: a PNG held in memory (an entry of a zip: OpenRaster's layers).
 std::optional<Raster> read_png_bytes(const std::uint8_t* data, std::size_t n, std::string& error,
                                      const Progress& p = {});

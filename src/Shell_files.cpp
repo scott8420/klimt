@@ -268,7 +268,7 @@ void Shell::on_open() {
         auto dlg = Gtk::FileDialog::create();
         dlg->set_title("Open");
         auto filters = Gio::ListStore<Gtk::FileFilter>::create();
-        auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp", "pdf",
+        auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp", "heic", "heif", "avif", "hif", "pdf",
                                                    "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "dng", "raf", "orf", "rw2",
                                                    "rwl", "pef", "srw", "x3f", "3fr", "fff", "iiq", "mos", "mef", "mrw", "erf", "kdc", "dcr"});
         filters->append(all);
@@ -279,6 +279,7 @@ void Shell::on_open() {
         filters->append(filter("JPEG", {"jpg", "jpeg"}));
         filters->append(filter("TIFF", {"tif", "tiff"}));
         filters->append(filter("WebP", {"webp"}));                // s049
+        filters->append(filter("HEIC (iPhone) / HEIF / AVIF", {"heic", "heif", "avif", "hif"}));   // s098: read only
         filters->append(filter("PDF written by Klimt", {"pdf"}));  // s083: its layers ride inside
         filters->append(filter("Camera RAW", {"cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "dng", "raf", "orf", "rw2",
                                               "rwl", "pef", "srw", "x3f", "3fr", "fff", "iiq", "mos", "mef", "mrw", "erf", "kdc", "dcr"}));   // s085
@@ -396,7 +397,7 @@ void Shell::on_place(bool linked) {
     auto dlg = Gtk::FileDialog::create();
     dlg->set_title(linked ? "Place Linked" : "Place Embedded");
     auto filters = Gio::ListStore<Gtk::FileFilter>::create();
-    auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp"});
+    auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp", "heic", "heif", "avif", "hif"});
     filters->append(all);
     dlg->set_filters(filters);
     dlg->set_default_filter(all);
@@ -484,7 +485,7 @@ void Shell::on_smart(const std::string& verb) {
         auto dlg = Gtk::FileDialog::create();
         dlg->set_title("Replace Contents");
         auto filters = Gio::ListStore<Gtk::FileFilter>::create();
-        auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp"});
+        auto all = filter("Images and documents", {"klimt", "ora", "psd", "png", "jpg", "jpeg", "tif", "tiff", "webp", "heic", "heif", "avif", "hif"});
         filters->append(all);
         dlg->set_filters(filters);
         dlg->set_default_filter(all);

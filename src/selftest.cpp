@@ -133,6 +133,7 @@ void selftest_clip(const std::function<void(const std::string&, bool, const std:
 void selftest_trace(const std::function<void(const std::string&, bool, const std::string&)>& check);     // s081
 void selftest_smart(const std::function<void(const std::string&, bool, const std::string&)>& check);     // s082
 void selftest_clipboard(const std::function<void(const std::string&, bool, const std::string&)>& check);     // s096
+void selftest_heif(const std::function<void(const std::string&, bool, const std::string&)>& check);          // s098
 void selftest_merge(const std::function<void(const std::string&, bool, const std::string&)>& check);     // s096
 void selftest_render(const std::function<void(const std::string&, bool, const std::string&)>& check);   // s044
 void selftest_paths(const std::function<void(const std::string&, bool, const std::string&)>& check);     // s035
@@ -1269,6 +1270,7 @@ int main() {
     selftest_trace([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s081
     selftest_smart([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s082
     selftest_clipboard([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s096
+    selftest_heif([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });        // s098
     selftest_merge([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });   // s096
     selftest_dirty([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
     selftest_select([](const std::string& n, bool ok, const std::string& d) { check(n, ok, d); });
