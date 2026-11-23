@@ -414,6 +414,7 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
         back->signal_pressed().connect([this, id](int, double, double) { set_mask_target({}); select({id}, false); });
         kind->add_controller(back);
     }
+    if (!pth) { kind->set_name("layers.icon"); ctrl_click_loads(*kind, id, false); }   // s099
     if (pth) {   // s035: the node icon -- a button: the outline on the canvas, on / off
         auto nb = Gtk::make_managed<Gtk::Button>();
         nb->set_name("layers.path_outline");
@@ -425,6 +426,7 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
         nb->set_tooltip_text(off ? "The outline is hidden (the mask still works) -- click to show it  (Ctrl+Shift+H)"
                                  : "Hide the outline and its points -- see the effect alone; the mask stays  (Ctrl+Shift+H)");
         nb->signal_clicked().connect([this, id] { m_outline_toggle.emit(id); });
+        ctrl_click_loads(*nb, id, false);   // s099
         box->append(*nb);
     } else {
         box->append(*kind);
@@ -456,12 +458,18 @@ Gtk::ListBoxRow* LayersPanel::build_row(const Id& id) {
         if (m_mask_viewing == id) chip->add_css_class("destructive-action");
         chip->set_tooltip_text(std::string(l.mask_on ? "Layer mask" : "Layer mask (off)") +
                                " -- click: paint the mask (white shows, black hides); Shift-click: off / on; "
-                               "Alt-click: see the mask");
+                               "Alt-click: see the mask; Ctrl-click: load it as the selection");
         auto press = Gtk::GestureClick::create();
         press->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
         press->signal_pressed().connect([this, id, press](int, double, double) {
             const auto st = press->get_current_event_state();
             press->set_state(Gtk::EventSequenceState::CLAIMED);
+            if ((st & Gdk::ModifierType::CONTROL_MASK) != Gdk::ModifierType{}) {   // s099: the mask as the selection
+                const bool sh = (st & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{};
+                const bool al = (st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+                m_load_selection.emit(id, sh && al ? 3 : sh ? 1 : al ? 2 : 0, true);
+                return;
+            }
             if ((st & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{}) {
                 const auto cur = m_doc.get(id);
                 if (cur && cur->mask) L::set_mask_on(m_journal, m_doc, id, !cur->mask_on);
@@ -611,6 +619,26 @@ void LayersPanel::mark_drop(Gtk::ListBoxRow* row, const char* css) {
     m_drop_row = row;
     m_drop_css = css;
     if (row && css) row->add_css_class(css);
+}
+
+// s099: Ctrl-click the icon -- the layer as the selection (Photoshop's
+// Ctrl-click the thumbnail). Heard in CAPTURE and claimed, so the row isn't
+// picked and the path icon's button doesn't toggle the outline.
+void LayersPanel::ctrl_click_loads(Gtk::Widget& w, const Id& id, bool mask) {
+    auto g = Gtk::GestureClick::create();
+    g->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+    g->signal_pressed().connect([this, id, mask, gp = g.get()](int, double, double) {
+        const auto st = gp->get_current_event_state();
+        if ((st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType{}) return;   // a plain click: as before
+        gp->set_state(Gtk::EventSequenceState::CLAIMED);
+        const bool sh = (st & Gdk::ModifierType::SHIFT_MASK) != Gdk::ModifierType{};
+        const bool al = (st & Gdk::ModifierType::ALT_MASK) != Gdk::ModifierType{};
+        m_load_selection.emit(id, sh && al ? 3 : sh ? 1 : al ? 2 : 0, mask);
+    });
+    w.add_controller(g);
+    const auto tip = w.get_tooltip_text();
+    w.set_tooltip_text((tip.empty() ? Glib::ustring() : tip + "\n") +
+                       "Ctrl-click: load it as the selection (Shift adds, Alt subtracts, both intersect)");
 }
 
 bool LayersPanel::copying(Gdk::ModifierType state) {

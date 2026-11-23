@@ -389,11 +389,22 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     edit->append("Colour Settings…", "win.colour-settings");   // s070
     edit->append("AI Models…", "win.ai-models");               // s089: what the local AI verbs need
     auto tr = Gio::Menu::create();
-    tr->append("Flip Horizontal", "win.flip-h");
-    tr->append("Flip Vertical", "win.flip-v");
-    tr->append("Rotate 90° Clockwise", "win.rotate-cw");
-    tr->append("Rotate 90° Counter Clockwise", "win.rotate-ccw");
-    tr->append("Rotate 180°", "win.rotate-180");
+    {   // s099: the box, already in that kind (Ctrl+T, then the strip's button)
+        auto kinds = Gio::Menu::create();
+        kinds->append("Skew", "win.transform-skew");
+        kinds->append("Distort", "win.transform-distort");
+        kinds->append("Perspective", "win.transform-perspective");
+        kinds->append("Warp", "win.transform-warp");
+        kinds->append("Envelope", "win.transform-envelope");
+        tr->append_section(kinds);
+    }
+    auto flips = Gio::Menu::create();
+    tr->append_section(flips);
+    flips->append("Flip Horizontal", "win.flip-h");
+    flips->append("Flip Vertical", "win.flip-v");
+    flips->append("Rotate 90° Clockwise", "win.rotate-cw");
+    flips->append("Rotate 90° Counter Clockwise", "win.rotate-ccw");
+    flips->append("Rotate 180°", "win.rotate-180");
     edit->append_submenu("Transform", tr);
     menu->append_section(edit);
 
@@ -495,6 +506,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     sel->append("Save Selection", "win.select-save");          // s016: to the Channels tab
     {   // s035: paths
         auto ps = Gio::Menu::create();
+        ps->append("Load Layer as Selection", "win.layer-selection");   // s099: = Ctrl-click its icon
         ps->append("Load Path as Selection", "win.path-selection");
         ps->append("Make Path from Selection", "win.path-make-work");
         ps->append("Make Path\u2026", "win.path-make");   // s081: any source, the tolerance

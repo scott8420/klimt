@@ -90,6 +90,23 @@ void Shell::on_path_selection(core::select::Op op) {
     if (P::to_selection(m_journal, m_doc, id, op)) toast(m_journal.undo_label(), true);
 }
 
+// s099: Ctrl-click a layer's icon (its pixels, its path, a group's pixel
+// layers, an adjustment's mask) or its mask chip -- the selection, ONE step.
+void Shell::on_layer_load_selection(const std::string& id, int op, bool mask) {
+    if (!has_image() || doc_busy(true)) return;
+    const auto l = m_doc.get(id);
+    if (!l) return;
+    if (P::layer_to_selection(m_journal, m_doc, id, static_cast<core::select::Op>(op), mask)) {
+        toast(m_journal.undo_label(), true);
+        return;
+    }
+    toast("“" + (l->name.empty() ? std::string("Untitled") : l->name) + "”: " +
+          (mask ? "its mask hides everything -- nothing to select"
+                : l->kind == core::Kind::Path ? "the path is empty -- nothing to select"
+                : (l->kind == core::Kind::Adjustment || l->kind == core::Kind::Filter) ? "no mask -- nothing to select (it covers the whole picture)"
+                : "no pixels -- nothing to select"));
+}
+
 void Shell::on_path_make_work() {
     if (!m_doc.selection_ptr()) { toast("Make Path from Selection: select something first"); return; }
     make_path(core::paths::Source::Selection, {}, m_prefs.path_tolerance);

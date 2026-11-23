@@ -331,7 +331,8 @@ private:
     void liquify_cancel();                       // category: liquify: Esc / Cancel -- nothing written
     void liquify_end();                          // category: liquify
         void show_transform_strip(bool on);          // category: transform: s073 -- the strip's Free Transform row, or the tool's back
-    void on_free_transform();                    // category: transform: Ctrl+T -- the box on the canvas
+    void on_free_transform() { on_transform_as(0); }   // category: transform: Ctrl+T -- the box on the canvas
+    void on_transform_as(int kind);              // s099: Edit > Transform > Skew / Distort / ... -- the box, that kind already
     void on_xform_change(const std::array<double, 9>& m);
     void on_warp_change(const std::array<double, 32>& m);    // category: transform: s074 -- the mesh moved   // category: transform: the box moved
     void xform_pump();                           // category: transform: the preview, one job at a time
@@ -449,6 +450,7 @@ private:
     // s035: PATHS (Shell_paths.cpp).
     void update_paths();                       // category: canvas: s035 -- the active path on the canvas
     void on_path_edit(const core::path::Path& p, const std::string& label);   // category: paths: the Pen's gesture lands (one step)
+    void on_layer_load_selection(const std::string& id, int op, bool mask);   // s099: Ctrl-click a layer's icon / mask chip
     void on_path_selection(core::select::Op op);   // category: paths: Ctrl+Enter -- the active path as the selection
     void on_path_make_work();                  // category: paths: Make Path from Selection -- a new path layer (a job)
     void on_clipping_path();                   // category: paths: s080 Select > Clipping Path... (asks which path, the flatness)

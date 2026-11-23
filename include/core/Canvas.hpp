@@ -105,6 +105,42 @@ pixel::Rect bounds(const pixel::TileMap& mask);
 // its pixels.
 std::optional<Reshape> reveal_plan(const Before& b);
 
+// s099: SIZE UNITS for Image Size / Canvas Size (Scott: "scale the image to
+// inches at a certain dpi"). A length in pixels shown in a unit and back:
+// inches / cm / mm at `dpi`, percent of `base` px (the size when asked).
+enum class Unit { Px = 0, Inch, Cm, Mm, Percent };
+const char* unit_name(Unit u);                            // "px", "in", "cm", "mm", "%"
+double to_unit(double px, Unit u, double dpi, double base);
+double from_unit(double v, Unit u, double dpi, double base);   // pixels (not rounded)
+bool   physical(Unit u);                                  // in / cm / mm
+int    unit_digits(Unit u);                               // what the field shows: 0, 3, 2, 1, 1
+
+// s099: IMAGE SIZE'S FORM -- what the dialog's fields hold, GTK-free (the
+// selftest walks it). The truth is pixels (unrounded) and dpi; the fields show
+// them in `unit`. Resample on: a size typed makes pixels (in x dpi); a
+// Resolution typed keeps the print size, so the pixels follow (in px / %, the
+// pixels stay). Resample off: the pixels stay; a print size typed sets the
+// Resolution, a Resolution typed sets the print size; px / % can't be typed.
+struct SizeForm {
+    int    w0 = 0, h0 = 0;          // the size when asked
+    double dpi0 = 72;
+    double pw = 0, ph = 0, dpi = 72;
+    Unit   unit = Unit::Px;
+    bool   resample = true;
+    bool   link = true;             // keep the proportions (always, Resample off)
+
+    void   ask(int w, int h, double d);
+    double width() const  { return to_unit(pw, unit, dpi, w0); }   // what the fields show
+    double height() const { return to_unit(ph, unit, dpi, h0); }
+    bool   editable() const { return resample || physical(unit); }
+    void   type_width(double v);
+    void   type_height(double v);
+    void   type_dpi(double d);
+    void   set_resample(bool on);
+    int    out_w() const;           // the answer: pixels rounded (Resample off: w0)
+    int    out_h() const;
+};
+
 // Is this a size we'll make? "" yes, else why not.
 std::string size_refusal(int w, int h);
 

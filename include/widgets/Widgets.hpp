@@ -3,6 +3,7 @@
 
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
+#include <gtkmm/checkbutton.h>
 #include <gtkmm/dropdown.h>
 #include <gtkmm/entry.h>
 #include <gtkmm/image.h>
@@ -24,6 +25,7 @@ namespace klimt::widgets {
 
 using Box            = Named<Gtk::Box>;
 using Button         = Named<Gtk::Button>;
+using CheckButton    = Named<Gtk::CheckButton>;   // s099: Image Size's Resample
 using DropDown       = Named<Gtk::DropDown>;      // s003: the blend-mode menu
 using Entry          = Named<Gtk::Entry>;
 using Image          = Named<Gtk::Image>;

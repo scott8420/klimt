@@ -56,9 +56,13 @@ B row(const std::string& list, int i, double x = 0.6, int n = 1, const std::stri
 // colour channel's Load / Duplicate, an action's arrow, a step's tick.
 B row_button(const std::string& list, int i, int k) { return {K::RowButton, list, i, {{static_cast<double>(k), 0}}, {}}; }
 // s093: the dock's tabs -- 0 Layers, 1 Channels, 2 History, 3 Actions.
+// s099: the widget NAMED so inside row i (a layer's icon), clicked with mods.
+B row_named(const std::string& list, int i, const std::string& name, const std::string& mods = {}) { return {K::RowButton, list + "#" + name, i, {{0, 0}}, mods}; }
 B tab(int i) { return {K::Row, "dock.tabs", i, {{0.5, 1}}, {}}; }
 B row_drag(const std::string& list, int from, int to) { return {K::RowDrag, list, from, {{0.6, static_cast<double>(to)}}, {}}; }
 // s092: the setup is done -- the scene's expected step is counted from here.
+// s099: a screenshot now (a dialog is closed before the scene's own shot).
+B shot(const std::string& name) { return {K::Shot, name, 0, {}, {}}; }
 B mark() { return {K::Mark, {}, 0, {}, {}}; }
 B slide(const std::string& name, double x0, double x1) { return {K::Slide, name, 0, {{x0, 0.5}, {x1, 0.5}}, {}}; }
 
@@ -95,6 +99,9 @@ std::vector<Shell::SweepScene> scenes() {
         {"crop: a box, double-click inside", true, {tool("crop", 0), drag({{0.1, 0.1}, {0.5, 0.5}, {0.85, 0.85}}), click(0.5, 0.5, 2)}},
         {"crop: W, H, X, Y typed, Apply (s097)", true, {tool("crop", 0), widget("strip.crop.w"), key("ctrl+a"), type("300"), key("Return"), widget("strip.crop.h"), key("ctrl+a"), type("200"), key("Return"),
                      widget("strip.crop.x"), key("ctrl+a"), type("100"), key("Return"), widget("strip.crop.y"), key("ctrl+a"), type("120"), key("Return"), widget("strip.crop.apply")}, "image=300x200"},
+        // s099: Image Size in inches -- by the keyboard (a dialog is its own window: no clicks there).
+        {"image size: in, 2 in wide at 72 dpi, Enter -- 144 x 192 px (s099)", true, {action("image-size"), key("shift"), key("Tab"), key("space"), key("Down"),
+                     key("Return"), key("shift+Tab"), key("ctrl+a"), type("2"), shot("image_size_in"), key("Return")}, "image=144x192"},
         {"crop: straighten", true, {tool("crop", 1), drag({{0.2, 0.5}, {0.5, 0.52}, {0.8, 0.55}})}},
         // ── transform ──
         {"free transform: moved, Enter", true, {tool("move"), action("free-transform"), drag(nudge), key("Return")}},
@@ -104,6 +111,10 @@ std::vector<Shell::SweepScene> scenes() {
         {"free transform: perspective", true, {tool("move"), action("free-transform"), widget("strip.transform.perspective"), drag({{0.999, 0.001}, {0.97, 0.03}, {0.93, 0.05}}), key("Return")}},
         {"free transform: Esc leaves nothing", false, {tool("move"), action("free-transform"), drag(nudge), key("Escape")}},
         {"warp: inside bent, Enter", true, {tool("move"), action("free-transform"), widget("strip.transform.warp"), drag({{0.5, 0.5}, {0.55, 0.45}, {0.6, 0.4}}), key("Return")}},
+        {"Edit > Transform > Distort: a plain corner drag distorts (s099)", true, {tool("move"), action("transform-distort"), drag({{0.999, 0.999}, {0.97, 0.95}, {0.93, 0.9}}), key("Return")}},
+        {"Edit > Transform > Skew: a side, Enter (s099)", true, {tool("move"), action("transform-skew"), drag({{0.999, 0.5}, {0.999, 0.55}, {0.999, 0.6}}), key("Return")}},
+        {"Edit > Transform > Envelope: a top handle bulges the top, Enter (s099)", true, {tool("move"), action("transform-envelope"), drag({{0.333, 0.001}, {0.4, 0.06}, {0.5, 0.12}}), key("Return")}},
+        {"envelope: inside moves it, an inner point is no handle (s099)", true, {tool("move"), action("free-transform"), widget("strip.transform.envelope"), drag({{0.5, 0.5}, {0.52, 0.53}, {0.55, 0.56}}), key("Return")}},
         {"liquify: forward, Enter", true, {action("liquify"), drag(stroke), key("Return")}},
         {"liquify: Esc leaves nothing", false, {action("liquify"), drag(stroke), key("Escape")}},
         // ── type / pen ──
@@ -111,6 +122,8 @@ std::vector<Shell::SweepScene> scenes() {
         {"pen: three anchors, closed", true, {tool("pen", 0), click(0.3, 0.3), click(0.7, 0.3), click(0.5, 0.7), click(0.3, 0.3)}},
         {"pen: anchors, Enter", true, {tool("pen", 0), click(0.3, 0.6), drag({{0.6, 0.6}, {0.65, 0.5}, {0.7, 0.4}}), key("Return")}},
         // ── the panels (s092) ──
+        {"layers: Ctrl-click a layer's icon -- its pixels as the selection (s099)", true, {row_named("layers.list", 0, "layers.icon", "ctrl")}},
+        {"layers: Ctrl+Shift-click adds to the selection (s099)", true, {tool("select", 0), drag({{0.02, 0.02}, {0.05, 0.05}, {0.08, 0.08}}), mark(), row_named("layers.list", 0, "layers.icon", "ctrl+shift")}},
         {"layers: a click picks the row below", false, {action("layer-duplicate"), action("layer-duplicate"), mark(), row("layers.list", 1)}},
         {"layers: the eye hides a layer", true, {action("layer-duplicate"), action("layer-duplicate"), mark(), row("layers.list", 1, 0.06)}},
         {"layers: a row dragged two down", true, {action("layer-duplicate"), action("layer-duplicate"), mark(), row_drag("layers.list", 0, 2)}},
@@ -245,6 +258,10 @@ std::string Shell::canvas_check(const std::string& what) {
     if (what.rfind("image=", 0) == 0) {   // s097: "image=300x200"
         const std::string have = std::to_string(m_doc.image().width) + "x" + std::to_string(m_doc.image().height);
         return have == what.substr(6) ? std::string{} : "the image is " + have;
+    }
+    if (what.rfind("dpi=", 0) == 0) {   // s099: "dpi=300"
+        const std::string have = std::to_string(static_cast<int>(std::lround(m_doc.image().dpi)));
+        return have == what.substr(4) ? std::string{} : "the resolution is " + have;
     }
     if (what == "viewing=0") return m_channel_view == 0 ? std::string{} : "viewing channel " + std::to_string(m_channel_view);
     if (what == "outline-off") {
@@ -449,14 +466,17 @@ void Shell::canvas_beat() {
           << ' ' << static_cast<int>(x2) << ' ' << static_cast<int>(y2);
         break;
     }
-    case K::RowButton: {   // s093
-        auto* lb = dynamic_cast<Gtk::ListBox*>(sweep_named(b.s));
+    case K::RowButton: {   // s093; s099: "list#name" -- the widget of that name in the row
+        const auto hash = b.s.find('#');
+        const std::string list = b.s.substr(0, hash), want = hash == std::string::npos ? std::string() : b.s.substr(hash + 1);
+        auto* lb = dynamic_cast<Gtk::ListBox*>(sweep_named(list));
         Gtk::Widget* r = lb ? lb->get_row_at_index(b.v) : nullptr;
         Gtk::Widget* hit = nullptr;
         int k = static_cast<int>(b.pts[0][0]);
         std::function<void(Gtk::Widget&)> find = [&](Gtk::Widget& p) {
             if (hit) return;
-            if ((dynamic_cast<Gtk::Button*>(&p) || dynamic_cast<Gtk::CheckButton*>(&p)) && p.get_mapped() && k-- == 0) { hit = &p; return; }
+            if (!want.empty()) { if (std::string(p.get_name()) == want && p.get_mapped()) { hit = &p; return; } }
+            else if ((dynamic_cast<Gtk::Button*>(&p) || dynamic_cast<Gtk::CheckButton*>(&p)) && p.get_mapped() && k-- == 0) { hit = &p; return; }
             for (auto* c = p.get_first_child(); c; c = c->get_next_sibling()) find(*c);
         };
         if (r && r->get_mapped()) find(*r);
@@ -467,7 +487,7 @@ void Shell::canvas_beat() {
             canvas_step();
             return;
         }
-        o << "click 1 " << static_cast<int>(x) << ' ' << static_cast<int>(y) << " -";
+        o << "click 1 " << static_cast<int>(x) << ' ' << static_cast<int>(y) << ' ' << (b.mods.empty() ? "-" : b.mods);
         break;
     }
     case K::Slide: {   // s092

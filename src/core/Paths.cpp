@@ -209,6 +209,48 @@ std::optional<pixel::TileMap> source_mask(const Document& d, Source s, const Doc
     return std::nullopt;
 }
 
+std::optional<pixel::TileMap> layer_coverage(const Document& d, const Document::Id& id, bool mask_only) {
+    const auto l = d.get(id);
+    if (!l) return std::nullopt;
+    if (mask_only) return source_mask(d, Source::LayerMask, id);
+    switch (l->kind) {
+        case Kind::Path: {
+            const auto p = of(d, id);
+            if (!p || p->empty()) return std::nullopt;
+            const Image& im = d.image();
+            return coverage(*p, d.mask_format(), im.width, im.height);
+        }
+        case Kind::Adjustment:
+        case Kind::Filter:
+            return source_mask(d, Source::LayerMask, id);
+        case Kind::Group: {
+            std::optional<pixel::TileMap> sum;
+            for (const auto& c : d.subtree(id)) {
+                const auto cl = d.get(c);
+                if (!cl || !draws_pixels(cl->kind) || !cl->pixels) continue;
+                auto m = source_mask(d, Source::Transparency, c);
+                if (!m) continue;
+                sum = sum ? select::combine(&*sum, *m, select::Op::Add) : std::move(*m);
+            }
+            return sum;
+        }
+        default:
+            return source_mask(d, Source::Transparency, id);
+    }
+}
+
+bool layer_to_selection(DocJournal& j, Document& d, const Document::Id& id, select::Op op, bool mask_only) {
+    const auto l = d.get(id);
+    if (!l) return false;
+    if (!mask_only && l->kind == Kind::Path) return to_selection(j, d, id, op);
+    auto shape = layer_coverage(d, id, mask_only);
+    if (!shape || select::empty(*shape)) return false;
+    auto m = select::combine(d.selection(), *shape, op);
+    const std::string what = mask_only || l->kind == Kind::Adjustment || l->kind == Kind::Filter ? "Layer Mask" : "Layer Transparency";
+    const std::string label = op == select::Op::Replace ? "Load " + what : std::string(select::op_name(op)) + " (" + what + ")";
+    return select::set(j, d, select::empty(m) ? std::nullopt : std::optional<pixel::TileMap>(std::move(m)), label);
+}
+
 Document::Id from_mask(DocJournal& j, Document& d, const pixel::TileMap& mask, double tolerance,
                        const Document::Id& above, const std::string& label) {
     auto p = traced(mask, tolerance);

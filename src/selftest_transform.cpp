@@ -344,6 +344,25 @@ void selftest_transform(const Check& check) {
         const auto am = X::Mesh::of(box, X::Projective(a));
         check("warp: an affine mesh is the affine map", near(am.at(0.3, 0.7), a.apply({160, 205}), 1e-9) &&
                                                          near(am.at(0.9, 0.15), a.apply({280, 122.5}), 1e-9), "");
+        // s099: Envelope -- the inner four from the edges (the Coons patch).
+        {
+            auto e = id;
+            e.envelope();
+            check("envelope: the identity stays the identity", e.identity_for(box), "");
+            auto ae = am;
+            ae.envelope();
+            bool same = true;
+            for (int i = 0; i < 16; ++i) same = same && near(ae.p[i], am.p[i], 1e-9);
+            check("envelope: an affine mesh stays itself", same, "");
+            auto top = id;
+            top.p[1].y -= 60; top.p[2].y -= 60;
+            top.envelope();
+            check("envelope: the top's handles raised -- the inner row follows part way, the bottom stays",
+                  top.p[5].y < id.p[5].y - 10 && top.p[5].y > id.p[5].y - 60 && top.p[9].y < id.p[9].y && top.p[9].y > top.p[5].y &&
+                  near(top.p[13], id.p[13], 1e-9) && near(top.at(0.5, 1), id.at(0.5, 1), 1e-9) &&
+                  top.at(0.5, 0.5).y < id.at(0.5, 0.5).y - 5, std::to_string(top.p[5].y) + " " + std::to_string(top.p[9].y));
+            check("envelope: the edges are the edges it was given", near(top.at(0.5, 0), {200, 55}, 1e-9) && near(top.at(0, 0.5), id.at(0, 0.5), 1e-9), "");
+        }
         auto bent = id;
         bent.p[1].y -= 60; bent.p[2].y -= 60;
         check("warp: raising the top's handles arcs it -- the middle up 3/4 of it", near(bent.at(0.5, 0), {200, 55}, 1e-9) &&

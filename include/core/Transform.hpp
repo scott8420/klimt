@@ -80,6 +80,12 @@ struct Mesh {
     static Mesh of(const pixel::Rect& box, const Projective& m);     // the grid mapped by m (exact when m is affine)
     Pt at(double u, double v) const;                                 // the patch at (u, v), 0..1 across the box
     bool identity_for(const pixel::Rect& box) const;
+    // s099: ENVELOPE -- the inner four points (5 6 9 10) from the edge's twelve:
+    // the bicubic Coons patch, so the inside follows the edges smoothly (a
+    // bulged top bulges the picture under it, fading downward). The identity
+    // stays the identity; any bilinear (a box, a distort's quad) stays itself.
+    void envelope();
+    static bool inner(int i) { const int r = i / 4, c = i % 4; return r > 0 && r < 3 && c > 0 && c < 3; }
 };
 pixel::Rect mapped(const pixel::Rect& box, const Mesh& m);   // the control points' box (the patch lies inside them)
 

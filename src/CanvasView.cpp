@@ -1390,6 +1390,7 @@ void CanvasView::xf_press(double sx, double sy) {
         int best = -1;
         double bd = kHandle;
         for (int i = 0; i < 16; ++i) {
+            if (m_xf.envelope && core::xform::Mesh::inner(i)) continue;   // s099: not handles -- they follow
             const double dd = std::hypot(to_screen_x(m_xf.w[i].x) - sx, to_screen_y(m_xf.w[i].y) - sy);
             if (dd <= bd) { bd = dd; best = i; }
         }
@@ -1547,6 +1548,8 @@ void CanvasView::xf_drag(double sx, double sy, bool shift, bool alt, bool ctrl) 
                 m_xf.w[r * 4 + cn] = m_xf.w0[r * 4 + cn] + d;
                 m_xf.w[rn * 4 + c] = m_xf.w0[rn * 4 + c] + d;
             }
+        } else if (m_xf.mode == Xf::Mode::Move && m_xf.envelope) {   // s099: inside an envelope moves it whole
+            for (int i = 0; i < 16; ++i) m_xf.w[i] = m_xf.w0[i] + d;
         } else if (m_xf.mode == Xf::Mode::Move) {
             // The surface: the least change to the points that brings the
             // patch's point at (wu, wv) under the pointer.
@@ -1559,6 +1562,7 @@ void CanvasView::xf_drag(double sx, double sy, bool shift, bool alt, bool ctrl) 
                 for (int r = 0; r < 4; ++r)
                     for (int c = 0; c < 4; ++c) m_xf.w[r * 4 + c] = m_xf.w0[r * 4 + c] + (bv[r] * bu[c] / wsum) * d;
         }
+        if (m_xf.envelope) envelope_inner();   // s099
         (void)alt; (void)ctrl;
         queue_draw();
         warp_emit();
@@ -1647,8 +1651,8 @@ void CanvasView::end_liquify() {
 // ── s074: Warp ──────────────────────────────────────────────────────────────
 bool CanvasView::set_transform_kind(XfKind k) {
     if (!m_xf.on) { m_xf_kind = k; return true; }
-    if (m_xf.warp) return k == XfKind::Warp;   // a mesh stays a mesh until Enter / Esc
-    if (k == XfKind::Warp) {
+    if (m_xf.warp) return k == m_xf_kind;   // a mesh stays a mesh (and its kind) until Enter / Esc
+    if (k == XfKind::Warp || k == XfKind::Envelope) {
         if (!m_xf.projective_ok) { m_xf_refused.emit(); return false; }
         // The mesh from the shape the box has now (exact for a box, the
         // quad's grid for a distort).
@@ -1659,6 +1663,8 @@ bool CanvasView::set_transform_kind(XfKind k) {
                                                             static_cast<int>(std::lround(m_xf.bw)), static_cast<int>(std::lround(m_xf.bh))}, pm);
         for (int i = 0; i < 16; ++i) m_xf.w[i] = mesh.p[i];
         m_xf.warp = true;
+        m_xf.envelope = k == XfKind::Envelope;   // s099
+        if (m_xf.envelope) envelope_inner();
         m_xf_kind = k;
         queue_draw();
         warp_emit();
@@ -1668,9 +1674,17 @@ bool CanvasView::set_transform_kind(XfKind k) {
     return true;
 }
 
+void CanvasView::envelope_inner() {   // s099
+    core::xform::Mesh m;
+    for (int i = 0; i < 16; ++i) m.p[i] = m_xf.w[i];
+    m.envelope();
+    for (int i = 0; i < 16; ++i) m_xf.w[i] = m.p[i];
+}
+
 void CanvasView::set_warp_mesh(const core::xform::Mesh& m) {   // s075
     if (!m_xf.on || !m_xf.warp) return;
     for (int i = 0; i < 16; ++i) m_xf.w[i] = m.p[i];
+    if (m_xf.envelope) envelope_inner();   // s099
     queue_draw();
     warp_emit();
 }
@@ -1756,6 +1770,7 @@ void CanvasView::draw_warp(const Cairo::RefPtr<Cairo::Context>& cr) {
     cr->set_source_rgba(1, 1, 1, 0.9);
     cr->stroke();
     for (int i = 0; i < 16; ++i) {
+        if (m_xf.envelope && core::xform::Mesh::inner(i)) continue;   // s099: they follow the edges
         const int r = i / 4, c = i % 4;
         const bool corner = (r == 0 || r == 3) && (c == 0 || c == 3);
         if (corner) cr->rectangle(std::round(sx(i)) - 3.5, std::round(sy(i)) - 3.5, 7, 7);
@@ -1766,7 +1781,7 @@ void CanvasView::draw_warp(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->stroke();
     }
     // The readout.
-    auto layout = create_pango_layout("Warp");
+    auto layout = create_pango_layout(m_xf.envelope ? "Envelope" : "Warp");
     int tw = 0, th = 0;
     layout->get_pixel_size(tw, th);
     double top = 1e9, left = 1e9;

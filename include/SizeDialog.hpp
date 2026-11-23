@@ -30,14 +30,25 @@ public:
     };
     sigc::signal<void(const Answer&)>& signal_ok() { return m_ok; }
 
+    // s099: the unit the fields show in (kept between asks), Resample on / off.
+    void set_unit(core::canvas::Unit u);
+    void set_resample(bool on);
+    core::canvas::Unit unit() const { return m_f.unit; }
+
 private:
     void on_width();
     void on_height();
+    void on_dpi();
+    void show_fields(const widgets::SpinButton* skip = nullptr);                                        // m_pw / m_ph / m_dpi_v -> the fields, in the unit
     void refresh();                                            // the line under the fields, OK's greying
     void set_anchor(int x, int y);
 
     Mode                 m_mode;
     int                  m_w0 = 0, m_h0 = 0;                   // the size when asked
+    core::canvas::SizeForm m_f;                                // s099: the fields' truth (core, selftested)
+    widgets::DropDown    m_units;
+    widgets::CheckButton m_resample;
+    Gtk::Label*          m_unit_h = nullptr;                   // the Height row's unit (follows the dropdown)
     bool                 m_syncing = false;
     widgets::SpinButton  m_width, m_height, m_dpi;
     widgets::ToggleButton m_link;

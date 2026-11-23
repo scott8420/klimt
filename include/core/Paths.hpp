@@ -55,6 +55,18 @@ const char* source_label(Source s);   // "Make Path from Layer Mask" ...
 // size); nullopt when there's nothing to trace (no mask on that layer, a
 // layer with no pixels, no such channel, nothing selected).
 std::optional<pixel::TileMap> source_mask(const Document& d, Source s, const Document::Id& id = {});
+// s099: CTRL-CLICK A LAYER'S ICON (Photoshop's Ctrl-click the thumbnail) --
+// the layer as the selection, by `op`, ONE step:
+//   a path layer        -- its path (to_selection);
+//   pixels / type / smart -- its pixels' alpha;
+//   adjustment / filter -- its mask, as what it shows (no mask: refused);
+//   a group             -- every pixel layer inside it, added together.
+// `mask_only`: the layer's MASK (Ctrl-click the mask chip). false: refused --
+// nothing there to select (the selection is left as it was).
+bool layer_to_selection(DocJournal& j, Document& d, const Document::Id& id, select::Op op = select::Op::Replace,
+                        bool mask_only = false);
+// What layer_to_selection reads, before the op (nullopt: nothing there).
+std::optional<pixel::TileMap> layer_coverage(const Document& d, const Document::Id& id, bool mask_only = false);
 // A traced mask as a NEW path layer above `above`, ONE step named `label`.
 // "" refused (the mask held nothing to trace).
 Document::Id from_mask(DocJournal& j, Document& d, const pixel::TileMap& mask, double tolerance,

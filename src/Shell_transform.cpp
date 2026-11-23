@@ -46,7 +46,19 @@ bool Shell::xform_current(const core::xform::Plan& p) const {
     return m_doc.selection_ptr() == p.p.mask;
 }
 
-void Shell::on_free_transform() {
+// s099: the names Edit > Transform and the strip use.
+static const char* transform_kind_name(int k) {
+    switch (k) {
+        case 1: return "Skew";
+        case 2: return "Distort";
+        case 3: return "Perspective";
+        case 4: return "Warp";
+        case 5: return "Envelope";
+    }
+    return "Free Transform";
+}
+
+void Shell::on_transform_as(int kind) {
     if (m_xform.active || m_xform.planning || m_move.active || m_stroke.active) return;
     if (!has_image()) { toast("Free Transform: no image -- File > New (Ctrl+N) or Open (Ctrl+O)"); return; }
     const auto sel = m_layers.selection();
@@ -56,9 +68,9 @@ void Shell::on_free_transform() {
     m_xform.planning = true;
     auto shared = std::make_shared<const core::move::Plan>(std::move(*mp));
     // The box needs a scan of what the layers hold: a worker's job.
-    start_job("Free Transform", [this, shared](core::Jobs::Token&) -> core::Jobs::Landing {
+    start_job("Free Transform", [this, shared, kind](core::Jobs::Token&) -> core::Jobs::Landing {
         const auto box = Xf::box_of(*shared);
-        return [this, shared, box] {
+        return [this, shared, box, kind] {
             m_xform.planning = false;
             if (box.empty()) { toast("Free Transform: nothing there to transform"); return; }
             auto p = std::make_shared<const Xf::Plan>(Xf::Plan{*shared, box});
@@ -69,9 +81,16 @@ void Shell::on_free_transform() {
             m_canvas.set_outline(nullptr);   // the ants come back with the result
             // s073: type stays type -- only a skew (a parallelogram) for it.
             m_canvas.begin_transform(box.x, box.y, box.w, box.h, Xf::projective_refusal(*p).empty());
+            // s099: from Edit > Transform -- the box comes up in that kind (the strip's button lit).
+            const bool as = kind > 0 && m_canvas.set_transform_kind(static_cast<CanvasView::XfKind>(kind));
             show_transform_strip(true);
             m_canvas.grab_focus();
-            toast("Free Transform: drag the box -- Ctrl-drag a corner distorts; Enter applies, Esc cancels");
+            if (kind > 0 && !as) toast("Free Transform: type can't be warped -- Layer > Rasterize Type first");
+            else if (as) toast(std::string(transform_kind_name(kind)) +
+                               (kind == 5 ? ": drag a handle to bulge or pinch a side, a corner to move it; Enter applies, Esc cancels"
+                                : kind == 4 ? ": drag a point, or inside; Enter applies, Esc cancels"
+                                            : ": drag a corner or a side; Enter applies, Esc cancels"));
+            else toast("Free Transform: drag the box -- Ctrl-drag a corner distorts; Enter applies, Esc cancels");
         };
     });
 }
@@ -92,7 +111,7 @@ void Shell::on_warp_change(const std::array<double, 32>& m) {   // s074
         xform_cancel();
         return;
     }
-    if (!m_xform.warp) m_strip.show_warp_options(true);   // s075: the Style row comes with the mesh
+    if (!m_xform.warp) m_strip.show_warp_options(!m_canvas.transform_is_envelope());   // s075: the Style row comes with the mesh (s099: not an envelope's)
     else if (!m_xform.presetting) m_strip.set_warp_style(0);   // a dragged point: Custom
     m_xform.warp = true;
     for (int i = 0; i < 16; ++i) m_xform.wmesh.p[i] = {m[static_cast<std::size_t>(2 * i)], m[static_cast<std::size_t>(2 * i + 1)]};
@@ -135,7 +154,7 @@ void Shell::xform_commit() {
     const auto plan = m_xform.plan;
     const auto m = m_xform.want;
     const auto mesh = m_xform.wmesh;
-    const std::string label = warp ? "Warp" : "Free Transform";   // s074
+    const std::string label = warp ? (m_canvas.transform_is_envelope() ? "Envelope" : "Warp") : "Free Transform";   // s074; s099
     start_job(label, [this, plan, m, warp, mesh, label](core::Jobs::Token& t) -> core::Jobs::Landing {
         auto r = warp ? Xf::compute_warp(*plan, mesh, Xf::Quality::Best, [&t] { return t.cancelled(); })
                       : Xf::compute(*plan, m, Xf::Quality::Best, [&t] { return t.cancelled(); });

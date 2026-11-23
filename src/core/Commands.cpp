@@ -203,6 +203,7 @@ const std::vector<Command>& commands() {
             {"New Filter Layer: Minimum", "Layer", "win.filter-layer-minimum", "", "filter layer live non-destructive erode shrink spread dark", ""},
             {"Last Filter", "Filter", "win.filter-last", "", "filter again repeat", "Ctrl+F"},
             // s035: paths
+            {"Load Layer as Selection", "Select", "win.layer-selection", "", "layer transparency alpha pixels thumbnail icon ctrl click selection load", ""},   // s099
             {"Load Path as Selection", "Select", "win.path-selection", "", "path pen bezier curve selection outline", "Ctrl+Enter"},
             {"Show / Hide Path Outline", "View", "win.path-outline", "", "path outline hide show nodes anchors extras mask effect", "Ctrl+Shift+H"},
             {"Make Path from Selection", "Select", "win.path-make-work", "", "path pen bezier trace outline vector selection to path work path layer", ""},
@@ -254,6 +255,11 @@ const std::vector<Command>& commands() {
             {"Delete Layer Mask", "Layer", "win.mask-delete", "", "mask remove discard", ""},
             // s011: transforms.
             {"Free Transform", "Edit", "win.free-transform", "", "scale rotate resize skew handles ctrl+t", ""},
+            {"Transform: Skew", "Edit", "win.transform-skew", "", "skew slant lean shear free transform box", ""},   // s099
+            {"Transform: Distort", "Edit", "win.transform-distort", "", "distort corners corner pin stretch bounding box free transform", ""},
+            {"Transform: Perspective", "Edit", "win.transform-perspective", "", "perspective vanishing keystone free transform box", ""},
+            {"Transform: Warp", "Edit", "win.transform-warp", "", "warp mesh bend bulge arc free transform", ""},
+            {"Transform: Envelope", "Edit", "win.transform-envelope", "", "envelope bulge round top edge handles bezier sides warp free transform", ""},
             {"Liquify…", "Filter", "win.liquify", "", "warp push twirl pucker bloat reconstruct smear ctrl+shift+x", ""},   // s076
             {"Flip Horizontal", "Edit", "win.flip-h", "", "mirror transform", ""},
             {"Flip Vertical", "Edit", "win.flip-v", "", "mirror upside down transform", ""},

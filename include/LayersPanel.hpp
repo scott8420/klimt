@@ -85,6 +85,9 @@ public:
     // points shown or hidden on the canvas (view state; the mask stays).
     void set_outlines_off(const std::set<Id>& off);
     sigc::signal<void(const Id&)>& signal_outline_toggle() { return m_outline_toggle; }
+    // s099: Ctrl-click a layer's icon (mask: the mask chip) -- load it as the
+    // selection; op is core::select::Op (Shift adds, Alt subtracts, both intersect).
+    sigc::signal<void(const Id&, int, bool)>& signal_load_selection() { return m_load_selection; }
     void set_mask_viewing(const Id& id) { m_mask_viewing = id; queue_repaint(); }
 
     // Is there something for each verb to act on? (The Shell greys by these.)
@@ -137,6 +140,8 @@ private:
     sigc::signal<void(const Id&)> m_mask_view;
     std::set<Id>      m_outlines_off;       // s035
     sigc::signal<void(const Id&)> m_outline_toggle;
+    sigc::signal<void(const Id&, int, bool)> m_load_selection;
+    void ctrl_click_loads(Gtk::Widget& w, const Id& id, bool mask);
 
     // The rows, then the verbs. (Blend / opacity / fill / locks moved to the
     // PropertiesPanel at s005 -- docs/ui.md call 2: the panel is the stack.)

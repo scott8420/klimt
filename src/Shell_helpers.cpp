@@ -123,7 +123,7 @@ void Shell::update_layer_actions() {
         on("remove-background", img && pl2 && core::draws_pixels(pl2->kind) && pl2->pixels);
     }
     for (const char* a : {"layer-new", "layer-new-group", "save", "save-as", "export", "image-size", "canvas-size", "reveal-all", "select-all", "quick-mask", "select-save", "select-range", "refine-edges",
-                          "free-transform", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
+                          "free-transform", "transform-skew", "transform-distort", "transform-perspective", "transform-warp", "transform-envelope", "flip-h", "flip-v", "rotate-cw", "rotate-ccw", "rotate-180",
                           "canvas-cw", "canvas-ccw", "canvas-180", "canvas-flip-h", "canvas-flip-v", "canvas-rotate",
                           "profile-assign", "profile-convert", "proof-setup", "view-proof", "view-gamut"})   // s068, s069
         on(a, img);

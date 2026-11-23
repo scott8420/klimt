@@ -402,17 +402,19 @@ void ContextStrip::show_transform(int kind) {
     append(*name);
     auto group = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
     group->add_css_class("linked");
-    static const char* labels[] = {"Scale · Rotate", "Skew", "Distort", "Perspective", "Warp"};
+    static const char* labels[] = {"Scale · Rotate", "Skew", "Distort", "Perspective", "Warp", "Envelope"};
     static const char* tips[] = {
         "A corner scales (Shift: freely, Alt: about the middle); a side, one way; outside turns",
         "A side slides along itself -- the box leans  (or Ctrl+Shift-drag a side)",
         "A corner goes where it's dragged, a side too; Alt: the opposite one the other way  (or Ctrl-drag)",
         "A corner and its neighbour move apart or together -- a vanishing side  (or Ctrl+Alt+Shift-drag a corner)",
-        "A 4 x 4 mesh: drag a point (a corner brings its handles), or drag inside -- the picture bends with it"};
+        "A 4 x 4 mesh: drag a point (a corner brings its handles), or drag inside -- the picture bends with it",
+        "The edges only: 4 corners and their 8 handles -- drag a handle to bulge or pinch a side (round a top); "
+        "the inside follows smoothly. Drag inside to move it"};
     Gtk::ToggleButton* first = nullptr;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
         auto b = Gtk::make_managed<Gtk::ToggleButton>(labels[i]);
-        b->set_name(std::string("strip.transform.") + (i == 0 ? "free" : i == 1 ? "skew" : i == 2 ? "distort" : i == 3 ? "perspective" : "warp"));
+        b->set_name(std::string("strip.transform.") + (i == 0 ? "free" : i == 1 ? "skew" : i == 2 ? "distort" : i == 3 ? "perspective" : i == 4 ? "warp" : "envelope"));
         b->set_focus_on_click(false);
         b->set_tooltip_text(tips[i]);
         if (first) b->set_group(*first); else first = b;

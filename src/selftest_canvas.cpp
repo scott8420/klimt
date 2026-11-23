@@ -196,6 +196,55 @@ void selftest_canvas(const Check& check) {
         t.j.undo();
         check("canvas: undo", t.d.image().width == 600 && t.d.image().dpi == 72 && t.d.check().empty(), sz(t.d));
     }
+    {   // s099: Image Size in inches -- the units and the form
+        const auto near = [](double a, double b) { return std::abs(a - b) < 1e-6; };
+        check("units: 8 in at 300 dpi is 2400 px", near(C::from_unit(8, C::Unit::Inch, 300, 0), 2400) && near(C::to_unit(2400, C::Unit::Inch, 300, 0), 8), "");
+        check("units: 2.54 cm and 25.4 mm are an inch", near(C::from_unit(2.54, C::Unit::Cm, 300, 0), 300) && near(C::from_unit(25.4, C::Unit::Mm, 300, 0), 300), "");
+        check("units: 50 % of 1200 px is 600", near(C::from_unit(50, C::Unit::Percent, 72, 1200), 600) && near(C::to_unit(600, C::Unit::Percent, 72, 1200), 50), "");
+        check("units: px is px", near(C::from_unit(123, C::Unit::Px, 300, 0), 123), "");
+        C::SizeForm f;
+        f.ask(1200, 1600, 72);
+        f.unit = C::Unit::Inch;
+        check("form: 1200 px at 72 dpi shows 16.667 in", near(f.width(), 1200.0 / 72), std::to_string(f.width()));
+        f.type_dpi(300);
+        check("form: Resample on, 300 dpi typed in inches -- the print size stays, the pixels follow", f.out_w() == 5000 && f.out_h() == 6667 && near(f.width(), 1200.0 / 72),
+              std::to_string(f.out_w()) + "x" + std::to_string(f.out_h()));
+        f.type_width(8);
+        check("form: 8 in wide at 300 dpi -- 2400 x 3200 px, linked", f.out_w() == 2400 && f.out_h() == 3200 && near(f.dpi, 300), "");
+        f.link = false;
+        f.type_height(10);
+        check("form: unlinked, 10 in high -- 2400 x 3000", f.out_w() == 2400 && f.out_h() == 3000, "");
+        C::SizeForm g;
+        g.ask(1200, 1600, 72);
+        g.unit = C::Unit::Px;
+        g.type_dpi(300);
+        check("form: in px, a Resolution typed leaves the pixels", g.out_w() == 1200 && g.out_h() == 1600 && near(g.dpi, 300), "");
+        g.unit = C::Unit::Inch;
+        g.type_width(5);   // resample on
+        g.set_resample(false);
+        check("form: Resample off -- back to the pixels it has, px can't be typed", g.out_w() == 1200 && g.out_h() == 1600 && g.editable(), "");
+        g.type_width(4);
+        check("form: Resample off, 4 in wide -- 300 dpi, no pixel changed", near(g.dpi, 300) && g.out_w() == 1200 && near(g.height(), 1600.0 / 300), "");
+        g.type_dpi(150);
+        check("form: Resample off, 150 dpi -- 8 in wide, the pixels stay", near(g.width(), 8) && g.out_w() == 1200, "");
+        g.unit = C::Unit::Px;
+        check("form: Resample off, px -- not editable", !g.editable(), "");
+        g.type_width(10);
+        check("form: ... and typing there changes nothing", g.out_w() == 1200 && near(g.dpi, 150), "");
+        C::SizeForm h;
+        h.ask(1000, 500, 72);
+        h.unit = C::Unit::Percent;
+        h.type_width(50);
+        check("form: 50 % -- 500 x 250", h.out_w() == 500 && h.out_h() == 250, "");
+        Fix t;
+        C::SizeForm k;
+        k.ask(t.d.image().width, t.d.image().height, t.d.image().dpi);
+        k.unit = C::Unit::Inch;
+        k.set_resample(false);
+        k.type_width(2);
+        check("form: its answer is the resolution alone -- Image Size keeps every pixel",
+              C::image_size(t.j, t.d, k.out_w(), k.out_h(), k.dpi) && t.d.image().width == 600 && std::abs(t.d.image().dpi - 300) < 1e-9, std::to_string(t.d.image().dpi));
+    }
     {
         Fix t;
         const auto px = t.d.get("L4")->pixels;

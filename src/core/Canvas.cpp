@@ -728,4 +728,93 @@ bool image_size(DocJournal& j, Document& d, int w, int h, double dpi, Filter f) 
     return p && land(j, d, b, *p, "Image Size");
 }
 
+// s099: size units.
+const char* unit_name(Unit u) {
+    switch (u) {
+        case Unit::Px:      return "px";
+        case Unit::Inch:    return "in";
+        case Unit::Cm:      return "cm";
+        case Unit::Mm:      return "mm";
+        case Unit::Percent: return "%";
+    }
+    return "px";
+}
+
+namespace {
+double per_inch(Unit u) { return u == Unit::Cm ? 2.54 : u == Unit::Mm ? 25.4 : 1.0; }
+}  // namespace
+
+bool physical(Unit u) { return u == Unit::Inch || u == Unit::Cm || u == Unit::Mm; }
+
+int unit_digits(Unit u) {
+    switch (u) {
+        case Unit::Px:      return 0;
+        case Unit::Inch:    return 3;
+        case Unit::Cm:      return 2;
+        case Unit::Mm:      return 1;
+        case Unit::Percent: return 1;
+    }
+    return 0;
+}
+
+double to_unit(double px, Unit u, double dpi, double base) {
+    dpi = std::max(dpi, 1e-6);
+    if (u == Unit::Percent) return base > 0 ? px * 100.0 / base : 0;
+    if (physical(u)) return px / dpi * per_inch(u);
+    return px;
+}
+
+double from_unit(double v, Unit u, double dpi, double base) {
+    dpi = std::max(dpi, 1e-6);
+    if (u == Unit::Percent) return v * base / 100.0;
+    if (physical(u)) return v / per_inch(u) * dpi;
+    return v;
+}
+
+void SizeForm::ask(int w, int h, double d) {
+    w0 = w; h0 = h;
+    dpi0 = d > 0 ? d : 72;
+    pw = w; ph = h; dpi = dpi0;
+}
+
+namespace {
+constexpr double kMinDpi = 1, kMaxDpi = 10000;
+}  // namespace
+
+void SizeForm::type_width(double v) {
+    if (!resample) {   // a print width: the resolution follows, the pixels stay
+        if (!physical(unit)) return;
+        const double inches = from_unit(v, unit, 1.0, w0);   // at 1 dpi, pixels are inches
+        if (inches > 0) dpi = std::clamp(w0 / inches, kMinDpi, kMaxDpi);
+        return;
+    }
+    pw = std::max(1.0, from_unit(v, unit, dpi, w0));
+    if (link && w0 > 0) ph = std::max(1.0, pw * h0 / w0);
+}
+
+void SizeForm::type_height(double v) {
+    if (!resample) {
+        if (!physical(unit)) return;
+        const double inches = from_unit(v, unit, 1.0, h0);
+        if (inches > 0) dpi = std::clamp(h0 / inches, kMinDpi, kMaxDpi);
+        return;
+    }
+    ph = std::max(1.0, from_unit(v, unit, dpi, h0));
+    if (link && h0 > 0) pw = std::max(1.0, ph * w0 / h0);
+}
+
+void SizeForm::type_dpi(double d) {
+    d = std::clamp(d, kMinDpi, kMaxDpi);
+    if (resample && physical(unit) && dpi > 0) { pw = pw * d / dpi; ph = ph * d / dpi; }
+    dpi = d;
+}
+
+void SizeForm::set_resample(bool on) {
+    resample = on;
+    if (!on) { pw = w0; ph = h0; link = true; }
+}
+
+int SizeForm::out_w() const { return resample ? std::max(1, static_cast<int>(std::lround(pw))) : w0; }
+int SizeForm::out_h() const { return resample ? std::max(1, static_cast<int>(std::lround(ph))) : h0; }
+
 }  // namespace klimt::core::canvas

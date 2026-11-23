@@ -193,6 +193,42 @@ void selftest_paths(const Check& check) {
         (void)hidden;
     }
     {
+        // s099: Ctrl-click a layer's icon -- the layer as the selection.
+        Doc t;
+        auto& d = t.d;
+        auto& j = t.j;
+        const auto cov = [&](int x, int y) { return d.selection() ? S::coverage(*d.selection(), x, y) : 0.f; };
+        check("layer icon: a pixel layer's transparency, ONE step", paths::layer_to_selection(j, d, "L4") && j.size() == 1 &&
+              j.undo_label() == "Load Layer Transparency" && cov(150, 150) == 1.f && cov(50, 50) == 0.f && cov(299, 249) == 1.f &&
+              cov(300, 250) == 0.f, j.undo_label());
+        S::none(j, d);
+        check("layer icon: nothing there (an empty layer) is refused, no step", !paths::layer_to_selection(j, d, "L5") &&
+              j.undo_label() == "Deselect" && !d.selection(), j.undo_label());
+        S::rect(j, d, {0, 0, 50, 50});
+        check("layer icon: Shift adds", paths::layer_to_selection(j, d, "L4", S::Op::Add) && cov(10, 10) == 1.f && cov(150, 150) == 1.f &&
+              j.undo_label() == "Add to Selection (Layer Transparency)", j.undo_label());
+        S::rect(j, d, {0, 0, 150, 150});
+        check("layer icon: Alt subtracts", paths::layer_to_selection(j, d, "L4", S::Op::Subtract) && cov(10, 10) == 1.f && cov(120, 120) == 0.f, "");
+        S::rect(j, d, {0, 0, 150, 150});
+        check("layer icon: Shift+Alt intersects", paths::layer_to_selection(j, d, "L4", S::Op::Intersect) && cov(10, 10) == 0.f &&
+              cov(120, 120) == 1.f && cov(200, 200) == 0.f, "");
+        S::none(j, d);
+        check("layer icon: a group -- its pixel layers", paths::layer_to_selection(j, d, "L2") && cov(150, 150) == 1.f && cov(50, 50) == 0.f, "");
+        const auto pid = L::add_path_layer(j, d, paths::rect_path(10, 10, 40, 40));
+        S::none(j, d);
+        check("layer icon: a path layer -- its path", paths::layer_to_selection(j, d, pid) && cov(20, 20) == 1.f && cov(150, 150) == 0.f &&
+              j.undo_label() == "Load Path as Selection", j.undo_label());
+        L::load_mask(d, "L4");
+        S::none(j, d);
+        check("mask chip: the mask -- what it shows", paths::layer_to_selection(j, d, "L4", S::Op::Replace, true) &&
+              j.undo_label() == "Load Layer Mask" && cov(130, 120) == 1.f && cov(250, 200) == 0.f && cov(50, 50) == 0.f, j.undo_label());
+        check("mask chip: refused without a mask", !paths::layer_to_selection(j, d, "L3", S::Op::Replace, true), "");
+        S::none(j, d);
+        const auto adj = L::add_adjustment(j, d, core::AdjustKind::HueSat, "L5");
+        check("layer icon: an adjustment with a whole mask -- all of it", paths::layer_to_selection(j, d, adj) == (d.get(adj)->mask != nullptr), "");
+        check("layer icon: one door", d.strays() == 0 && d.check().empty(), d.check());
+    }
+    {
         // s035 (Scott: "the path goes into the group at the top ... it would run
         // the whole group"): an adjustment between the path and the pixels.
         Doc t;

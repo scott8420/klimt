@@ -515,6 +515,25 @@ Pt Mesh::at(double u, double v) const {
     return o;
 }
 
+void Mesh::envelope() {
+    // Farin's interior points of the bicubic Coons patch in Bezier form
+    // (b_rc = p[r * 4 + c]).
+    const auto b = [this](int r, int c) { return p[r * 4 + c]; };
+    const auto mix = [&](int r0, int c0, int r1, int c1, int r2, int c2, int r3, int c3, int r4, int c4,
+                         int r5, int c5, int r6, int c6, int r7, int c7) {
+        Pt q;
+        q.x = (-4 * b(r0, c0).x + 6 * (b(r1, c1).x + b(r2, c2).x) - 2 * (b(r3, c3).x + b(r4, c4).x) + 3 * (b(r5, c5).x + b(r6, c6).x) - b(r7, c7).x) / 9.0;
+        q.y = (-4 * b(r0, c0).y + 6 * (b(r1, c1).y + b(r2, c2).y) - 2 * (b(r3, c3).y + b(r4, c4).y) + 3 * (b(r5, c5).y + b(r6, c6).y) - b(r7, c7).y) / 9.0;
+        return q;
+    };
+    // b11 = (-4 b00 + 6 (b01 + b10) - 2 (b03 + b30) + 3 (b31 + b13) - b33) / 9, and its mirrors.
+    const Pt p11 = mix(0, 0, 0, 1, 1, 0, 0, 3, 3, 0, 3, 1, 1, 3, 3, 3);
+    const Pt p12 = mix(0, 3, 0, 2, 1, 3, 0, 0, 3, 3, 3, 2, 1, 0, 3, 0);
+    const Pt p21 = mix(3, 0, 3, 1, 2, 0, 3, 3, 0, 0, 0, 1, 2, 3, 0, 3);
+    const Pt p22 = mix(3, 3, 3, 2, 2, 3, 3, 0, 0, 3, 0, 2, 2, 0, 0, 0);
+    p[5] = p11; p[6] = p12; p[9] = p21; p[10] = p22;
+}
+
 bool Mesh::identity_for(const pixel::Rect& box) const {
     const Mesh id = of(box);
     for (int i = 0; i < 16; ++i)

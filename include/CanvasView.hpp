@@ -183,7 +183,7 @@ public:
     sigc::signal<void(const std::array<double, 9>&)>& signal_transform() { return m_xf_signal; }
     sigc::signal<void()>& signal_transform_commit() { return m_xf_commit; }
     sigc::signal<void()>& signal_transform_refused() { return m_xf_refused; }   // s073: a distort of type
-    enum class XfKind { Free = 0, Skew, Distort, Perspective, Warp };
+    enum class XfKind { Free = 0, Skew, Distort, Perspective, Warp, Envelope };   // s099: Envelope
     // s073: the strip's buttons. s074: Warp turns the box into a 4 x 4 mesh
     // (from the shape it has); once warping, the box stays a mesh until Enter
     // / Esc -- false: refused (type is picked, or leaving Warp), the kind kept.
@@ -193,6 +193,7 @@ public:
     // emits signal_warp with the 16 points (x y, row by row).
     sigc::signal<void(const std::array<double, 32>&)>& signal_warp() { return m_warp_signal; }
     bool transform_is_warp() const { return m_xf.warp; }
+    bool transform_is_envelope() const { return m_xf.warp && m_xf.envelope; }   // s099
     // s075: a preset's mesh (Warp's Style) -- emitted as a drag would be.
     void set_warp_mesh(const core::xform::Mesh& m);
     pixel::Rect transform_box() const;   // the box the transform started from (whole pixels)
@@ -470,6 +471,7 @@ private:
         // s074: the warp's mesh (p[row * 4 + col]), at the press too; the
         // point dragged (-1: the surface, at wu wv).
         bool   warp = false;
+        bool   envelope = false;   // s099: the mesh's edges only -- the inner four follow (Mesh::envelope)
         core::select::Pt w[16], w0[16];
         int    wi = -1;
         double wu = 0, wv = 0;
@@ -483,6 +485,7 @@ private:
     sigc::signal<void(LiqAt, core::select::Pt, core::select::Pt, double, bool)> m_lq_signal;
     sigc::signal<void(const std::array<double, 32>&)> m_warp_signal;
     void warp_emit();
+    void envelope_inner();   // s099: the inner four from the edges
     core::select::Pt warp_at(double u, double v) const;
     bool warp_uv(core::select::Pt p, double& u, double& v) const;   // the mesh point nearest p (false: not on it)
     void draw_warp(const Cairo::RefPtr<Cairo::Context>& cr);

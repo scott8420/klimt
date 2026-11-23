@@ -96,7 +96,8 @@ void Shell::bind_actions() {  // bindings
         if (!m_canvas.set_transform_kind(static_cast<CanvasView::XfKind>(k))) {
             const int now = static_cast<int>(m_canvas.transform_kind());
             Glib::signal_idle().connect_once([this, now] { m_strip.set_transform_kind(now); });   // not inside the button's own signal
-            if (m_canvas.transform_is_warp()) toast("Warp: Enter applies, Esc cancels -- then Free Transform again");
+            if (m_canvas.transform_is_warp()) toast(std::string(m_canvas.transform_is_envelope() ? "Envelope" : "Warp") +
+                                                    ": Enter applies, Esc cancels -- then Free Transform again");
         }
         m_canvas.grab_focus();
     });
@@ -144,6 +145,8 @@ void Shell::bind_actions() {  // bindings
         if (m_xform.plan) toast("Free Transform: " + core::xform::projective_refusal(*m_xform.plan));
     });
     m_layer_acts["free-transform"] = add_action("free-transform", sigc::mem_fun(*this, &Shell::on_free_transform));
+    for (const auto& [a, k] : {std::pair{"transform-skew", 1}, {"transform-distort", 2}, {"transform-perspective", 3}, {"transform-warp", 4}, {"transform-envelope", 5}})   // s099
+        m_layer_acts[a] = add_action(a, [this, k = k] { on_transform_as(k); });
     m_layer_acts["liquify"] = add_action("liquify", sigc::mem_fun(*this, &Shell::on_liquify));   // s076
     // s078: the autos.
     m_layer_acts["auto-tone"]     = add_action("auto-tone",     [this] { on_auto(core::adjust::AutoMethod::Tone); });
@@ -340,9 +343,15 @@ void Shell::bind_actions() {  // bindings
     });
     add_action("path-outline", [this] { if (!path_layer().empty()) toggle_path_outline(path_layer()); });
     m_layers.signal_outline_toggle().connect(sigc::mem_fun(*this, &Shell::toggle_path_outline));
+    m_layers.signal_load_selection().connect(sigc::mem_fun(*this, &Shell::on_layer_load_selection));
     m_canvas.signal_pen_mode().connect([this](int v) { m_strip.show_variant("pen", v); });   // s035: Ctrl / Alt held -- the button lights
     m_strip.signal_pen_point().connect([this](bool smooth) {   // s035 m5
         if (!m_canvas.pen_set_smooth(smooth)) toast("Pick a point first -- the Pen's Select mode, or click one");
+    });
+    m_layer_acts["layer-selection"] = add_action("layer-selection", [this] {   // s099: the picked layer's icon, Ctrl-clicked
+        const auto id = m_layers.primary();
+        if (id.empty()) { toast("Pick a layer first"); return; }
+        on_layer_load_selection(id, 0, false);
     });
     m_layer_acts["path-selection"] = add_action("path-selection", [this] { on_path_selection(core::select::Op::Replace); });
     m_layer_acts["path-make-work"] = add_action("path-make-work", [this] { on_path_make_work(); });
